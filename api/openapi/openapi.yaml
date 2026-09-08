@@ -1,0 +1,90 @@
+openapi: 3.0.3
+info:
+  title: WODI CRM API
+  version: 0.1.0
+  description: Internal Command Center REST API (P0 modular monolith)
+servers:
+  - url: http://localhost:8080/v1
+paths:
+  /auth/login:
+    post:
+      summary: Login
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Token pair
+  /auth/me:
+    get:
+      summary: Current user
+      tags: [Auth]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: User profile
+  /customers:
+    get:
+      summary: Search customers
+      tags: [Customers]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: q
+          schema: { type: string }
+      responses:
+        "200":
+          description: Customer list
+    post:
+      summary: Create customer
+      tags: [Customers]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201":
+          description: Created
+  /leads:
+    post:
+      summary: Create lead
+      tags: [Leads]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201":
+          description: Created
+  /bookings:
+    post:
+      summary: Create draft booking
+      tags: [Bookings]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201":
+          description: Created
+  /payments:
+    post:
+      summary: Record immutable payment
+      tags: [Payments]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201":
+          description: Created
+  /dashboard/kpis:
+    get:
+      summary: Manager KPI aggregates
+      tags: [Dashboard]
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: KPI payload
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
