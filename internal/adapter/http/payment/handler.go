@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
@@ -32,7 +33,6 @@ func (h Handler) Record(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	// Finance-sensitive: GM/Manager only in MVP (employee blocked).
 	if claims.Role == platformauth.RoleEmployee {
 		response.Error(w, shared.NewForbidden("employees cannot record payments"))
 		return
@@ -60,4 +60,18 @@ func (h Handler) Record(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusCreated, p)
+}
+
+func (h Handler) ListByBooking(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	items, err := h.Svc.ListByBooking(r.Context(), id)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, items)
 }

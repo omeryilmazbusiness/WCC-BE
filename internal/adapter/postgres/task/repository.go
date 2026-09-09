@@ -95,6 +95,28 @@ func (r *Repository) ListByAssignee(ctx context.Context, assigneeID uuid.UUID, s
 	return out, total, rows.Err()
 }
 
+func (r *Repository) ListByRelated(ctx context.Context, relatedType string, relatedID uuid.UUID) ([]domain.Task, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	rows, err := q.Query(ctx, `
+		SELECT id, branch_id, title, kind, status, assignee_id, related_type, related_id,
+			due_at, idempotency_key, created_at, updated_at, completed_at
+		FROM tasks WHERE related_type=$1 AND related_id=$2
+		ORDER BY created_at DESC`, relatedType, relatedID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Task
+	for rows.Next() {
+		t, err := scanRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) CountOverdue(ctx context.Context, branchID *uuid.UUID) (int, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	var n int

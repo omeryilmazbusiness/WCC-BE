@@ -83,12 +83,26 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 
 			r.Route("/bookings", func(r chi.Router) {
 				r.Post("/", h.Booking.Create)
+				r.Get("/{id}", h.Booking.Get)
+				r.Patch("/{id}", h.Booking.Update)
 				r.Post("/{id}/confirm", h.Booking.Confirm)
+				r.Post("/{id}/status", h.Booking.ChangeStatus)
+				r.Get("/{id}/participants", h.Booking.ListParticipants)
+				r.Post("/{id}/participants", h.Booking.AddParticipant)
+				r.Get("/{id}/payments", h.Payment.ListByBooking)
 			})
 
 			r.Post("/payments", h.Payment.Record)
 
-			r.Get("/tasks/mine", h.Task.ListMine)
+			r.Route("/tasks", func(r chi.Router) {
+				r.Get("/", h.Task.ListByRelated)
+				r.Get("/mine", h.Task.ListMine)
+				r.Post("/", h.Task.Create)
+				r.Get("/{id}", h.Task.Get)
+				r.Post("/{id}/status", h.Task.ChangeStatus)
+				r.Post("/{id}/complete", h.Task.Complete)
+				r.Post("/{id}/reschedule", h.Task.Reschedule)
+			})
 
 			r.With(middleware.RequireRoles(platformauth.RoleGM, platformauth.RoleManager)).
 				Get("/dashboard/kpis", h.Dashboard.KPIs)
@@ -96,8 +110,16 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 			r.Post("/documents/presign", h.Document.PresignUpload)
 
 			r.Route("/packages", func(r chi.Router) {
+				r.Get("/", h.Package.ListPackages)
+				r.Post("/", h.Package.CreatePackage)
 				r.Get("/{id}", h.Package.GetPackage)
 				r.Get("/{id}/departures", h.Package.ListDepartures)
+				r.Post("/{id}/departures", h.Package.CreateDeparture)
+			})
+
+			r.Route("/departures", func(r chi.Router) {
+				r.Get("/{id}", h.Package.GetDeparture)
+				r.Post("/{id}/clone", h.Package.CloneDeparture)
 			})
 		})
 	})

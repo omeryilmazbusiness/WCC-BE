@@ -82,10 +82,10 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	authSvc := appauth.NewService(identityRepo, auditRepo, tokens, txm)
 	customerSvc := appcustomer.NewService(customerRepo, txm)
 	leadSvc := applead.NewService(leadRepo, txm, bus)
-	bookingSvc := appbooking.NewService(bookingRepo, txm, bus)
+	bookingSvc := appbooking.NewService(bookingRepo, pkgRepo, txm, bus)
 	paymentSvc := apppayment.NewService(paymentRepo, bookingRepo, txm, bus)
-	taskSvc := apptask.NewService(taskRepo)
-	pkgSvc := apppkg.NewService(pkgRepo)
+	taskSvc := apptask.NewService(taskRepo, txm, bus)
+	pkgSvc := apppkg.NewService(pkgRepo, txm)
 	dashSvc := appdashboard.NewService(dashAgg)
 	docSvc := appdocument.NewService(docRepo, store)
 

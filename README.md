@@ -52,12 +52,14 @@ Demo users (password `ChangeMe123!`):
 - `POST /v1/auth/login|refresh` · `GET /v1/auth/me`
 - `GET|POST /v1/customers` · `GET /v1/customers/{id}`
 - `POST /v1/leads` · `POST /v1/leads/{id}/stage`
-- `POST /v1/bookings` · `POST /v1/bookings/{id}/confirm`
-- `POST /v1/payments`
-- `GET /v1/tasks/mine`
+- `GET|POST /v1/packages` · `GET /v1/packages/{id}` · `GET|POST /v1/packages/{id}/departures`
+- `GET /v1/departures/{id}` · `POST /v1/departures/{id}/clone`
+- `POST /v1/bookings` · `GET|PATCH /v1/bookings/{id}` · `POST .../confirm|status`
+- `GET|POST /v1/bookings/{id}/participants` · `GET /v1/bookings/{id}/payments`
+- `POST /v1/payments` (immutable ledger; GM/Manager)
+- `GET|POST /v1/tasks` · `GET /v1/tasks/mine` · `POST .../complete|status|reschedule`
 - `GET /v1/dashboard/kpis` (gm/manager)
 - `POST /v1/documents/presign`
-- `GET /v1/packages/{id}` · `GET /v1/packages/{id}/departures`
 
 ## Design notes
 

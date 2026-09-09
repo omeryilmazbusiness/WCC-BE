@@ -26,3 +26,26 @@ func TestBookingConfirmAndBalance(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyUpdateOnlyDraft(t *testing.T) {
+	b := &booking.Booking{Status: booking.StatusDraft, TotalAmount: 100, CollectedAmt: 0}
+	if err := b.ApplyUpdate(3, 300, "USD"); err != nil {
+		t.Fatal(err)
+	}
+	if b.PaxCount != 3 || b.BalanceAmt != 300 {
+		t.Fatalf("unexpected update %#v", b)
+	}
+	b.Status = booking.StatusConfirmed
+	if err := b.ApplyUpdate(1, 100, "USD"); err == nil {
+		t.Fatal("confirmed bookings must not accept update")
+	}
+}
+
+func TestCanTransition(t *testing.T) {
+	if !booking.CanTransition(booking.StatusDraft, booking.StatusConfirmed) {
+		t.Fatal("draft→confirmed")
+	}
+	if booking.CanTransition(booking.StatusCancelled, booking.StatusConfirmed) {
+		t.Fatal("cancelled is terminal")
+	}
+}

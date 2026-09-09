@@ -48,6 +48,9 @@ func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, 
 	if in.IdempotencyKey == "" {
 		return nil, shared.NewValidation("idempotency_key is required")
 	}
+	if in.BookingID == uuid.Nil {
+		return nil, shared.NewValidation("booking_id is required")
+	}
 
 	if existing, err := s.payments.FindByIdempotencyKey(ctx, in.IdempotencyKey); err == nil && existing != nil {
 		return existing, nil
@@ -55,15 +58,28 @@ func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, 
 
 	var out *domain.Payment
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		// Re-check idempotency inside the transaction (race-safe).
+		if existing, err := s.payments.FindByIdempotencyKey(ctx, in.IdempotencyKey); err == nil && existing != nil {
+			out = existing
+			return nil
+		}
+
 		b, err := s.bookings.FindByID(ctx, in.BookingID)
 		if err != nil {
 			return shared.NewNotFound("booking")
+		}
+		if b.Status == bookingdomain.StatusCancelled {
+			return shared.NewInvalidState("cannot record payment on cancelled booking")
+		}
+		currency := in.Currency
+		if currency == "" {
+			currency = b.Currency
 		}
 		p := &domain.Payment{
 			ID:             uuid.New(),
 			BookingID:      in.BookingID,
 			Amount:         in.Amount,
-			Currency:       in.Currency,
+			Currency:       currency,
 			Method:         in.Method,
 			Reference:      in.Reference,
 			RecordedBy:     in.RecordedBy,
@@ -79,6 +95,7 @@ func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, 
 		}
 		b.CollectedAmt = sum
 		b.RecomputeBalance()
+		b.UpdatedAt = time.Now().UTC()
 		if err := s.bookings.Update(ctx, b); err != nil {
 			return err
 		}
@@ -90,4 +107,11 @@ func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, 
 	}
 	s.bus.Publish(ctx, events.Event{Name: events.PaymentRecorded, Payload: out})
 	return out, nil
+}
+
+func (s *Service) ListByBooking(ctx context.Context, bookingID uuid.UUID) ([]domain.Payment, error) {
+	if _, err := s.bookings.FindByID(ctx, bookingID); err != nil {
+		return nil, shared.NewNotFound("booking")
+	}
+	return s.payments.ListByBooking(ctx, bookingID)
 }

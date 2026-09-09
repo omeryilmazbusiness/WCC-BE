@@ -55,10 +55,11 @@ func (b *Bus) Publish(ctx context.Context, event Event) {
 
 // Common MVP event names (see plan §7).
 const (
-	LeadCreated       = "lead.created"
-	LeadConverted     = "lead.converted"
-	BookingDrafted    = "booking.draft"
-	BookingConfirmed  = "booking.confirmed"
-	PaymentRecorded   = "payment.recorded"
-	TaskCreated       = "task.created"
+	LeadCreated      = "lead.created"
+	LeadConverted    = "lead.converted"
+	BookingDrafted   = "booking.draft"
+	BookingConfirmed = "booking.confirmed"
+	BookingCancelled = "booking.cancelled"
+	PaymentRecorded  = "payment.recorded"
+	TaskCreated      = "task.created"
 )

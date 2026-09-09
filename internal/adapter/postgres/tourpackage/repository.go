@@ -31,6 +31,16 @@ func (r *Repository) CreatePackage(ctx context.Context, p *domain.Package) error
 	return err
 }
 
+func (r *Repository) UpdatePackage(ctx context.Context, p *domain.Package) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	_, err := q.Exec(ctx, `
+		UPDATE packages SET code=$2, name_en=$3, name_ar=$4, description=$5, is_active=$6, updated_at=$7
+		WHERE id=$1`,
+		p.ID, p.Code, p.NameEN, p.NameAR, p.Description, p.IsActive, p.UpdatedAt,
+	)
+	return err
+}
+
 func (r *Repository) FindPackage(ctx context.Context, id uuid.UUID) (*domain.Package, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	row := q.QueryRow(ctx, `
@@ -44,6 +54,28 @@ func (r *Repository) FindPackage(ctx context.Context, id uuid.UUID) (*domain.Pac
 	return &p, err
 }
 
+func (r *Repository) ListPackages(ctx context.Context, branchID uuid.UUID, activeOnly bool) ([]domain.Package, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	rows, err := q.Query(ctx, `
+		SELECT id, branch_id, code, name_en, name_ar, description, is_active, created_at, updated_at
+		FROM packages
+		WHERE branch_id=$1 AND ($2::bool = FALSE OR is_active = TRUE)
+		ORDER BY code`, branchID, activeOnly)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Package
+	for rows.Next() {
+		var p domain.Package
+		if err := rows.Scan(&p.ID, &p.BranchID, &p.Code, &p.NameEN, &p.NameAR, &p.Description, &p.IsActive, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) CreateDeparture(ctx context.Context, d *domain.Departure) error {
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
@@ -53,6 +85,18 @@ func (r *Repository) CreateDeparture(ctx context.Context, d *domain.Departure) e
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		d.ID, d.PackageID, d.Code, d.DepartDate, d.ReturnDate, d.CapacityTotal, d.CapacitySold,
 		d.BasePrice, d.Currency, d.IsActive, d.CreatedAt, d.UpdatedAt,
+	)
+	return err
+}
+
+func (r *Repository) UpdateDeparture(ctx context.Context, d *domain.Departure) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	_, err := q.Exec(ctx, `
+		UPDATE departures SET code=$2, depart_date=$3, return_date=$4, capacity_total=$5,
+			base_price=$6, currency=$7, is_active=$8, updated_at=$9
+		WHERE id=$1`,
+		d.ID, d.Code, d.DepartDate, d.ReturnDate, d.CapacityTotal,
+		d.BasePrice, d.Currency, d.IsActive, d.UpdatedAt,
 	)
 	return err
 }
@@ -99,3 +143,4 @@ func (r *Repository) ListDepartures(ctx context.Context, packageID uuid.UUID) ([
 	}
 	return out, rows.Err()
 }
+
