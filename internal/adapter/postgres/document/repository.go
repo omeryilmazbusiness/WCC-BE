@@ -32,6 +32,23 @@ func (r *Repository) Create(ctx context.Context, d *domain.Document) error {
 	return err
 }
 
+func (r *Repository) Update(ctx context.Context, d *domain.Document) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	ct, err := q.Exec(ctx, `
+		UPDATE documents
+		SET kind = $2, file_name = $3, content_type = $4, size_bytes = $5
+		WHERE id = $1`,
+		d.ID, d.Kind, d.FileName, d.ContentType, d.SizeBytes,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("%w", pgx.ErrNoRows)
+	}
+	return nil
+}
+
 func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Document, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	row := q.QueryRow(ctx, `

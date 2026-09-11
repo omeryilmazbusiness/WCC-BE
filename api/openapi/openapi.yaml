@@ -2,9 +2,21 @@ openapi: 3.0.3
 info:
   title: WODI CRM API
   version: 0.1.0
-  description: Internal Command Center REST API (P0 modular monolith)
+  description: |
+    Internal Command Center REST API (P0 modular monolith).
+    B10 dashboard KPIs, B11 document metadata + presign, B12 domain events surface.
 servers:
   - url: http://localhost:8080/v1
+tags:
+  - name: Auth
+  - name: Customers
+  - name: Leads
+  - name: Bookings
+  - name: Payments
+  - name: Tasks
+  - name: Dashboard
+  - name: Documents
+  - name: Packages
 paths:
   /auth/login:
     post:
@@ -18,8 +30,8 @@ paths:
               type: object
               required: [email, password]
               properties:
-                email: { type: string }
-                password: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, format: password }
       responses:
         "200":
           description: Token pair
@@ -52,39 +64,226 @@ paths:
           description: Created
   /leads:
     post:
-      summary: Create lead
+      summary: Create lead (publishes lead.created)
       tags: [Leads]
       security: [{ bearerAuth: [] }]
       responses:
         "201":
           description: Created
+  /leads/{id}/stage:
+    post:
+      summary: Change lead stage (won publishes lead.converted)
+      tags: [Leads]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage]
+              properties:
+                stage: { type: string, enum: [new, contacted, qualified, proposal, won, lost] }
+                note: { type: string }
+      responses:
+        "200":
+          description: Updated lead
   /bookings:
     post:
-      summary: Create draft booking
+      summary: Create draft booking (publishes booking.draft)
       tags: [Bookings]
       security: [{ bearerAuth: [] }]
       responses:
         "201":
           description: Created
+  /bookings/{id}/confirm:
+    post:
+      summary: Confirm booking (publishes booking.confirmed → document+payment tasks)
+      tags: [Bookings]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Confirmed booking
   /payments:
     post:
-      summary: Record immutable payment
+      summary: Record immutable payment (publishes payment.recorded)
       tags: [Payments]
       security: [{ bearerAuth: [] }]
       responses:
         "201":
           description: Created
-  /dashboard/kpis:
+  /tasks:
     get:
-      summary: Manager KPI aggregates
-      tags: [Dashboard]
+      summary: List tasks by related entity
+      tags: [Tasks]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: related_type
+          schema: { type: string }
+        - in: query
+          name: related_id
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Task list
+  /tasks/mine:
+    get:
+      summary: Employee task queue
+      tags: [Tasks]
       security: [{ bearerAuth: [] }]
       responses:
         "200":
+          description: My tasks
+  /dashboard/kpis:
+    get:
+      summary: Manager KPI aggregates (B10)
+      description: |
+        Period is half-open [from, to). Defaults to last 30 days.
+        All four KPI cards use the same period + branch scope.
+      tags: [Dashboard]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+          description: RFC3339 inclusive start
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+          description: RFC3339 exclusive end
+      responses:
+        "200":
           description: KPI payload
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/DashboardKPI"
+        "400":
+          description: Invalid period
+        "403":
+          description: Employee role forbidden
+  /documents:
+    get:
+      summary: List document metadata by related entity (B11)
+      tags: [Documents]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: related_type
+          required: true
+          schema: { type: string, enum: [customer, booking, lead, participant] }
+        - in: query
+          name: related_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Document list
+  /documents/presign:
+    post:
+      summary: Create metadata row + presigned PUT URL (B11)
+      tags: [Documents]
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [related_type, related_id, file_name, content_type]
+              properties:
+                related_type: { type: string, enum: [customer, booking, lead, participant] }
+                related_id: { type: string, format: uuid }
+                kind: { type: string, enum: [passport, visa, receipt, photo, other] }
+                file_name: { type: string }
+                content_type: { type: string }
+      responses:
+        "201":
+          description: Presign result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: "#/components/schemas/PresignUploadResult"
+  /documents/{id}:
+    get:
+      summary: Get document metadata
+      tags: [Documents]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Document
+  /documents/{id}/complete:
+    post:
+      summary: Mark upload complete (sets size_bytes)
+      tags: [Documents]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [size_bytes]
+              properties:
+                size_bytes: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Updated document
+  /documents/{id}/download:
+    post:
+      summary: Presigned GET for completed upload
+      tags: [Documents]
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdPath"
+      responses:
+        "200":
+          description: Download URL
+        "422":
+          description: Upload not completed
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  parameters:
+    IdPath:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+  schemas:
+    DashboardKPI:
+      type: object
+      required: [leads_open, tasks_overdue, bookings_unpaid, missing_docs, period_from, period_to]
+      properties:
+        leads_open: { type: integer }
+        tasks_overdue: { type: integer }
+        bookings_unpaid: { type: integer }
+        missing_docs: { type: integer }
+        period_from: { type: string, format: date-time }
+        period_to: { type: string, format: date-time }
+    PresignUploadResult:
+      type: object
+      properties:
+        document_id: { type: string, format: uuid }
+        upload_url: { type: string, format: uri }
+        storage_key: { type: string }
+        expires_in_sec: { type: integer }
+        status: { type: string, enum: [pending, uploaded] }

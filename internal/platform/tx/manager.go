@@ -9,6 +9,18 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// Runner is the unit-of-work port (DIP) satisfied by Manager and Nop.
+type Runner interface {
+	WithinTransaction(ctx context.Context, fn func(ctx context.Context) error) error
+}
+
+// Nop runs fn without a database transaction (unit tests / in-memory repos).
+type Nop struct{}
+
+func (Nop) WithinTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	return fn(ctx)
+}
+
 // ctxKey isolates the active transaction on context.
 type ctxKey struct{}
 

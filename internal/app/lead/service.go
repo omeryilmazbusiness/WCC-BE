@@ -80,6 +80,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Lead, err
 
 func (s *Service) ChangeStage(ctx context.Context, leadID uuid.UUID, to domain.Stage, actorID uuid.UUID, note string) (*domain.Lead, error) {
 	var out *domain.Lead
+	var converted bool
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		l, err := s.repo.FindByID(ctx, leadID)
 		if err != nil {
@@ -104,7 +105,14 @@ func (s *Service) ChangeStage(ctx context.Context, leadID uuid.UUID, to domain.S
 			return err
 		}
 		out = l
+		converted = to == domain.StageWon
 		return nil
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	if converted {
+		s.bus.Publish(ctx, events.Event{Name: events.LeadConverted, Payload: out})
+	}
+	return out, nil
 }

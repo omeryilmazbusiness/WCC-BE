@@ -13,6 +13,14 @@ import (
 
 type Handler struct {
 	Svc *appsvc.Service
+	Now func() time.Time
+}
+
+func (h Handler) now() time.Time {
+	if h.Now != nil {
+		return h.Now()
+	}
+	return time.Now().UTC()
 }
 
 func (h Handler) KPIs(w http.ResponseWriter, r *http.Request) {
@@ -25,18 +33,26 @@ func (h Handler) KPIs(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewForbidden("manager dashboard only"))
 		return
 	}
-	to := time.Now().UTC()
-	from := to.AddDate(0, 0, -30)
-	if v := r.URL.Query().Get("from"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			from = t
+
+	from, to := appsvc.DefaultPeriod(h.now())
+	q := r.URL.Query()
+	if v := q.Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			response.Error(w, shared.NewValidation("from must be RFC3339"))
+			return
 		}
+		from = t
 	}
-	if v := r.URL.Query().Get("to"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			to = t
+	if v := q.Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			response.Error(w, shared.NewValidation("to must be RFC3339"))
+			return
 		}
+		to = t
 	}
+
 	branchID := middleware.ScopeBranch(claims, &claims.BranchID)
 	kpi, err := h.Svc.KPIs(r.Context(), branchID, from, to)
 	if err != nil {

@@ -91,6 +91,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 
 	taskSeeder := apptask.NewSeeder(taskRepo, txm)
 	taskSeeder.Register(bus)
+	taskReactor := apptask.NewReactor(taskRepo, bookingRepo, txm)
+	taskReactor.Register(bus)
 
 	handlers := httpadapter.Handlers{
 		Health: health.Handler{

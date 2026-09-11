@@ -138,10 +138,10 @@ func (s *Service) Reschedule(ctx context.Context, id uuid.UUID, due *time.Time) 
 // Seeder listens to domain events and creates tasks idempotently (B9 rules stub).
 type Seeder struct {
 	tasks domain.Repository
-	tx    *tx.Manager
+	tx    tx.Runner
 }
 
-func NewSeeder(tasks domain.Repository, txm *tx.Manager) *Seeder {
+func NewSeeder(tasks domain.Repository, txm tx.Runner) *Seeder {
 	return &Seeder{tasks: tasks, tx: txm}
 }
 

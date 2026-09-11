@@ -107,7 +107,13 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 			r.With(middleware.RequireRoles(platformauth.RoleGM, platformauth.RoleManager)).
 				Get("/dashboard/kpis", h.Dashboard.KPIs)
 
-			r.Post("/documents/presign", h.Document.PresignUpload)
+			r.Route("/documents", func(r chi.Router) {
+				r.Get("/", h.Document.List)
+				r.Post("/presign", h.Document.PresignUpload)
+				r.Get("/{id}", h.Document.Get)
+				r.Post("/{id}/complete", h.Document.Complete)
+				r.Post("/{id}/download", h.Document.PresignDownload)
+			})
 
 			r.Route("/packages", func(r chi.Router) {
 				r.Get("/", h.Package.ListPackages)
