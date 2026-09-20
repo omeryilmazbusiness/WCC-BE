@@ -18,6 +18,7 @@ type User struct {
 	BranchID     uuid.UUID
 	TeamID       *uuid.UUID
 	IsActive     bool
+	MFAEnabled   bool
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -31,10 +32,34 @@ type Branch struct {
 	CreatedAt time.Time
 }
 
+type Team struct {
+	ID        uuid.UUID
+	BranchID  uuid.UUID
+	Code      string
+	NameEN    string
+	NameAR    string
+	IsActive  bool
+	CreatedAt time.Time
+}
+
+type UserFilter struct {
+	BranchID *uuid.UUID
+	TeamID   *uuid.UUID
+	Role     *platformauth.Role
+	Query    string
+	Active   *bool
+	Limit    int
+	Offset   int
+}
+
 // Repository is the persistence port (Dependency Inversion).
 type Repository interface {
 	FindUserByEmail(ctx context.Context, email string) (*User, error)
 	FindUserByID(ctx context.Context, id uuid.UUID) (*User, error)
 	CreateUser(ctx context.Context, user *User) error
+	UpdateUser(ctx context.Context, user *User) error
+	ListUsers(ctx context.Context, f UserFilter) ([]User, int, error)
 	ListBranches(ctx context.Context) ([]Branch, error)
+	ListTeams(ctx context.Context, branchID *uuid.UUID) ([]Team, error)
+	FindTeam(ctx context.Context, id uuid.UUID) (*Team, error)
 }

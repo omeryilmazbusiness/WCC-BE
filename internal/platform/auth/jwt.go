@@ -12,12 +12,6 @@ import (
 
 type Role string
 
-const (
-	RoleGM       Role = "gm"
-	RoleManager  Role = "manager"
-	RoleEmployee Role = "employee"
-)
-
 // Claims carried in access tokens for RBAC + scope.
 type Claims struct {
 	UserID   uuid.UUID `json:"uid"`

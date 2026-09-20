@@ -14,6 +14,7 @@ type Checker interface {
 
 type Handler struct {
 	DB      Checker
+	Queue   Checker
 	Version string
 	Env     string
 }
@@ -28,15 +29,28 @@ func (h Handler) Ready(w http.ResponseWriter, r *http.Request) {
 
 	status := http.StatusOK
 	dbOK := true
+	queueOK := true
+
 	if h.DB != nil {
 		if err := h.DB.Ping(ctx); err != nil {
 			dbOK = false
 			status = http.StatusServiceUnavailable
 		}
 	}
+	if h.Queue != nil {
+		if err := h.Queue.Ping(ctx); err != nil {
+			queueOK = false
+			// Queue down is degraded but API can still serve reads;
+			// mark not ready in production-sensitive readiness.
+			status = http.StatusServiceUnavailable
+		}
+	}
+
+	ready := dbOK && queueOK
 	response.JSON(w, status, map[string]any{
-		"status":  map[bool]string{true: "ready", false: "not_ready"}[dbOK],
+		"status":  map[bool]string{true: "ready", false: "not_ready"}[ready],
 		"db":      dbOK,
+		"queue":   queueOK,
 		"version": h.Version,
 		"env":     h.Env,
 	})

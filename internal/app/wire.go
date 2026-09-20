@@ -10,15 +10,18 @@ import (
 
 	httpadapter "github.com/wodi-crm/wodi-crm-be/internal/adapter/http"
 	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
+	audithttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/audithttp"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
 	leadhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/lead"
+	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
+	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
 	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgbooking "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/booking"
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
@@ -31,6 +34,7 @@ import (
 	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/queue"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/storage"
+	appaudit "github.com/wodi-crm/wodi-crm-be/internal/app/audit"
 	appauth "github.com/wodi-crm/wodi-crm-be/internal/app/auth"
 	appbooking "github.com/wodi-crm/wodi-crm-be/internal/app/booking"
 	appcustomer "github.com/wodi-crm/wodi-crm-be/internal/app/customer"
@@ -40,6 +44,7 @@ import (
 	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
 	apptask "github.com/wodi-crm/wodi-crm-be/internal/app/task"
 	apppkg "github.com/wodi-crm/wodi-crm-be/internal/app/tourpackage"
+	appuser "github.com/wodi-crm/wodi-crm-be/internal/app/useradmin"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
@@ -67,6 +72,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	tokens := platformauth.NewTokenService(cfg.Auth)
 	store := storage.NewMinIO(cfg.Storage)
 	q := queue.NewAsynqClient(cfg.Redis, log)
+	mfa := platformauth.NewPolicyMFA() // enable per-user via mfa_enabled flag
 
 	identityRepo := pgidentity.NewRepository(pool)
 	auditRepo := pgaudit.NewRepository(pool)
@@ -79,11 +85,15 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	docRepo := pgdocument.NewRepository(pool)
 	dashAgg := pgdash.NewDashboardAggregator(pool)
 
-	authSvc := appauth.NewService(identityRepo, auditRepo, tokens, txm)
+	auditSvc := appaudit.NewService(auditRepo)
+	authSvc := appauth.NewService(identityRepo, auditSvc, tokens, txm, mfa)
+	userSvc := appuser.NewService(identityRepo, auditSvc, txm)
 	customerSvc := appcustomer.NewService(customerRepo, txm)
 	leadSvc := applead.NewService(leadRepo, txm, bus)
 	bookingSvc := appbooking.NewService(bookingRepo, pkgRepo, txm, bus)
+	bookingSvc.SetAuditor(auditSvc)
 	paymentSvc := apppayment.NewService(paymentRepo, bookingRepo, txm, bus)
+	paymentSvc.SetAuditor(auditSvc)
 	taskSvc := apptask.NewService(taskRepo, txm, bus)
 	pkgSvc := apppkg.NewService(pkgRepo, txm)
 	dashSvc := appdashboard.NewService(dashAgg)
@@ -97,10 +107,13 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	handlers := httpadapter.Handlers{
 		Health: health.Handler{
 			DB:      pool,
+			Queue:   q,
 			Version: cfg.App.Version,
 			Env:     cfg.App.Env,
 		},
 		Auth:      authhttp.Handler{Svc: authSvc},
+		Users:     usershttp.Handler{Svc: userSvc},
+		Audit:     audithttp.Handler{Svc: auditSvc},
 		Customer:  customerhttp.Handler{Svc: customerSvc},
 		Lead:      leadhttp.Handler{Svc: leadSvc},
 		Booking:   bookinghttp.Handler{Svc: bookingSvc},
@@ -109,6 +122,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Dashboard: dashboardhttp.Handler{Svc: dashSvc},
 		Document:  documenthttp.Handler{Svc: docSvc},
 		Package:   pkghttp.Handler{Svc: pkgSvc},
+		Ops:       opshttp.Handler{Queue: q},
 	}
 
 	router := httpadapter.NewRouter(cfg, tokens, handlers)

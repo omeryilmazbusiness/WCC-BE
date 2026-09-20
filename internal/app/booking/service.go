@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	pkgdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/tourpackage"
@@ -43,6 +44,7 @@ type Service struct {
 	departures pkgdomain.Repository
 	tx         *tx.Manager
 	bus        *events.Bus
+	audit      audit.Recorder
 }
 
 func NewService(
@@ -53,6 +55,8 @@ func NewService(
 ) *Service {
 	return &Service{repo: repo, departures: departures, tx: txm, bus: bus}
 }
+
+func (s *Service) SetAuditor(a audit.Recorder) { s.audit = a }
 
 func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Booking, error) {
 	if in.PaxCount <= 0 {
@@ -160,6 +164,13 @@ func (s *Service) Confirm(ctx context.Context, bookingID uuid.UUID) (*domain.Boo
 	if err != nil {
 		return nil, err
 	}
+	if s.audit != nil && out != nil {
+		id := out.ID
+		_ = s.audit.Record(ctx, audit.RecordInput{
+			ActorID: out.OwnerID, Action: "booking.status_changed", EntityType: "booking", EntityID: &id, BranchID: &out.BranchID,
+			After: map[string]any{"status": out.Status},
+		})
+	}
 	s.bus.Publish(ctx, events.Event{Name: events.BookingConfirmed, Payload: out})
 	return out, nil
 }
@@ -206,6 +217,13 @@ func (s *Service) Cancel(ctx context.Context, bookingID uuid.UUID) (*domain.Book
 	})
 	if err != nil {
 		return nil, err
+	}
+	if s.audit != nil && out != nil {
+		id := out.ID
+		_ = s.audit.Record(ctx, audit.RecordInput{
+			ActorID: out.OwnerID, Action: "booking.status_changed", EntityType: "booking", EntityID: &id, BranchID: &out.BranchID,
+			After: map[string]any{"status": out.Status},
+		})
 	}
 	s.bus.Publish(ctx, events.Event{Name: events.BookingCancelled, Payload: out})
 	return out, nil

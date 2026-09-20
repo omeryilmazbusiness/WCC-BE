@@ -11,9 +11,10 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
-// MinIO is an S3-compatible adapter behind ObjectStore.
+// MinIO is an S3-compatible adapter behind shared.ObjectStore.
 // Local/dev returns deterministic stub URLs (no network). Swap the body for
 // minio-go / AWS SDK without changing app ports (OCP / DIP).
+// Binary blobs never enter Postgres — only document metadata rows are stored.
 type MinIO struct {
 	cfg config.StorageConfig
 }

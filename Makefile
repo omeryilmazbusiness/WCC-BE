@@ -1,4 +1,4 @@
-.PHONY: tidy build test run migrate-up migrate-down docker-up docker-down vet lint
+.PHONY: tidy build test run migrate-up migrate-down docker-up docker-down vet lint bootstrap
 
 BIN_DIR := .bin
 
@@ -14,11 +14,17 @@ build:
 vet:
 	go vet ./...
 
+lint: vet
+	@echo "lint ok (go vet)"
+
 test:
 	go test ./...
 
 run: build
 	./$(BIN_DIR)/api
+
+worker: build
+	./$(BIN_DIR)/worker
 
 migrate-up: build
 	./$(BIN_DIR)/migrate -command=up

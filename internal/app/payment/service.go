@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -30,6 +31,7 @@ type Service struct {
 	bookings bookingdomain.Repository
 	tx       *tx.Manager
 	bus      *events.Bus
+	audit    audit.Recorder
 }
 
 func NewService(
@@ -40,6 +42,8 @@ func NewService(
 ) *Service {
 	return &Service{payments: payments, bookings: bookings, tx: txm, bus: bus}
 }
+
+func (s *Service) SetAuditor(a audit.Recorder) { s.audit = a }
 
 func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, error) {
 	if in.Amount <= 0 {
@@ -104,6 +108,14 @@ func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, 
 	})
 	if err != nil {
 		return nil, err
+	}
+	if s.audit != nil && out != nil {
+		id := out.ID
+		bid := out.BookingID
+		_ = s.audit.Record(ctx, audit.RecordInput{
+			ActorID: in.RecordedBy, Action: "payment.recorded", EntityType: "payment", EntityID: &id,
+			After: map[string]any{"booking_id": bid, "amount": out.Amount, "currency": out.Currency, "method": out.Method},
+		})
 	}
 	s.bus.Publish(ctx, events.Event{Name: events.PaymentRecorded, Payload: out})
 	return out, nil

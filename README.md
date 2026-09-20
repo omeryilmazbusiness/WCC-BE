@@ -9,8 +9,8 @@ Go modular monolith for the WODI Command Center (Hajj/Umrah internal CRM).
 | HTTP | chi |
 | DB | PostgreSQL + goose migrations + pgx |
 | Auth | JWT access + refresh, RBAC |
-| Queue | Asynq/Redis (worker stub) |
-| Files | S3-compatible (MinIO stub) |
+| Queue | Asynq/Redis (retry + archived DLQ; memory fallback) |
+| Files | S3-compatible ObjectStore port (MinIO adapter) |
 | Events | In-process domain bus |
 
 ## Architecture
@@ -38,8 +38,32 @@ make migrate-up
 make run
 ```
 
-Health: `GET /healthz` · Ready: `GET /readyz`  
+Health: `GET /healthz` · Ready: `GET /readyz` (db + queue)  
+Ops (GM): `GET /v1/ops/queue` · `GET /v1/ops/jobs/{id}?queue=default`  
 API prefix: `/v1`
+
+### Epic 0 foundation
+
+| Task | Status |
+|------|--------|
+| T-001 Modular monolith + env + lint + CI | Done |
+| T-002 Migrations/seed + entity conventions | Done |
+| T-003 REST envelope + pagination/filter/sort | Done |
+| T-004 Queue retry / DLQ / job status | Done |
+| T-005 Object storage adapter (metadata in DB) | Done |
+| T-006 Observability (logs, health, queue metrics) | Done |
+
+### Epic 1 identity & admin
+
+| Task | Status |
+|------|--------|
+| T-011 Auth login/refresh/logout + password policy | Done |
+| T-012 Optional MFA hooks | Done |
+| T-013 Users CRUD + branch/team | Done |
+| T-014 Roles/permissions + API RBAC | Done |
+| T-015 Ownership + branch/team scoping | Done |
+| T-016 AuditEvent service + list | Done |
+| T-017 Sensitive action audit hooks | Done |
 
 Demo users (password `ChangeMe123!`):
 

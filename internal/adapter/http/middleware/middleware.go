@@ -82,12 +82,43 @@ func RequireRoles(roles ...platformauth.Role) func(http.Handler) http.Handler {
 	}
 }
 
+// RequirePermission enforces fine-grained permission from the role matrix.
+func RequirePermission(p platformauth.Permission) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims, ok := ClaimsFrom(r.Context())
+			if !ok {
+				response.Error(w, shared.NewUnauthorized("unauthenticated"))
+				return
+			}
+			if !platformauth.HasPermission(claims.Role, p) {
+				response.Error(w, shared.NewForbidden("missing permission: "+string(p)))
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // ScopeBranch optionally restricts a query branch_id to the caller's branch
-// unless role is GM.
+// unless role is GM or Admin.
 func ScopeBranch(claims *platformauth.Claims, requested *uuid.UUID) *uuid.UUID {
-	if claims.Role == platformauth.RoleGM {
+	if claims.Role == platformauth.RoleGM || claims.Role == platformauth.RoleAdmin {
 		return requested
 	}
 	id := claims.BranchID
 	return &id
+}
+
+// OwnsOrElevated allows record owners, or manager+/gm/admin, to proceed.
+func OwnsOrElevated(claims *platformauth.Claims, ownerID uuid.UUID) bool {
+	if claims.UserID == ownerID {
+		return true
+	}
+	switch claims.Role {
+	case platformauth.RoleGM, platformauth.RoleAdmin, platformauth.RoleManager:
+		return true
+	default:
+		return false
+	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/cors"
 
 	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
+	audithttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/audithttp"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
@@ -16,9 +17,11 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
 	leadhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/lead"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
+	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
@@ -27,6 +30,8 @@ import (
 type Handlers struct {
 	Health    health.Handler
 	Auth      authhttp.Handler
+	Users     usershttp.Handler
+	Audit     audithttp.Handler
 	Customer  customerhttp.Handler
 	Lead      leadhttp.Handler
 	Booking   bookinghttp.Handler
@@ -35,6 +40,7 @@ type Handlers struct {
 	Dashboard dashboardhttp.Handler
 	Document  documenthttp.Handler
 	Package   pkghttp.Handler
+	Ops       opshttp.Handler
 }
 
 func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers) http.Handler {
@@ -61,14 +67,29 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 		r.Route("/auth", func(r chi.Router) {
 			r.Post("/login", h.Auth.Login)
 			r.Post("/refresh", h.Auth.Refresh)
+			r.Post("/mfa/verify", h.Auth.VerifyMFA)
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.Authenticate(tokens))
 				r.Get("/me", h.Auth.Me)
+				r.Post("/logout", h.Auth.Logout)
 			})
 		})
 
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Authenticate(tokens))
+
+			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Users.ListBranches)
+			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/teams", h.Users.ListTeams)
+			r.With(middleware.RequirePermission(platformauth.PermRolesRead)).Get("/permissions", h.Users.PermissionsMatrix)
+
+			r.Route("/users", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermUsersRead)).Get("/", h.Users.List)
+				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/", h.Users.Create)
+				r.With(middleware.RequirePermission(platformauth.PermUsersRead)).Get("/{id}", h.Users.Get)
+				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Patch("/{id}", h.Users.Update)
+			})
+
+			r.With(middleware.RequirePermission(platformauth.PermAuditRead)).Get("/audit-events", h.Audit.List)
 
 			r.Route("/customers", func(r chi.Router) {
 				r.Get("/", h.Customer.Search)
@@ -104,8 +125,13 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.Post("/{id}/reschedule", h.Task.Reschedule)
 			})
 
-			r.With(middleware.RequireRoles(platformauth.RoleGM, platformauth.RoleManager)).
+			r.With(middleware.RequirePermission(platformauth.PermDashboardRead)).
 				Get("/dashboard/kpis", h.Dashboard.KPIs)
+
+			r.Route("/ops", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermOpsRead)).Get("/queue", h.Ops.QueueStats)
+				r.With(middleware.RequirePermission(platformauth.PermOpsRead)).Get("/jobs/{id}", h.Ops.JobStatus)
+			})
 
 			r.Route("/documents", func(r chi.Router) {
 				r.Get("/", h.Document.List)

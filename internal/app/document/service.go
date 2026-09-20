@@ -10,11 +10,8 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
-// ObjectStore is the S3-compatible port (presigned uploads/downloads).
-type ObjectStore interface {
-	PresignPut(ctx context.Context, key, contentType string, ttl time.Duration) (url string, err error)
-	PresignGet(ctx context.Context, key string, ttl time.Duration) (url string, err error)
-}
+// ObjectStore is an alias to the shared storage port (DIP).
+type ObjectStore = shared.ObjectStore
 
 type PresignUploadInput struct {
 	BranchID    uuid.UUID

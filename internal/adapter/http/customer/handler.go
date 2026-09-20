@@ -3,13 +3,13 @@ package customer
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/customer"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/customer"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -77,12 +77,11 @@ func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) Search(w http.ResponseWriter, r *http.Request) {
 	claims, _ := middleware.ClaimsFrom(r.Context())
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	page := request.Page(r)
 	f := domain.SearchFilter{
-		Query:  r.URL.Query().Get("q"),
-		Limit:  limit,
-		Offset: offset,
+		Query:  request.FilterString(r, "q"),
+		Limit:  page.Limit,
+		Offset: page.Offset,
 	}
 	if claims != nil {
 		bid := claims.BranchID
@@ -93,5 +92,13 @@ func (h Handler) Search(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSONMeta(w, http.StatusOK, items, map[string]any{"total": total})
+	meta := shared.NewPageMeta(int64(total), page)
+	response.JSONMeta(w, http.StatusOK, items, map[string]any{
+		"total":       meta.Total,
+		"limit":       meta.Limit,
+		"offset":      meta.Offset,
+		"page":        meta.Page,
+		"total_pages": meta.TotalPages,
+		"sort":        meta.Sort,
+	})
 }
