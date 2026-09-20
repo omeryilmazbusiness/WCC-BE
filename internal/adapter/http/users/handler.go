@@ -190,7 +190,11 @@ func (h Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, items)
+	out := make([]map[string]any, 0, len(items))
+	for i := range items {
+		out = append(out, mapBranch(&items[i]))
+	}
+	response.JSON(w, http.StatusOK, out)
 }
 
 func (h Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +212,11 @@ func (h Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, items)
+	out := make([]map[string]any, 0, len(items))
+	for i := range items {
+		out = append(out, mapTeam(&items[i]))
+	}
+	response.JSON(w, http.StatusOK, out)
 }
 
 func (h Handler) PermissionsMatrix(w http.ResponseWriter, _ *http.Request) {
@@ -223,5 +231,20 @@ func mapUser(u *identity.User) map[string]any {
 		"id": u.ID, "email": u.Email, "full_name": u.FullName, "role": u.Role,
 		"branch_id": u.BranchID, "team_id": u.TeamID, "is_active": u.IsActive,
 		"mfa_enabled": u.MFAEnabled, "created_at": u.CreatedAt, "updated_at": u.UpdatedAt,
+	}
+}
+
+func mapBranch(b *identity.Branch) map[string]any {
+	return map[string]any{
+		"id": b.ID, "code": b.Code, "name_en": b.NameEN, "name_ar": b.NameAR,
+		"is_active": b.IsActive, "created_at": b.CreatedAt,
+	}
+}
+
+func mapTeam(t *identity.Team) map[string]any {
+	return map[string]any{
+		"id": t.ID, "branch_id": t.BranchID, "code": t.Code,
+		"name_en": t.NameEN, "name_ar": t.NameAR, "is_active": t.IsActive,
+		"created_at": t.CreatedAt,
 	}
 }

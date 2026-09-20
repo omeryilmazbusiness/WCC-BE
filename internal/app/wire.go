@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	httpadapter "github.com/wodi-crm/wodi-crm-be/internal/adapter/http"
@@ -89,9 +90,12 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	authSvc := appauth.NewService(identityRepo, auditSvc, tokens, txm, mfa)
 	userSvc := appuser.NewService(identityRepo, auditSvc, txm)
 	customerSvc := appcustomer.NewService(customerRepo, txm)
+	customerSvc.SetAuditor(auditSvc)
 	leadSvc := applead.NewService(leadRepo, txm, bus)
+	leadSvc.SetAuditor(auditSvc)
 	bookingSvc := appbooking.NewService(bookingRepo, pkgRepo, txm, bus)
 	bookingSvc.SetAuditor(auditSvc)
+	leadSvc.SetBookingCreator(leadBookingBridge{svc: bookingSvc})
 	paymentSvc := apppayment.NewService(paymentRepo, bookingRepo, txm, bus)
 	paymentSvc.SetAuditor(auditSvc)
 	taskSvc := apptask.NewService(taskRepo, txm, bus)
@@ -145,4 +149,21 @@ func (a *Application) Close() {
 	if a.Pool != nil {
 		a.Pool.Close()
 	}
+}
+
+// leadBookingBridge adapts booking.Service to lead.BookingDraftCreator (DIP).
+type leadBookingBridge struct {
+	svc *appbooking.Service
+}
+
+func (b leadBookingBridge) CreateDraftFromLead(ctx context.Context, in applead.ConvertBookingInput) (uuid.UUID, error) {
+	bk, err := b.svc.CreateDraft(ctx, appbooking.CreateInput{
+		BranchID: in.BranchID, CustomerID: in.CustomerID, DepartureID: in.DepartureID,
+		LeadID: &in.LeadID, PaxCount: in.PaxCount, TotalAmount: in.TotalAmount,
+		Currency: in.Currency, OwnerID: in.OwnerID,
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return bk.ID, nil
 }

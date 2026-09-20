@@ -71,11 +71,38 @@ Demo users (password `ChangeMe123!`):
 - `manager@wodi.local`
 - `sales@wodi.local`
 
+### Epic 2 Customer 360
+
+| Task | Status |
+|------|--------|
+| T-023 Customer PII fields + normalize/mask | Done |
+| T-024 Duplicate detection (phone/email/passport/name) | Done |
+| T-025 Soft duplicate warn on create | Done |
+| T-026 Customer update + preferences | Done |
+| T-027 Merge (merged_into_id, deactivate source) | Done |
+| T-028 Companions link/unlink | Done |
+| T-029 Unified timeline (leads/bookings/docs/payments/tasks) | Done |
+
+### Epic 3 CRM / Lead Pipeline
+
+| Task | Status |
+|------|--------|
+| T-034 Lead entity + stage taxonomy | Done |
+| T-035 Append-only stage history | Done |
+| T-036 Assign / bulk-assign ownership | Done |
+| T-037 Convert lead → booking draft | Done |
+| T-038 Lost reason taxonomy + note | Done |
+| T-039 No-follow-up flag | Done |
+| T-040 Lead analytics (stage/source/owner) | Done |
+
 ## P0 route map
 
 - `POST /v1/auth/login|refresh` · `GET /v1/auth/me`
-- `GET|POST /v1/customers` · `GET /v1/customers/{id}`
-- `POST /v1/leads` · `POST /v1/leads/{id}/stage`
+- `GET|POST /v1/customers` · `GET|PATCH /v1/customers/{id}` · `GET /v1/customers/duplicates`
+- `POST /v1/customers/{id}/merge` · `GET /v1/customers/{id}/timeline`
+- `GET|POST /v1/customers/{id}/companions` · `DELETE .../companions/{companionId}`
+- `GET|POST /v1/leads` · `GET /v1/leads/analytics` · `GET /v1/leads/lost-reasons` · `POST /v1/leads/assign`
+- `GET /v1/leads/{id}` · `POST .../stage|assign|convert|no-follow-up` · `GET .../history`
 - `GET|POST /v1/packages` · `GET /v1/packages/{id}` · `GET|POST /v1/packages/{id}/departures`
 - `GET /v1/departures/{id}` · `POST /v1/departures/{id}/clone`
 - `POST /v1/bookings` · `GET|PATCH /v1/bookings/{id}` · `POST .../confirm|status`
