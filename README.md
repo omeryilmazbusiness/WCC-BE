@@ -120,6 +120,17 @@ Demo users (password `ChangeMe123!`):
 | T-065 Confirm gates (pax, checklist, capacity) | Done |
 | T-066 Booking list/filter | Done |
 
+### Epic 6 Tasks & Workflow
+
+| Task | Status |
+|------|--------|
+| T-073 Task entity (status/priority/type/outcome) | Done |
+| T-074 Manual assign + bulk assign APIs | Done |
+| T-075 Rule engine: auto-create from ops events | Done |
+| T-076 Idempotency keys for open tasks | Done |
+| T-077 Overdue detection + escalation after grace | Done |
+| T-078 Resolve condition → auto-close/suppress | Done |
+
 ## P0 route map
 
 - `POST /v1/auth/login|refresh` · `GET /v1/auth/me`
@@ -140,7 +151,8 @@ Demo users (password `ChangeMe123!`):
 - `GET|PUT /v1/bookings/{id}/line-items` · `GET|PATCH .../checklist|checklist/{itemId}`
 - `GET /v1/bookings/{id}/payments`
 - `POST /v1/payments` (immutable ledger; GM/Manager)
-- `GET|POST /v1/tasks` · `GET /v1/tasks/mine` · `POST .../complete|status|reschedule`
+- `GET|POST /v1/tasks` · `GET /v1/tasks/mine` · `POST /v1/tasks/assign` · `POST /v1/tasks/escalate-overdue`
+- `GET /v1/tasks/{id}` · `POST .../status|complete|reschedule|assign`
 - `GET /v1/dashboard/kpis` (gm/manager)
 - `POST /v1/documents/presign`
 

@@ -74,6 +74,27 @@ func (m *taskMem) FindByIdempotencyKey(_ context.Context, key string) (*domain.T
 	return &cp, nil
 }
 
+func (m *taskMem) List(_ context.Context, f domain.ListFilter) ([]domain.Task, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []domain.Task
+	for _, t := range m.byID {
+		if f.AssigneeID != nil && t.AssigneeID != *f.AssigneeID {
+			continue
+		}
+		if f.Status != "" && t.Status != f.Status {
+			continue
+		}
+		if f.RelatedType != "" && f.RelatedID != nil {
+			if t.RelatedType != f.RelatedType || t.RelatedID != *f.RelatedID {
+				continue
+			}
+		}
+		out = append(out, *t)
+	}
+	return out, len(out), nil
+}
+
 func (m *taskMem) ListByAssignee(context.Context, uuid.UUID, *domain.Status, int, int) ([]domain.Task, int, error) {
 	return nil, 0, nil
 }

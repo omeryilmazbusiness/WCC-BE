@@ -137,17 +137,20 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/{id}/payments", h.Payment.ListByBooking)
 			})
 
-			r.Post("/payments", h.Payment.Record)
-
 			r.Route("/tasks", func(r chi.Router) {
-				r.Get("/", h.Task.ListByRelated)
-				r.Get("/mine", h.Task.ListMine)
-				r.Post("/", h.Task.Create)
-				r.Get("/{id}", h.Task.Get)
-				r.Post("/{id}/status", h.Task.ChangeStatus)
-				r.Post("/{id}/complete", h.Task.Complete)
-				r.Post("/{id}/reschedule", h.Task.Reschedule)
+				r.With(middleware.RequirePermission(platformauth.PermTasksRead)).Get("/", h.Task.List)
+				r.With(middleware.RequirePermission(platformauth.PermTasksRead)).Get("/mine", h.Task.ListMine)
+				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/", h.Task.Create)
+				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/assign", h.Task.BulkAssign)
+				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/escalate-overdue", h.Task.EscalateOverdue)
+				r.With(middleware.RequirePermission(platformauth.PermTasksRead)).Get("/{id}", h.Task.Get)
+				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/status", h.Task.ChangeStatus)
+				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/complete", h.Task.Complete)
+				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/reschedule", h.Task.Reschedule)
+				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/assign", h.Task.Assign)
 			})
+
+			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payments", h.Payment.Record)
 
 			r.With(middleware.RequirePermission(platformauth.PermDashboardRead)).
 				Get("/dashboard/kpis", h.Dashboard.KPIs)

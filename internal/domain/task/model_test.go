@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/task"
 )
@@ -39,5 +41,25 @@ func TestReschedule(t *testing.T) {
 		if !errors.As(err, &app) {
 			t.Fatalf("want AppError, got %v", err)
 		}
+	}
+}
+
+func TestEscalateAfterGrace(t *testing.T) {
+	due := time.Now().UTC().Add(-25 * time.Hour)
+	task := &domain.Task{Status: domain.StatusOpen, DueAt: &due, Priority: domain.PriorityNormal}
+	now := time.Now().UTC()
+	if !task.ShouldEscalate(now, domain.DefaultGrace) {
+		t.Fatal("expected escalate after grace")
+	}
+	task.Escalate(now)
+	if task.EscalatedAt == nil || task.Priority != domain.PriorityHigh {
+		t.Fatalf("escalate failed %#v", task)
+	}
+}
+
+func TestAssignClosedRejected(t *testing.T) {
+	task := &domain.Task{Status: domain.StatusDone}
+	if err := task.Assign(uuid.New()); err == nil {
+		t.Fatal("expected error")
 	}
 }

@@ -261,8 +261,11 @@ func (r *Repository) ListTimeline(ctx context.Context, customerID uuid.UUID, lim
 		UNION ALL
 		(
 			SELECT 'task', t.id, t.title, t.status, coalesce(t.updated_at, t.created_at),
-				jsonb_build_object('kind', t.kind)
-			FROM tasks t WHERE t.related_type='customer' AND t.related_id=$1
+				jsonb_build_object('kind', t.kind, 'related_type', t.related_type, 'related_id', t.related_id)
+			FROM tasks t
+			WHERE (t.related_type='customer' AND t.related_id=$1)
+			   OR (t.related_type='lead' AND t.related_id IN (SELECT id FROM leads WHERE customer_id=$1))
+			   OR (t.related_type='booking' AND t.related_id IN (SELECT id FROM bookings WHERE customer_id=$1))
 		)
 		ORDER BY 5 DESC
 		LIMIT $2`, customerID, limit)

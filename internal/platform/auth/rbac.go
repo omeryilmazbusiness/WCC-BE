@@ -21,6 +21,7 @@ const (
 	PermDashboardRead   Permission = "dashboard.read"
 	PermPackagesRead    Permission = "packages.read"
 	PermPackagesWrite   Permission = "packages.write"
+	PermTasksRead       Permission = "tasks.read"
 	PermTasksWrite      Permission = "tasks.write"
 )
 
@@ -55,7 +56,7 @@ func PermissionsFor(role Role) []Permission {
 			PermUsersRead, PermUsersWrite, PermRolesRead, PermAuditRead, PermBranchesRead,
 			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermDocsWrite, PermOpsRead,
-			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksWrite,
+			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
 		}
 	case RoleAdmin:
 		return []Permission{
@@ -66,20 +67,21 @@ func PermissionsFor(role Role) []Permission {
 			PermUsersRead, PermRolesRead, PermBranchesRead, PermAuditRead,
 			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermDocsWrite,
-			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksWrite,
+			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
 		}
 	case RoleEmployee:
 		return []Permission{
 			PermBranchesRead, PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
-			PermDocsWrite, PermTasksWrite, PermPackagesRead,
+			PermDocsWrite, PermTasksRead, PermTasksWrite, PermPackagesRead,
 		}
 	case RoleFinance:
 		return []Permission{
 			PermBranchesRead, PermPaymentsRead, PermPaymentsWrite, PermBookingsRead, PermBookingsWrite, PermAuditRead,
+			PermTasksRead,
 		}
 	case RoleOperations:
 		return []Permission{
-			PermBranchesRead, PermDocsWrite, PermBookingsRead, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksWrite,
+			PermBranchesRead, PermDocsWrite, PermBookingsRead, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
 		}
 	default:
 		return nil
