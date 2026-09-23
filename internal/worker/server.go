@@ -12,11 +12,15 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
+// ProcessFunc processes an import job by ID (wired from app service).
+type ProcessFunc func(ctx context.Context, importJobID string) error
+
 // Server wraps Asynq worker with retry + archived (DLQ) visibility.
 type Server struct {
-	log    *slog.Logger
-	server *asynq.Server
-	mux    *asynq.ServeMux
+	log           *slog.Logger
+	server        *asynq.Server
+	mux           *asynq.ServeMux
+	importProcess ProcessFunc
 }
 
 func NewServer(cfg config.RedisConfig, log *slog.Logger) (*Server, error) {
@@ -52,6 +56,11 @@ func NewServer(cfg config.RedisConfig, log *slog.Logger) (*Server, error) {
 	return s, nil
 }
 
+// SetImportProcessor wires the idempotent import Process handler (DIP).
+func (s *Server) SetImportProcessor(fn ProcessFunc) {
+	s.importProcess = fn
+}
+
 func (s *Server) registerHandlers() {
 	s.mux.HandleFunc(string(shared.JobReminderSend), s.handleReminder)
 	s.mux.HandleFunc(string(shared.JobWebhookRetry), s.handleWebhookRetry)
@@ -83,9 +92,9 @@ func (s *Server) handleReminder(ctx context.Context, t *asynq.Task) error {
 }
 
 type WebhookRetryPayload struct {
-	Provider  string `json:"provider"`
-	EventID   string `json:"event_id"`
-	Attempt   int    `json:"attempt"`
+	Provider string `json:"provider"`
+	EventID  string `json:"event_id"`
+	Attempt  int    `json:"attempt"`
 }
 
 func (s *Server) handleWebhookRetry(ctx context.Context, t *asynq.Task) error {
@@ -105,6 +114,11 @@ func (s *Server) handleImport(ctx context.Context, t *asynq.Task) error {
 	var p ImportPayload
 	if err := json.Unmarshal(t.Payload(), &p); err != nil {
 		return fmt.Errorf("decode import: %w", err)
+	}
+	if s.importProcess != nil {
+		if err := s.importProcess(ctx, p.ImportJobID); err != nil {
+			return err
+		}
 	}
 	s.log.Info("processed import job", "import_job_id", p.ImportJobID)
 	return nil

@@ -18,6 +18,7 @@ import (
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
 	inboxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/inbox"
+	importhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/importexport"
 	leadhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/lead"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
@@ -38,6 +39,7 @@ import (
 	pgdocument "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/document"
 	pgidentity "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/identity"
 	pginbox "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/inbox"
+	pgimportexport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/importexport"
 	pglead "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/lead"
 	pgpayment "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/payment"
 	pgrevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/revenuetarget"
@@ -53,6 +55,7 @@ import (
 	appdashboard "github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
 	appdocument "github.com/wodi-crm/wodi-crm-be/internal/app/document"
 	appinbox "github.com/wodi-crm/wodi-crm-be/internal/app/inbox"
+	appimportexport "github.com/wodi-crm/wodi-crm-be/internal/app/importexport"
 	applead "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
 	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
 	apprevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/app/revenuetarget"
@@ -138,6 +141,11 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
 	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
 
+	importRepo := pgimportexport.NewRepository(pool)
+	importSvc := appimportexport.NewService(importRepo, customerRepo, txm)
+	importSvc.SetEnqueuer(q)
+	importSvc.SetQueueMode(q)
+
 	taskSeeder.Register(bus)
 	taskReactor := apptask.NewReactor(taskRepo, bookingRepo, txm)
 	taskReactor.Register(bus)
@@ -163,6 +171,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Package:   pkghttp.Handler{Svc: pkgSvc},
 		Ops:       opshttp.Handler{Queue: q},
 		Inbox:     inboxhttp.Handler{Svc: inboxSvc},
+		Import:    importhttp.Handler{Svc: importSvc},
 		Webhook: webhookhttp.Handler{
 			Svc:             inboxSvc,
 			DefaultBranchID: uuid.MustParse("11111111-1111-1111-1111-111111111111"),

@@ -231,6 +231,28 @@ Aggregator port in `internal/app/dashboard`; Postgres adapter; JWT RBAC (`dashbo
 
 Domain engine is pure (`domain/revenuetarget.Engine`); HTTP/app/adapters depend inward (SOLID).
 
+## Epic 11 Excel Import/Export
+
+| Task | Status |
+|------|--------|
+| T-144 Import job lifecycle (file/mapping/counts/status) | Done |
+| T-145 Parse CSV + XLSX + preview rows | Done |
+| T-146 Column mapping templates per entity | Done |
+| T-147 Validation + normalize phone/date/currency/status | Done |
+| T-148 Duplicate detection + create/update/upsert | Done |
+| T-149 Async JobImportProcess + sync confirm (idempotent) | Done |
+| T-150 Row-level error report download | Done |
+| T-151 Export builder CSV (UTF-8 BOM, AR-safe) | Done |
+
+- `POST/GET /v1/imports` · `GET /v1/imports/{id}` · `PUT .../mapping` · `POST .../validate|confirm`
+- `GET /v1/imports/{id}/errors` · `GET/POST/DELETE /v1/imports/templates`
+- `POST /v1/exports` · `GET /v1/exports/schemas`
+- Permissions: `imports.read` / `imports.write` (exports share the same)
+- File bytes stored on `import_jobs.file_bytes` (source of truth); `rollback_token` is an audit reference only
+- Customer import is full create/update/upsert; bookings/payments/departures validate + skip on Process
+
+Domain helpers are pure (`domain/importexport` SuggestMapping/Normalize/Parse); app Process is idempotent for worker + sync confirm.
+
 ## Design notes
 
 - **ACID**: application services wrap multi-table writes in `tx.Manager.WithinTransaction` (payment ledger + booking balance; lead create + stage history).

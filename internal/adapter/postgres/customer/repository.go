@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -296,7 +295,7 @@ func scan(row scannable) (*domain.Customer, error) {
 		&c.MergedIntoID, &c.IsActive, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
+		return nil, nil
 	}
 	return &c, err
 }

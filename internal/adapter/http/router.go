@@ -16,6 +16,7 @@ import (
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
 	inboxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/inbox"
+	importhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/importexport"
 	leadhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/lead"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
@@ -46,6 +47,7 @@ type Handlers struct {
 	Package   pkghttp.Handler
 	Ops       opshttp.Handler
 	Inbox     inboxhttp.Handler
+	Import    importhttp.Handler
 	Webhook   webhookhttp.Handler
 }
 
@@ -253,6 +255,21 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				Post("/integrations/accounts/{provider}/connect", h.Inbox.Connect)
 			r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).
 				Post("/integrations/accounts/{provider}/disconnect", h.Inbox.Disconnect)
+
+			r.Route("/imports", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermImportsWrite)).Post("/", h.Import.Upload)
+				r.With(middleware.RequirePermission(platformauth.PermImportsRead)).Get("/", h.Import.List)
+				r.With(middleware.RequirePermission(platformauth.PermImportsRead)).Get("/templates", h.Import.ListTemplates)
+				r.With(middleware.RequirePermission(platformauth.PermImportsWrite)).Post("/templates", h.Import.CreateTemplate)
+				r.With(middleware.RequirePermission(platformauth.PermImportsWrite)).Delete("/templates/{id}", h.Import.DeleteTemplate)
+				r.With(middleware.RequirePermission(platformauth.PermImportsRead)).Get("/{id}", h.Import.Get)
+				r.With(middleware.RequirePermission(platformauth.PermImportsWrite)).Put("/{id}/mapping", h.Import.SetMapping)
+				r.With(middleware.RequirePermission(platformauth.PermImportsWrite)).Post("/{id}/validate", h.Import.Validate)
+				r.With(middleware.RequirePermission(platformauth.PermImportsWrite)).Post("/{id}/confirm", h.Import.Confirm)
+				r.With(middleware.RequirePermission(platformauth.PermImportsRead)).Get("/{id}/errors", h.Import.Errors)
+			})
+			r.With(middleware.RequirePermission(platformauth.PermImportsWrite)).Post("/exports", h.Import.Export)
+			r.With(middleware.RequirePermission(platformauth.PermImportsRead)).Get("/exports/schemas", h.Import.Schemas)
 		})
 
 		// Provider webhooks — signature verification added when live credentials land.

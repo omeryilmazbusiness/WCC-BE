@@ -222,17 +222,17 @@ func (s *Service) FindDuplicates(ctx context.Context, branchID uuid.UUID, name, 
 	}
 
 	if phone != "" {
-		if c, err := s.repo.FindByPhone(ctx, phone, branchID); err == nil {
+		if c, err := s.repo.FindByPhone(ctx, phone, branchID); err == nil && c != nil {
 			add(c, "phone", 100)
 		}
 	}
 	if email != "" {
-		if c, err := s.repo.FindByEmail(ctx, email, branchID); err == nil {
+		if c, err := s.repo.FindByEmail(ctx, email, branchID); err == nil && c != nil {
 			add(c, "email", 95)
 		}
 	}
 	if passport != "" {
-		if c, err := s.repo.FindByPassport(ctx, passport, branchID); err == nil {
+		if c, err := s.repo.FindByPassport(ctx, passport, branchID); err == nil && c != nil {
 			add(c, "passport", 100)
 		}
 	}

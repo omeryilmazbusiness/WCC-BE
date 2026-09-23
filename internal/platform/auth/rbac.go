@@ -30,6 +30,8 @@ const (
 	PermIntegrationsWrite Permission = "integrations.write"
 	PermTargetsRead       Permission = "targets.read"
 	PermTargetsWrite      Permission = "targets.write"
+	PermImportsRead       Permission = "imports.read"
+	PermImportsWrite      Permission = "imports.write"
 )
 
 const (
@@ -65,7 +67,7 @@ func PermissionsFor(role Role) []Permission {
 			PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove, PermDocsWrite, PermOpsRead,
 			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
 			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermIntegrationsWrite,
-			PermTargetsRead, PermTargetsWrite,
+			PermTargetsRead, PermTargetsWrite, PermImportsRead, PermImportsWrite,
 		}
 	case RoleAdmin:
 		return []Permission{
@@ -79,23 +81,23 @@ func PermissionsFor(role Role) []Permission {
 			PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove, PermDocsWrite,
 			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
 			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermIntegrationsWrite,
-			PermTargetsRead, PermTargetsWrite,
+			PermTargetsRead, PermTargetsWrite, PermImportsRead, PermImportsWrite,
 		}
 	case RoleEmployee:
 		return []Permission{
 			PermBranchesRead, PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
 			PermDocsWrite, PermTasksRead, PermTasksWrite, PermPackagesRead,
-			PermInboxRead, PermInboxWrite, PermTargetsRead,
+			PermInboxRead, PermInboxWrite, PermTargetsRead, PermImportsRead,
 		}
 	case RoleFinance:
 		return []Permission{
 			PermBranchesRead, PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove, PermBookingsRead, PermBookingsWrite, PermAuditRead,
-			PermTasksRead, PermTargetsRead,
+			PermTasksRead, PermTargetsRead, PermImportsRead, PermImportsWrite,
 		}
 	case RoleOperations:
 		return []Permission{
 			PermBranchesRead, PermDocsWrite, PermBookingsRead, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
-			PermInboxRead, PermInboxWrite, PermIntegrationsRead,
+			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermImportsRead, PermImportsWrite,
 		}
 	default:
 		return nil
