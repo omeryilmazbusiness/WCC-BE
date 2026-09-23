@@ -30,6 +30,30 @@ func (s *stubAgg) Compute(_ context.Context, branchID *uuid.UUID, from, to time.
 	out := *s.kpi
 	return &out, nil
 }
+func (s *stubAgg) TeamPerformance(context.Context, *uuid.UUID, time.Time, time.Time) ([]dashboard.TeamMember, error) {
+	return nil, nil
+}
+func (s *stubAgg) AttentionFeed(context.Context, *uuid.UUID, int) ([]dashboard.AttentionItem, error) {
+	return nil, nil
+}
+func (s *stubAgg) MyWorkToday(context.Context, uuid.UUID, uuid.UUID, int) ([]dashboard.MyWorkItem, error) {
+	return nil, nil
+}
+func (s *stubAgg) TargetProgress(context.Context, uuid.UUID, *uuid.UUID) (*dashboard.TargetProgress, error) {
+	return &dashboard.TargetProgress{Status: "placeholder"}, nil
+}
+
+func TestTargetStatus(t *testing.T) {
+	if dashboard.TargetStatus(110, 100) != "ahead" {
+		t.Fatal("ahead")
+	}
+	if dashboard.TargetStatus(95, 100) != "on_track" {
+		t.Fatal("on_track")
+	}
+	if dashboard.TargetStatus(50, 100) != "behind" {
+		t.Fatal("behind")
+	}
+}
 
 func TestNormalizePeriod(t *testing.T) {
 	now := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)

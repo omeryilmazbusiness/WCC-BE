@@ -154,6 +154,13 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 
 			r.With(middleware.RequirePermission(platformauth.PermDashboardRead)).
 				Get("/dashboard/kpis", h.Dashboard.KPIs)
+			r.With(middleware.RequirePermission(platformauth.PermDashboardRead)).
+				Get("/dashboard/team", h.Dashboard.Team)
+			r.With(middleware.RequirePermission(platformauth.PermDashboardRead)).
+				Get("/dashboard/attention", h.Dashboard.Attention)
+			r.With(middleware.RequirePermission(platformauth.PermTasksRead)).
+				Get("/dashboard/my-work", h.Dashboard.MyWork)
+			r.Get("/dashboard/my-target", h.Dashboard.MyTarget)
 
 			r.Route("/ops", func(r chi.Router) {
 				r.With(middleware.RequirePermission(platformauth.PermOpsRead)).Get("/queue", h.Ops.QueueStats)

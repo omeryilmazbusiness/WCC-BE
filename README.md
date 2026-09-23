@@ -153,8 +153,24 @@ Demo users (password `ChangeMe123!`):
 - `POST /v1/payments` (immutable ledger; GM/Manager)
 - `GET|POST /v1/tasks` · `GET /v1/tasks/mine` · `POST /v1/tasks/assign` · `POST /v1/tasks/escalate-overdue`
 - `GET /v1/tasks/{id}` · `POST .../status|complete|reschedule|assign`
-- `GET /v1/dashboard/kpis` (gm/manager)
+- `GET /v1/dashboard/kpis` · `GET /v1/dashboard/team` · `GET /v1/dashboard/attention` (gm/manager)
+- `GET /v1/dashboard/my-work` · `GET /v1/dashboard/my-target` (authenticated; `?scope=branch` for managers)
 - `POST /v1/documents/presign`
+
+## Epic 7 Manager + Employee Workspaces
+
+| Task | Status |
+|------|--------|
+| T-084 Manager KPI tiles (period + branch scope) | Done |
+| T-085 Exceptions-first KPI definitions | Done |
+| T-086 Team performance board | Done |
+| T-087 Attention / exception feed | Done |
+| T-088 Consistent period/branch scope | Done |
+| T-089 Employee My Work Today | Done |
+| T-090 Target progress (`revenue_targets`) | Done |
+| T-091–T-096 Quick actions + drill-downs + RBAC | Done |
+
+Aggregator port in `internal/app/dashboard`; Postgres adapter; JWT RBAC (`dashboard.read` for manager surfaces).
 
 ## Design notes
 
