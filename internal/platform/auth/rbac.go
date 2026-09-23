@@ -18,6 +18,7 @@ const (
 	PermDocsWrite       Permission = "documents.write"
 	PermOpsRead         Permission = "ops.read"
 	PermDashboardRead   Permission = "dashboard.read"
+	PermPackagesRead    Permission = "packages.read"
 	PermPackagesWrite   Permission = "packages.write"
 	PermTasksWrite      Permission = "tasks.write"
 )
@@ -53,7 +54,7 @@ func PermissionsFor(role Role) []Permission {
 			PermUsersRead, PermUsersWrite, PermRolesRead, PermAuditRead, PermBranchesRead,
 			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermDocsWrite, PermOpsRead,
-			PermDashboardRead, PermPackagesWrite, PermTasksWrite,
+			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksWrite,
 		}
 	case RoleAdmin:
 		return []Permission{
@@ -64,12 +65,12 @@ func PermissionsFor(role Role) []Permission {
 			PermUsersRead, PermRolesRead, PermBranchesRead, PermAuditRead,
 			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermDocsWrite,
-			PermDashboardRead, PermPackagesWrite, PermTasksWrite,
+			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksWrite,
 		}
 	case RoleEmployee:
 		return []Permission{
 			PermBranchesRead, PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsWrite,
-			PermDocsWrite, PermTasksWrite,
+			PermDocsWrite, PermTasksWrite, PermPackagesRead,
 		}
 	case RoleFinance:
 		return []Permission{
@@ -77,7 +78,7 @@ func PermissionsFor(role Role) []Permission {
 		}
 	case RoleOperations:
 		return []Permission{
-			PermBranchesRead, PermDocsWrite, PermBookingsWrite, PermPackagesWrite, PermTasksWrite,
+			PermBranchesRead, PermDocsWrite, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksWrite,
 		}
 	default:
 		return nil

@@ -103,3 +103,27 @@ func (r *Repository) CountConfirmedPaxByDeparture(ctx context.Context, departure
 		WHERE departure_id=$1 AND status='confirmed'`, departureID).Scan(&n)
 	return n, err
 }
+
+func (r *Repository) ListByDeparture(ctx context.Context, departureID uuid.UUID) ([]domain.Booking, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	rows, err := q.Query(ctx, `
+		SELECT id, branch_id, customer_id, departure_id, lead_id, status, pax_count,
+			total_amount, collected_amt, balance_amt, currency, owner_id, created_at, updated_at
+		FROM bookings WHERE departure_id=$1 ORDER BY created_at DESC`, departureID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Booking
+	for rows.Next() {
+		var b domain.Booking
+		var status string
+		if err := rows.Scan(&b.ID, &b.BranchID, &b.CustomerID, &b.DepartureID, &b.LeadID, &status, &b.PaxCount,
+			&b.TotalAmount, &b.CollectedAmt, &b.BalanceAmt, &b.Currency, &b.OwnerID, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			return nil, err
+		}
+		b.Status = domain.Status(status)
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}

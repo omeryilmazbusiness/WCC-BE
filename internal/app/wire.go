@@ -100,6 +100,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	paymentSvc.SetAuditor(auditSvc)
 	taskSvc := apptask.NewService(taskRepo, txm, bus)
 	pkgSvc := apppkg.NewService(pkgRepo, txm)
+	pkgSvc.SetBookingReader(bookingRepo)
 	dashSvc := appdashboard.NewService(dashAgg)
 	docSvc := appdocument.NewService(docRepo, store)
 

@@ -104,4 +104,5 @@ type Repository interface {
 	AddParticipant(ctx context.Context, p *Participant) error
 	ListParticipants(ctx context.Context, bookingID uuid.UUID) ([]Participant, error)
 	CountConfirmedPaxByDeparture(ctx context.Context, departureID uuid.UUID) (int, error)
+	ListByDeparture(ctx context.Context, departureID uuid.UUID) ([]Booking, error)
 }

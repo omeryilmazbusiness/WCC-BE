@@ -9,7 +9,7 @@ import (
 )
 
 func TestDepartureCapacity(t *testing.T) {
-	d := &domain.Departure{CapacityTotal: 10, CapacitySold: 8}
+	d := &domain.Departure{CapacityTotal: 10, CapacitySold: 8, IsActive: true}
 	if d.Remaining() != 2 {
 		t.Fatalf("remaining=%d", d.Remaining())
 	}

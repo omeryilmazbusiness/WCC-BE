@@ -117,6 +117,9 @@ func (m *bookingMem) ListParticipants(context.Context, uuid.UUID) ([]bookingdoma
 func (m *bookingMem) CountConfirmedPaxByDeparture(context.Context, uuid.UUID) (int, error) {
 	return 0, nil
 }
+func (m *bookingMem) ListByDeparture(context.Context, uuid.UUID) ([]bookingdomain.Booking, error) {
+	return nil, nil
+}
 
 func TestReactorPaymentClosesTasksWhenBalanceZero(t *testing.T) {
 	tasks := newTaskMem()

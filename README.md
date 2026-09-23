@@ -95,6 +95,18 @@ Demo users (password `ChangeMe123!`):
 | T-039 No-follow-up flag | Done |
 | T-040 Lead analytics (stage/source/owner) | Done |
 
+### Epic 4 Packages / Departures / Capacity
+
+| Task | Status |
+|------|--------|
+| T-047 Package template entity | Done |
+| T-048 Departure instance entity | Done |
+| T-049 Pricing tiers (room/occupancy/age) | Done |
+| T-050 Capacity from confirmed bookings | Done |
+| T-051 Clone package + create departure | Done |
+| T-052 Historical pricing immutability | Done |
+| T-053 Capacity threshold / oversell alerts | Done |
+
 ## P0 route map
 
 - `POST /v1/auth/login|refresh` · `GET /v1/auth/me`
@@ -103,6 +115,10 @@ Demo users (password `ChangeMe123!`):
 - `GET|POST /v1/customers/{id}/companions` · `DELETE .../companions/{companionId}`
 - `GET|POST /v1/leads` · `GET /v1/leads/analytics` · `GET /v1/leads/lost-reasons` · `POST /v1/leads/assign`
 - `GET /v1/leads/{id}` · `POST .../stage|assign|convert|no-follow-up` · `GET .../history`
+- `GET|POST /v1/packages` · `GET|PATCH /v1/packages/{id}` · `POST .../clone` · `GET|PUT .../tiers`
+- `GET|POST /v1/packages/{id}/departures`
+- `GET|PATCH /v1/departures/{id}` · `POST .../clone|close-sales|mark-full|recompute-capacity`
+- `GET /v1/departures/{id}/tiers|readiness`
 - `GET|POST /v1/packages` · `GET /v1/packages/{id}` · `GET|POST /v1/packages/{id}/departures`
 - `GET /v1/departures/{id}` · `POST /v1/departures/{id}/clone`
 - `POST /v1/bookings` · `GET|PATCH /v1/bookings/{id}` · `POST .../confirm|status`
