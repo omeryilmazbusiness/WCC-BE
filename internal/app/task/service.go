@@ -348,3 +348,18 @@ func (s *Seeder) EnsurePaymentDueTask(ctx context.Context, branchID, bookingID, 
 		CreatedAt: now, UpdatedAt: now,
 	})
 }
+
+// EnsureTargetRecoveryTask creates a once-per-day recovery task when a target is behind pace.
+func (s *Seeder) EnsureTargetRecoveryTask(ctx context.Context, branchID, targetID, assigneeID uuid.UUID, label string, deficit int64) error {
+	now := time.Now().UTC()
+	asOf := now.Format("2006-01-02")
+	due := now.Add(24 * time.Hour)
+	title := fmt.Sprintf("Recover target: %s (deficit %d)", label, deficit)
+	return s.ensureTask(ctx, domain.Task{
+		ID: uuid.New(), BranchID: branchID, Title: title,
+		Kind: domain.KindCustom, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+		AssigneeID: assigneeID, RelatedType: "revenue_target", RelatedID: targetID, DueAt: &due,
+		IdempotencyKey: fmt.Sprintf("target:%s:recovery:%s", targetID, asOf),
+		CreatedAt: now, UpdatedAt: now,
+	})
+}

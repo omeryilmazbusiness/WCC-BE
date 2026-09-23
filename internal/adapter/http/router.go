@@ -20,6 +20,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
+	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
@@ -38,6 +39,7 @@ type Handlers struct {
 	Lead      leadhttp.Handler
 	Booking   bookinghttp.Handler
 	Payment   paymenthttp.Handler
+	Target    targethttp.Handler
 	Task      taskhttp.Handler
 	Dashboard dashboardhttp.Handler
 	Document  documenthttp.Handler
@@ -171,6 +173,23 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/export", h.Payment.Export)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/reminders/process", h.Payment.ProcessReminders)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsApprove)).Put("/reporting-currency", h.Payment.SetReportingCurrency)
+			})
+
+			r.Route("/targets", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermTargetsRead)).Get("/", h.Target.List)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsWrite)).Post("/", h.Target.Create)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsWrite)).Post("/recompute", h.Target.RecomputeBranch)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsRead)).Get("/{id}", h.Target.Get)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsWrite)).Patch("/{id}", h.Target.Patch)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsRead)).Get("/{id}/weights", h.Target.ListWeights)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsWrite)).Put("/{id}/weights", h.Target.SetWeights)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsWrite)).Put("/{id}/shares", h.Target.SetShares)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsRead)).Get("/{id}/progress", h.Target.Progress)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsRead)).Get("/{id}/contributions", h.Target.Contributions)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsRead)).Get("/{id}/series", h.Target.Series)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsRead)).Get("/{id}/sources", h.Target.Sources)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsRead)).Get("/{id}/revisions", h.Target.Revisions)
+				r.With(middleware.RequirePermission(platformauth.PermTargetsWrite)).Post("/{id}/recompute", h.Target.Recompute)
 			})
 
 			r.With(middleware.RequirePermission(platformauth.PermDashboardRead)).

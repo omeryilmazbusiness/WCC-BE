@@ -21,6 +21,7 @@ import (
 	leadhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/lead"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
+	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
@@ -39,6 +40,7 @@ import (
 	pginbox "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/inbox"
 	pglead "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/lead"
 	pgpayment "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/payment"
+	pgrevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/revenuetarget"
 	pgtask "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/task"
 	pkgpg "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/tourpackage"
 	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
@@ -53,6 +55,7 @@ import (
 	appinbox "github.com/wodi-crm/wodi-crm-be/internal/app/inbox"
 	applead "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
 	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
+	apprevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/app/revenuetarget"
 	apptask "github.com/wodi-crm/wodi-crm-be/internal/app/task"
 	apppkg "github.com/wodi-crm/wodi-crm-be/internal/app/tourpackage"
 	appuser "github.com/wodi-crm/wodi-crm-be/internal/app/useradmin"
@@ -121,6 +124,12 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	taskSvc := apptask.NewService(taskRepo, txm, bus)
 	taskSeeder := apptask.NewSeeder(taskRepo, txm)
 	paymentSvc.SetTaskCreator(taskSeeder)
+	targetRepo := pgrevenuetarget.NewRepository(pool)
+	targetSvc := apprevenuetarget.NewService(targetRepo, txm)
+	targetSvc.SetAuditor(auditSvc)
+	targetSvc.SetTaskCreator(taskSeeder)
+	targetReactor := apprevenuetarget.NewReactor(targetSvc, bookingRepo)
+	targetReactor.Register(bus)
 	pkgSvc := apppkg.NewService(pkgRepo, txm)
 	pkgSvc.SetBookingReader(bookingRepo)
 	dashSvc := appdashboard.NewService(dashAgg)
@@ -147,6 +156,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Lead:      leadhttp.Handler{Svc: leadSvc},
 		Booking:   bookinghttp.Handler{Svc: bookingSvc},
 		Payment:   paymenthttp.Handler{Svc: paymentSvc},
+		Target:    targethttp.Handler{Svc: targetSvc},
 		Task:      taskhttp.Handler{Svc: taskSvc},
 		Dashboard: dashboardhttp.Handler{Svc: dashSvc},
 		Document:  documenthttp.Handler{Svc: docSvc},

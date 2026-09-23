@@ -213,6 +213,24 @@ Aggregator port in `internal/app/dashboard`; Postgres adapter; JWT RBAC (`dashbo
 - `POST /v1/payments/{id}/approve|reject` · `GET /v1/bookings/{id}/financial-summary|payments|payment-schedules`
 - `GET /v1/finance/queues/{kind}` · `GET /v1/finance/export?kind=` · `POST /v1/finance/reminders/process`
 
+## Epic 10 Revenue Target & Performance Engine
+
+| Task | Status |
+|------|--------|
+| T-130 RevenueTarget entity (metric/scope/curve) | Done |
+| T-131 Linear + seasonal weights (sum 10000 bps) | Done |
+| T-132 Deterministic calc engine | Done |
+| T-133 Target shares to employees | Done |
+| T-134 Payment/booking → recompute snapshots | Done |
+| T-135 Behind → recovery task | Done |
+| T-136 Drill-down sources | Done |
+| T-137 Revision audit | Done |
+
+- `GET/POST /v1/targets` · `PATCH /v1/targets/{id}` · `GET/PUT .../weights` · `PUT .../shares`
+- `GET .../progress|contributions|series|sources|revisions` · `POST .../recompute`
+
+Domain engine is pure (`domain/revenuetarget.Engine`); HTTP/app/adapters depend inward (SOLID).
+
 ## Design notes
 
 - **ACID**: application services wrap multi-table writes in `tx.Manager.WithinTransaction` (payment ledger + booking balance; lead create + stage history).
