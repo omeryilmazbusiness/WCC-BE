@@ -196,6 +196,23 @@ Aggregator port in `internal/app/dashboard`; Postgres adapter; JWT RBAC (`dashbo
 
 **Connect body (examples):** WhatsApp `{access_token, phone_number_id, …}` · Instagram `{access_token, page_id, ig_user_id}` · Facebook `{access_token, page_id}` · Gmail `{client_id, client_secret, refresh_token, mailbox_email}`. Secrets stored in `integration_accounts.config_json`; responses return `public_meta` + `webhook_url` only.
 
+## Epic 9 Finance, Payments & Revenue Metrics
+
+| Task | Status |
+|------|--------|
+| T-116 Payment ledger (charge/reverse/adjust/refund) | Done |
+| T-117 Booking financial summary + balance | Done |
+| T-118 Payment schedule / promise dates | Done |
+| T-119 Refund/adjustment with `payments.approve` + audit | Done |
+| T-120 Reporting currency policy hook (`finance_settings`) | Done |
+| T-121 Revenue basis metrics (booked/collected/recognized/margin) | Done |
+| T-122 Finance queues API (overdue/unverified/refunds/credit) | Done |
+| T-123 Payment-due reminder → task | Done |
+
+- `POST /v1/payments` · `POST /v1/payments/{id}/verify|reverse` · `POST /v1/payments/adjust|refunds`
+- `POST /v1/payments/{id}/approve|reject` · `GET /v1/bookings/{id}/financial-summary|payments|payment-schedules`
+- `GET /v1/finance/queues/{kind}` · `GET /v1/finance/export?kind=` · `POST /v1/finance/reminders/process`
+
 ## Design notes
 
 - **ACID**: application services wrap multi-table writes in `tx.Manager.WithinTransaction` (payment ledger + booking balance; lead create + stage history).

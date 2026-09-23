@@ -139,6 +139,9 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/checklist", h.Booking.ListChecklist)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Patch("/{id}/checklist/{itemId}", h.Booking.UpdateChecklist)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/{id}/payments", h.Payment.ListByBooking)
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/{id}/financial-summary", h.Payment.FinancialSummary)
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/{id}/payment-schedules", h.Payment.ListSchedules)
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/{id}/payment-schedules", h.Payment.CreateSchedule)
 			})
 
 			r.Route("/tasks", func(r chi.Router) {
@@ -155,6 +158,20 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 			})
 
 			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payments", h.Payment.Record)
+			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payments/adjust", h.Payment.Adjust)
+			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payments/refunds", h.Payment.RequestRefund)
+			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payments/{id}/verify", h.Payment.Verify)
+			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payments/{id}/reverse", h.Payment.Reverse)
+			r.With(middleware.RequirePermission(platformauth.PermPaymentsApprove)).Post("/payments/{id}/approve", h.Payment.ApproveRefund)
+			r.With(middleware.RequirePermission(platformauth.PermPaymentsApprove)).Post("/payments/{id}/reject", h.Payment.RejectRefund)
+			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payment-schedules/{id}/cancel", h.Payment.CancelSchedule)
+
+			r.Route("/finance", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/queues/{kind}", h.Payment.Queue)
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/export", h.Payment.Export)
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/reminders/process", h.Payment.ProcessReminders)
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsApprove)).Put("/reporting-currency", h.Payment.SetReportingCurrency)
+			})
 
 			r.With(middleware.RequirePermission(platformauth.PermDashboardRead)).
 				Get("/dashboard/kpis", h.Dashboard.KPIs)

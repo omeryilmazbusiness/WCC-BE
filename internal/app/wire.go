@@ -117,7 +117,10 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	leadSvc.SetBookingCreator(leadBookingBridge{svc: bookingSvc})
 	paymentSvc := apppayment.NewService(paymentRepo, bookingRepo, txm, bus)
 	paymentSvc.SetAuditor(auditSvc)
+	paymentSvc.SetFX(apppayment.SettingsFX{Repo: paymentRepo})
 	taskSvc := apptask.NewService(taskRepo, txm, bus)
+	taskSeeder := apptask.NewSeeder(taskRepo, txm)
+	paymentSvc.SetTaskCreator(taskSeeder)
 	pkgSvc := apppkg.NewService(pkgRepo, txm)
 	pkgSvc.SetBookingReader(bookingRepo)
 	dashSvc := appdashboard.NewService(dashAgg)
@@ -126,7 +129,6 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
 	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
 
-	taskSeeder := apptask.NewSeeder(taskRepo, txm)
 	taskSeeder.Register(bus)
 	taskReactor := apptask.NewReactor(taskRepo, bookingRepo, txm)
 	taskReactor.Register(bus)

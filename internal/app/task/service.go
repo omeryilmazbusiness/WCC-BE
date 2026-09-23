@@ -335,3 +335,16 @@ func (s *Seeder) ensureTask(ctx context.Context, t domain.Task) error {
 		return s.tasks.Create(ctx, &t)
 	})
 }
+
+// EnsurePaymentDueTask creates a payment-due reminder task (T-123).
+func (s *Seeder) EnsurePaymentDueTask(ctx context.Context, branchID, bookingID, actorID uuid.UUID, dueAt time.Time, amount int64, currency string) error {
+	now := time.Now().UTC()
+	title := fmt.Sprintf("Payment due %d %s", amount, currency)
+	return s.ensureTask(ctx, domain.Task{
+		ID: uuid.New(), BranchID: branchID, Title: title,
+		Kind: domain.KindPayment, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+		AssigneeID: actorID, RelatedType: "booking", RelatedID: bookingID, DueAt: &dueAt,
+		IdempotencyKey: fmt.Sprintf("booking:%s:payment-due:%s", bookingID, dueAt.UTC().Format("2006-01-02")),
+		CreatedAt: now, UpdatedAt: now,
+	})
+}
