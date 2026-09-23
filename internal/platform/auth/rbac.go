@@ -12,6 +12,7 @@ const (
 	PermCustomersWrite  Permission = "customers.write"
 	PermLeadsRead       Permission = "leads.read"
 	PermLeadsWrite      Permission = "leads.write"
+	PermBookingsRead    Permission = "bookings.read"
 	PermBookingsWrite   Permission = "bookings.write"
 	PermPaymentsWrite   Permission = "payments.write"
 	PermPaymentsRead    Permission = "payments.read"
@@ -52,7 +53,7 @@ func PermissionsFor(role Role) []Permission {
 	case RoleGM:
 		return []Permission{
 			PermUsersRead, PermUsersWrite, PermRolesRead, PermAuditRead, PermBranchesRead,
-			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsWrite,
+			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermDocsWrite, PermOpsRead,
 			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksWrite,
 		}
@@ -63,22 +64,22 @@ func PermissionsFor(role Role) []Permission {
 	case RoleManager:
 		return []Permission{
 			PermUsersRead, PermRolesRead, PermBranchesRead, PermAuditRead,
-			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsWrite,
+			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermDocsWrite,
 			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksWrite,
 		}
 	case RoleEmployee:
 		return []Permission{
-			PermBranchesRead, PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsWrite,
+			PermBranchesRead, PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
 			PermDocsWrite, PermTasksWrite, PermPackagesRead,
 		}
 	case RoleFinance:
 		return []Permission{
-			PermBranchesRead, PermPaymentsRead, PermPaymentsWrite, PermBookingsWrite, PermAuditRead,
+			PermBranchesRead, PermPaymentsRead, PermPaymentsWrite, PermBookingsRead, PermBookingsWrite, PermAuditRead,
 		}
 	case RoleOperations:
 		return []Permission{
-			PermBranchesRead, PermDocsWrite, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksWrite,
+			PermBranchesRead, PermDocsWrite, PermBookingsRead, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksWrite,
 		}
 	default:
 		return nil

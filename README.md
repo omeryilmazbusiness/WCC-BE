@@ -107,6 +107,19 @@ Demo users (password `ChangeMe123!`):
 | T-052 Historical pricing immutability | Done |
 | T-053 Capacity threshold / oversell alerts | Done |
 
+### Epic 5 Booking Workspace
+
+| Task | Status |
+|------|--------|
+| T-059 Booking status machine (draft→confirmed→completed/cancelled) | Done |
+| T-060 Participants add/update/delete with pax cap | Done |
+| T-061 Line items (package/hotel/room/transport/flight/extras) | Done |
+| T-062 Discount / cost / margin recalculation | Done |
+| T-063 Travel checklist seed + toggle | Done |
+| T-064 Readiness + risk alerts | Done |
+| T-065 Confirm gates (pax, checklist, capacity) | Done |
+| T-066 Booking list/filter | Done |
+
 ## P0 route map
 
 - `POST /v1/auth/login|refresh` · `GET /v1/auth/me`
@@ -121,8 +134,11 @@ Demo users (password `ChangeMe123!`):
 - `GET /v1/departures/{id}/tiers|readiness`
 - `GET|POST /v1/packages` · `GET /v1/packages/{id}` · `GET|POST /v1/packages/{id}/departures`
 - `GET /v1/departures/{id}` · `POST /v1/departures/{id}/clone`
-- `POST /v1/bookings` · `GET|PATCH /v1/bookings/{id}` · `POST .../confirm|status`
-- `GET|POST /v1/bookings/{id}/participants` · `GET /v1/bookings/{id}/payments`
+- `GET|POST /v1/bookings` · `GET|PATCH /v1/bookings/{id}` · `POST .../confirm|status`
+- `GET /v1/bookings/{id}/readiness`
+- `GET|POST /v1/bookings/{id}/participants` · `PATCH|DELETE .../participants/{participantId}`
+- `GET|PUT /v1/bookings/{id}/line-items` · `GET|PATCH .../checklist|checklist/{itemId}`
+- `GET /v1/bookings/{id}/payments`
 - `POST /v1/payments` (immutable ledger; GM/Manager)
 - `GET|POST /v1/tasks` · `GET /v1/tasks/mine` · `POST .../complete|status|reschedule`
 - `GET /v1/dashboard/kpis` (gm/manager)

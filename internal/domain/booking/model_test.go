@@ -29,15 +29,28 @@ func TestBookingConfirmAndBalance(t *testing.T) {
 
 func TestApplyUpdateOnlyDraft(t *testing.T) {
 	b := &booking.Booking{Status: booking.StatusDraft, TotalAmount: 100, CollectedAmt: 0}
-	if err := b.ApplyUpdate(3, 300, "USD"); err != nil {
+	disc := int64(0)
+	notes := "n"
+	if err := b.ApplyUpdate(3, 300, "USD", &disc, &notes); err != nil {
 		t.Fatal(err)
 	}
-	if b.PaxCount != 3 || b.BalanceAmt != 300 {
+	if b.PaxCount != 3 || b.BalanceAmt != 300 || b.Notes != "n" {
 		t.Fatalf("unexpected update %#v", b)
 	}
 	b.Status = booking.StatusConfirmed
-	if err := b.ApplyUpdate(1, 100, "USD"); err == nil {
+	if err := b.ApplyUpdate(1, 100, "USD", nil, nil); err == nil {
 		t.Fatal("confirmed bookings must not accept update")
+	}
+}
+
+func TestRecalculateFromLines(t *testing.T) {
+	b := &booking.Booking{Status: booking.StatusDraft, DiscountAmt: 100}
+	b.RecalculateFromLines([]booking.LineItem{
+		{Quantity: 2, UnitPrice: 500, UnitCost: 300},
+		{Quantity: 1, UnitPrice: 200, UnitCost: 50},
+	})
+	if b.TotalAmount != 1100 || b.CostAmt != 650 || b.Margin() != 350 {
+		t.Fatalf("total=%d cost=%d margin=%d", b.TotalAmount, b.CostAmt, b.Margin())
 	}
 }
 

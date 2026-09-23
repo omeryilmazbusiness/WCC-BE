@@ -110,7 +110,14 @@ func (m *bookingMem) FindByID(_ context.Context, id uuid.UUID) (*bookingdomain.B
 	cp := *b
 	return &cp, nil
 }
+func (m *bookingMem) List(context.Context, bookingdomain.ListFilter) ([]bookingdomain.Booking, int, error) {
+	return nil, 0, nil
+}
 func (m *bookingMem) AddParticipant(context.Context, *bookingdomain.Participant) error { return nil }
+func (m *bookingMem) UpdateParticipant(context.Context, *bookingdomain.Participant) error {
+	return nil
+}
+func (m *bookingMem) DeleteParticipant(context.Context, uuid.UUID, uuid.UUID) error { return nil }
 func (m *bookingMem) ListParticipants(context.Context, uuid.UUID) ([]bookingdomain.Participant, error) {
 	return nil, nil
 }
@@ -119,6 +126,19 @@ func (m *bookingMem) CountConfirmedPaxByDeparture(context.Context, uuid.UUID) (i
 }
 func (m *bookingMem) ListByDeparture(context.Context, uuid.UUID) ([]bookingdomain.Booking, error) {
 	return nil, nil
+}
+func (m *bookingMem) ReplaceLineItems(context.Context, uuid.UUID, []bookingdomain.LineItem) error {
+	return nil
+}
+func (m *bookingMem) ListLineItems(context.Context, uuid.UUID) ([]bookingdomain.LineItem, error) {
+	return nil, nil
+}
+func (m *bookingMem) SeedChecklist(context.Context, []bookingdomain.ChecklistItem) error { return nil }
+func (m *bookingMem) ListChecklist(context.Context, uuid.UUID) ([]bookingdomain.ChecklistItem, error) {
+	return nil, nil
+}
+func (m *bookingMem) UpdateChecklistItem(context.Context, *bookingdomain.ChecklistItem) error {
+	return nil
 }
 
 func TestReactorPaymentClosesTasksWhenBalanceZero(t *testing.T) {
