@@ -23,6 +23,10 @@ const (
 	PermPackagesWrite   Permission = "packages.write"
 	PermTasksRead       Permission = "tasks.read"
 	PermTasksWrite      Permission = "tasks.write"
+	PermInboxRead       Permission = "inbox.read"
+	PermInboxWrite      Permission = "inbox.write"
+	PermIntegrationsRead  Permission = "integrations.read"
+	PermIntegrationsWrite Permission = "integrations.write"
 )
 
 const (
@@ -57,10 +61,12 @@ func PermissionsFor(role Role) []Permission {
 			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermDocsWrite, PermOpsRead,
 			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
+			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermIntegrationsWrite,
 		}
 	case RoleAdmin:
 		return []Permission{
 			PermUsersRead, PermUsersWrite, PermRolesRead, PermAuditRead, PermBranchesRead, PermOpsRead,
+			PermIntegrationsRead,
 		}
 	case RoleManager:
 		return []Permission{
@@ -68,11 +74,13 @@ func PermissionsFor(role Role) []Permission {
 			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermDocsWrite,
 			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
+			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermIntegrationsWrite,
 		}
 	case RoleEmployee:
 		return []Permission{
 			PermBranchesRead, PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
 			PermDocsWrite, PermTasksRead, PermTasksWrite, PermPackagesRead,
+			PermInboxRead, PermInboxWrite,
 		}
 	case RoleFinance:
 		return []Permission{
@@ -82,6 +90,7 @@ func PermissionsFor(role Role) []Permission {
 	case RoleOperations:
 		return []Permission{
 			PermBranchesRead, PermDocsWrite, PermBookingsRead, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
+			PermInboxRead, PermInboxWrite, PermIntegrationsRead,
 		}
 	default:
 		return nil

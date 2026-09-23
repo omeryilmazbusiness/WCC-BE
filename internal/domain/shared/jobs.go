@@ -14,6 +14,7 @@ const (
 	JobImportProcess      JobName = "import.process"
 	JobReportGenerate     JobName = "report.generate"
 	JobAISummaryDaily     JobName = "ai.summary.daily"
+	JobSLASweep           JobName = "inbox.sla_sweep"
 )
 
 // EnqueueOpts controls retry / delay / uniqueness at the port level.

@@ -15,6 +15,7 @@ import (
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
+	inboxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/inbox"
 	leadhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/lead"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
@@ -22,6 +23,7 @@ import (
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
+	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
@@ -41,6 +43,8 @@ type Handlers struct {
 	Document  documenthttp.Handler
 	Package   pkghttp.Handler
 	Ops       opshttp.Handler
+	Inbox     inboxhttp.Handler
+	Webhook   webhookhttp.Handler
 }
 
 func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers) http.Handler {
@@ -197,7 +201,26 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermPackagesRead)).Get("/{id}/readiness", h.Package.Readiness)
 				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Post("/{id}/recompute-capacity", h.Package.RecomputeCapacity)
 			})
+
+			r.Route("/inbox", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermInboxRead)).Get("/conversations", h.Inbox.List)
+				r.With(middleware.RequirePermission(platformauth.PermInboxRead)).Get("/conversations/{id}", h.Inbox.Get)
+				r.With(middleware.RequirePermission(platformauth.PermInboxRead)).Get("/conversations/{id}/messages", h.Inbox.Messages)
+				r.With(middleware.RequirePermission(platformauth.PermInboxWrite)).Post("/conversations/{id}/assign", h.Inbox.Assign)
+				r.With(middleware.RequirePermission(platformauth.PermInboxWrite)).Post("/conversations/{id}/reply", h.Inbox.Reply)
+				r.With(middleware.RequirePermission(platformauth.PermInboxWrite)).Post("/conversations/{id}/status", h.Inbox.SetStatus)
+				r.With(middleware.RequirePermission(platformauth.PermInboxWrite)).Post("/sla/check", h.Inbox.CheckSLA)
+			})
+			r.With(middleware.RequirePermission(platformauth.PermIntegrationsRead)).
+				Get("/integrations/health", h.Inbox.Health)
+			r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).
+				Post("/integrations/accounts/{provider}/connect", h.Inbox.Connect)
+			r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).
+				Post("/integrations/accounts/{provider}/disconnect", h.Inbox.Disconnect)
 		})
+
+		// Provider webhooks — signature verification added when live credentials land.
+		r.Post("/webhooks/{provider}", h.Webhook.Ingest)
 	})
 
 	return r

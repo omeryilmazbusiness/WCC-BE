@@ -156,6 +156,7 @@ Demo users (password `ChangeMe123!`):
 - `GET /v1/dashboard/kpis` · `GET /v1/dashboard/team` · `GET /v1/dashboard/attention` (gm/manager)
 - `GET /v1/dashboard/my-work` · `GET /v1/dashboard/my-target` (authenticated; `?scope=branch` for managers)
 - `POST /v1/documents/presign`
+- Inbox + webhooks — see Epic 8 below
 
 ## Epic 7 Manager + Employee Workspaces
 
@@ -171,6 +172,29 @@ Demo users (password `ChangeMe123!`):
 | T-091–T-096 Quick actions + drill-downs + RBAC | Done |
 
 Aggregator port in `internal/app/dashboard`; Postgres adapter; JWT RBAC (`dashboard.read` for manager surfaces).
+
+## Epic 8 Unified Inbox + Integrations + SLA
+
+| Task | Status |
+|------|--------|
+| T-097 Message + Conversation schema | Done |
+| T-098 Provider-agnostic ChannelProvider | Done |
+| T-099–T-101 WhatsApp / Instagram / Email adapters (stub-backed) | Done |
+| T-102–T-103 Customer match + lead shell | Done |
+| T-104 Assign / reassign | Done |
+| T-105 Outbound reply via channel | Done |
+| T-106 SLA start/stop + breach sweep | Done |
+| T-107 Integration health (+ ops DLQ reuse) | Done |
+| T-108 Stub providers | Done |
+
+- `GET /v1/inbox/conversations` · `GET .../{id}` · `GET .../messages`
+- `POST .../assign|reply|status` · `POST /v1/inbox/sla/check`
+- `GET /v1/integrations/health`
+- `POST /v1/integrations/accounts/{whatsapp|instagram|facebook|gmail}/connect` (BYO credentials JSON)
+- `POST /v1/integrations/accounts/{provider}/disconnect`
+- `POST /v1/webhooks/{whatsapp|instagram|facebook|gmail|email|stub}?branch_id=`
+
+**Connect body (examples):** WhatsApp `{access_token, phone_number_id, …}` · Instagram `{access_token, page_id, ig_user_id}` · Facebook `{access_token, page_id}` · Gmail `{client_id, client_secret, refresh_token, mailbox_email}`. Secrets stored in `integration_accounts.config_json`; responses return `public_meta` + `webhook_url` only.
 
 ## Design notes
 

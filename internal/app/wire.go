@@ -17,17 +17,26 @@ import (
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
+	inboxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/inbox"
 	leadhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/lead"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
+	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/email"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/instagram"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/stub"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/whatsapp"
+	domaininbox "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgbooking "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/booking"
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
 	pgdocument "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/document"
 	pgidentity "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/identity"
+	pginbox "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/inbox"
 	pglead "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/lead"
 	pgpayment "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/payment"
 	pgtask "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/task"
@@ -41,6 +50,7 @@ import (
 	appcustomer "github.com/wodi-crm/wodi-crm-be/internal/app/customer"
 	appdashboard "github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
 	appdocument "github.com/wodi-crm/wodi-crm-be/internal/app/document"
+	appinbox "github.com/wodi-crm/wodi-crm-be/internal/app/inbox"
 	applead "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
 	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
 	apptask "github.com/wodi-crm/wodi-crm-be/internal/app/task"
@@ -85,6 +95,15 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	pkgRepo := pkgpg.NewRepository(pool)
 	docRepo := pgdocument.NewRepository(pool)
 	dashAgg := pgdash.NewDashboardAggregator(pool)
+	inboxRepo := pginbox.NewRepository(pool)
+	providers := integration.NewRegistry(
+		stub.New(),
+		whatsapp.New(),
+		instagram.New(),
+		email.New(),
+		stub.NewNamed(domaininbox.ChannelFacebook, "ok", ""),
+		stub.NewNamed(domaininbox.ChannelGmail, "ok", ""),
+	)
 
 	auditSvc := appaudit.NewService(auditRepo)
 	authSvc := appauth.NewService(identityRepo, auditSvc, tokens, txm, mfa)
@@ -103,6 +122,9 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	pkgSvc.SetBookingReader(bookingRepo)
 	dashSvc := appdashboard.NewService(dashAgg)
 	docSvc := appdocument.NewService(docRepo, store)
+	inboxSvc := appinbox.NewService(inboxRepo, providers, txm, bus)
+	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
+	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
 
 	taskSeeder := apptask.NewSeeder(taskRepo, txm)
 	taskSeeder.Register(bus)
@@ -128,6 +150,11 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Document:  documenthttp.Handler{Svc: docSvc},
 		Package:   pkghttp.Handler{Svc: pkgSvc},
 		Ops:       opshttp.Handler{Queue: q},
+		Inbox:     inboxhttp.Handler{Svc: inboxSvc},
+		Webhook: webhookhttp.Handler{
+			Svc:             inboxSvc,
+			DefaultBranchID: uuid.MustParse("11111111-1111-1111-1111-111111111111"),
+		},
 	}
 
 	router := httpadapter.NewRouter(cfg, tokens, handlers)
@@ -167,4 +194,52 @@ func (b leadBookingBridge) CreateDraftFromLead(ctx context.Context, in applead.C
 		return uuid.Nil, err
 	}
 	return bk.ID, nil
+}
+
+type inboxCustomerBridge struct {
+	repo *pgcustomer.Repository
+}
+
+func (b inboxCustomerBridge) FindByPhone(ctx context.Context, phone string, branchID uuid.UUID) (*appinbox.MatchedCustomer, error) {
+	c, err := b.repo.FindByPhone(ctx, phone, branchID)
+	if err != nil || c == nil {
+		return nil, nil
+	}
+	return &appinbox.MatchedCustomer{ID: c.ID, FullName: c.FullName}, nil
+}
+
+func (b inboxCustomerBridge) FindByEmail(ctx context.Context, email string, branchID uuid.UUID) (*appinbox.MatchedCustomer, error) {
+	c, err := b.repo.FindByEmail(ctx, email, branchID)
+	if err != nil || c == nil {
+		return nil, nil
+	}
+	return &appinbox.MatchedCustomer{ID: c.ID, FullName: c.FullName}, nil
+}
+
+type inboxLeadBridge struct {
+	svc *applead.Service
+}
+
+func (b inboxLeadBridge) CreateShell(ctx context.Context, in appinbox.LeadShellInput) (uuid.UUID, error) {
+	owner := in.OwnerID
+	if owner == uuid.Nil {
+		owner = uuid.MustParse("22222222-2222-2222-2222-222222222203") // sales demo
+	}
+	actor := in.ActorID
+	if actor == uuid.Nil {
+		actor = owner
+	}
+	l, err := b.svc.Create(ctx, applead.CreateInput{
+		BranchID: in.BranchID,
+		FullName: in.FullName,
+		Phone:    in.Phone,
+		Source:   in.Source,
+		OwnerID:  owner,
+		ActorID:  actor,
+		Notes:    "Created from inbox (no customer match)",
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return l.ID, nil
 }
