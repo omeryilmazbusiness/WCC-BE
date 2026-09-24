@@ -17,7 +17,13 @@ const (
 	PermPaymentsWrite   Permission = "payments.write"
 	PermPaymentsRead    Permission = "payments.read"
 	PermPaymentsApprove Permission = "payments.approve"
+	PermDocsRead        Permission = "documents.read"
 	PermDocsWrite       Permission = "documents.write"
+	PermDocsReview      Permission = "documents.review"
+	PermVisaRead        Permission = "visa.read"
+	PermVisaWrite       Permission = "visa.write"
+	PermSuppliersRead   Permission = "suppliers.read"
+	PermSuppliersWrite  Permission = "suppliers.write"
 	PermOpsRead         Permission = "ops.read"
 	PermDashboardRead   Permission = "dashboard.read"
 	PermPackagesRead    Permission = "packages.read"
@@ -64,7 +70,9 @@ func PermissionsFor(role Role) []Permission {
 		return []Permission{
 			PermUsersRead, PermUsersWrite, PermRolesRead, PermAuditRead, PermBranchesRead,
 			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
-			PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove, PermDocsWrite, PermOpsRead,
+			PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove,
+			PermDocsRead, PermDocsWrite, PermDocsReview, PermVisaRead, PermVisaWrite,
+			PermSuppliersRead, PermSuppliersWrite, PermOpsRead,
 			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
 			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermIntegrationsWrite,
 			PermTargetsRead, PermTargetsWrite, PermImportsRead, PermImportsWrite,
@@ -78,7 +86,9 @@ func PermissionsFor(role Role) []Permission {
 		return []Permission{
 			PermUsersRead, PermRolesRead, PermBranchesRead, PermAuditRead,
 			PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
-			PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove, PermDocsWrite,
+			PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove,
+			PermDocsRead, PermDocsWrite, PermDocsReview, PermVisaRead, PermVisaWrite,
+			PermSuppliersRead, PermSuppliersWrite,
 			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
 			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermIntegrationsWrite,
 			PermTargetsRead, PermTargetsWrite, PermImportsRead, PermImportsWrite,
@@ -86,17 +96,22 @@ func PermissionsFor(role Role) []Permission {
 	case RoleEmployee:
 		return []Permission{
 			PermBranchesRead, PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
-			PermDocsWrite, PermTasksRead, PermTasksWrite, PermPackagesRead,
+			PermDocsRead, PermDocsWrite, PermVisaRead, PermVisaWrite, PermSuppliersRead,
+			PermTasksRead, PermTasksWrite, PermPackagesRead,
 			PermInboxRead, PermInboxWrite, PermTargetsRead, PermImportsRead,
 		}
 	case RoleFinance:
 		return []Permission{
 			PermBranchesRead, PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove, PermBookingsRead, PermBookingsWrite, PermAuditRead,
+			PermDocsRead, PermSuppliersRead,
 			PermTasksRead, PermTargetsRead, PermImportsRead, PermImportsWrite,
 		}
 	case RoleOperations:
 		return []Permission{
-			PermBranchesRead, PermDocsWrite, PermBookingsRead, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
+			PermBranchesRead,
+			PermDocsRead, PermDocsWrite, PermDocsReview, PermVisaRead, PermVisaWrite,
+			PermSuppliersRead, PermSuppliersWrite,
+			PermBookingsRead, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
 			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermImportsRead, PermImportsWrite,
 		}
 	default:

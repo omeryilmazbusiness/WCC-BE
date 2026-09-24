@@ -23,9 +23,11 @@ import (
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
+	supplierhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/supplier"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
+	visahttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/visa"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/email"
@@ -43,8 +45,10 @@ import (
 	pglead "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/lead"
 	pgpayment "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/payment"
 	pgrevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/revenuetarget"
+	pgsupplier "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/supplier"
 	pgtask "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/task"
 	pkgpg "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/tourpackage"
+	pgvisa "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/visa"
 	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/queue"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/storage"
@@ -59,9 +63,11 @@ import (
 	applead "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
 	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
 	apprevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/app/revenuetarget"
+	appsupplier "github.com/wodi-crm/wodi-crm-be/internal/app/supplier"
 	apptask "github.com/wodi-crm/wodi-crm-be/internal/app/task"
 	apppkg "github.com/wodi-crm/wodi-crm-be/internal/app/tourpackage"
 	appuser "github.com/wodi-crm/wodi-crm-be/internal/app/useradmin"
+	appvisa "github.com/wodi-crm/wodi-crm-be/internal/app/visa"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
@@ -100,6 +106,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	taskRepo := pgtask.NewRepository(pool)
 	pkgRepo := pkgpg.NewRepository(pool)
 	docRepo := pgdocument.NewRepository(pool)
+	visaRepo := pgvisa.NewRepository(pool)
+	supplierRepo := pgsupplier.NewRepository(pool)
 	dashAgg := pgdash.NewDashboardAggregator(pool)
 	inboxRepo := pginbox.NewRepository(pool)
 	providers := integration.NewRegistry(
@@ -136,7 +144,13 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	pkgSvc := apppkg.NewService(pkgRepo, txm)
 	pkgSvc.SetBookingReader(bookingRepo)
 	dashSvc := appdashboard.NewService(dashAgg)
-	docSvc := appdocument.NewService(docRepo, store)
+	docSvc := appdocument.NewService(docRepo, store, txm)
+	docSvc.SetBookingContext(bookingDocsBridge{repo: bookingRepo})
+	docSvc.SetEnqueuer(q)
+	bookingSvc.SetDocReadiness(docSvc)
+	visaSvc := appvisa.NewService(visaRepo, txm)
+	supplierSvc := appsupplier.NewService(supplierRepo, txm)
+	supplierSvc.SetEnqueuer(q)
 	inboxSvc := appinbox.NewService(inboxRepo, providers, txm, bus)
 	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
 	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
@@ -168,6 +182,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Task:      taskhttp.Handler{Svc: taskSvc},
 		Dashboard: dashboardhttp.Handler{Svc: dashSvc},
 		Document:  documenthttp.Handler{Svc: docSvc},
+		Visa:      visahttp.Handler{Svc: visaSvc},
+		Supplier:  supplierhttp.Handler{Svc: supplierSvc},
 		Package:   pkghttp.Handler{Svc: pkgSvc},
 		Ops:       opshttp.Handler{Queue: q},
 		Inbox:     inboxhttp.Handler{Svc: inboxSvc},
@@ -215,6 +231,39 @@ func (b leadBookingBridge) CreateDraftFromLead(ctx context.Context, in applead.C
 		return uuid.Nil, err
 	}
 	return bk.ID, nil
+}
+
+// bookingDocsBridge adapts booking repo for document checklists (ISP).
+type bookingDocsBridge struct {
+	repo *pgbooking.Repository
+}
+
+func (b bookingDocsBridge) BookingSubjects(ctx context.Context, bookingID uuid.UUID) (branchID, customerID, departureID uuid.UUID, participantIDs []uuid.UUID, err error) {
+	bk, err := b.repo.FindByID(ctx, bookingID)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, uuid.Nil, nil, err
+	}
+	parts, err := b.repo.ListParticipants(ctx, bookingID)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, uuid.Nil, nil, err
+	}
+	ids := make([]uuid.UUID, 0, len(parts))
+	for _, p := range parts {
+		ids = append(ids, p.ID)
+	}
+	return bk.BranchID, bk.CustomerID, bk.DepartureID, ids, nil
+}
+
+func (b bookingDocsBridge) BookingsOnDeparture(ctx context.Context, departureID uuid.UUID) ([]uuid.UUID, error) {
+	items, err := b.repo.ListByDeparture(ctx, departureID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(items))
+	for _, bk := range items {
+		out = append(out, bk.ID)
+	}
+	return out, nil
 }
 
 type inboxCustomerBridge struct {

@@ -161,6 +161,12 @@ func (m *bookingMem) ListChecklist(context.Context, uuid.UUID) ([]bookingdomain.
 func (m *bookingMem) UpdateChecklistItem(context.Context, *bookingdomain.ChecklistItem) error {
 	return nil
 }
+func (m *bookingMem) UpsertReadinessOverride(context.Context, *bookingdomain.ReadinessOverride) error {
+	return nil
+}
+func (m *bookingMem) FindReadinessOverride(context.Context, uuid.UUID) (*bookingdomain.ReadinessOverride, error) {
+	return nil, nil
+}
 
 func TestReactorPaymentClosesTasksWhenBalanceZero(t *testing.T) {
 	tasks := newTaskMem()

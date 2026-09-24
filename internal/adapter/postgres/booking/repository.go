@@ -307,3 +307,34 @@ func (r *Repository) UpdateChecklistItem(ctx context.Context, item *domain.Check
 	)
 	return err
 }
+
+func (r *Repository) UpsertReadinessOverride(ctx context.Context, o *domain.ReadinessOverride) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	_, err := q.Exec(ctx, `
+		INSERT INTO booking_readiness_overrides (id, booking_id, reason, actor_id, created_at)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (booking_id) DO UPDATE SET
+			reason = EXCLUDED.reason,
+			actor_id = EXCLUDED.actor_id,
+			created_at = EXCLUDED.created_at,
+			id = EXCLUDED.id`,
+		o.ID, o.BookingID, o.Reason, o.ActorID, o.CreatedAt,
+	)
+	return err
+}
+
+func (r *Repository) FindReadinessOverride(ctx context.Context, bookingID uuid.UUID) (*domain.ReadinessOverride, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	row := q.QueryRow(ctx, `
+		SELECT id, booking_id, reason, actor_id, created_at
+		FROM booking_readiness_overrides WHERE booking_id=$1`, bookingID)
+	var o domain.ReadinessOverride
+	err := row.Scan(&o.ID, &o.BookingID, &o.Reason, &o.ActorID, &o.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &o, nil
+}

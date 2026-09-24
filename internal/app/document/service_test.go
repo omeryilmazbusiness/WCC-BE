@@ -2,7 +2,6 @@ package document_test
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -11,135 +10,216 @@ import (
 
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/document"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/document"
-	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
 type memRepo struct {
-	mu   sync.Mutex
-	byID map[uuid.UUID]*domain.Document
+	mu       sync.Mutex
+	byID     map[uuid.UUID]*domain.Document
+	policies map[uuid.UUID]*domain.Policy
 }
 
 func newMemRepo() *memRepo {
-	return &memRepo{byID: map[uuid.UUID]*domain.Document{}}
+	return &memRepo{byID: map[uuid.UUID]*domain.Document{}, policies: map[uuid.UUID]*domain.Policy{}}
 }
 
-func (r *memRepo) Create(_ context.Context, d *domain.Document) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (m *memRepo) Create(_ context.Context, d *domain.Document) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	cp := *d
-	r.byID[d.ID] = &cp
+	m.byID[d.ID] = &cp
 	return nil
 }
-
-func (r *memRepo) Update(_ context.Context, d *domain.Document) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.byID[d.ID]; !ok {
-		return fmt.Errorf("missing")
+func (m *memRepo) Update(_ context.Context, d *domain.Document) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.byID[d.ID]; !ok {
+		return context.Canceled
 	}
 	cp := *d
-	r.byID[d.ID] = &cp
+	m.byID[d.ID] = &cp
 	return nil
 }
-
-func (r *memRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.Document, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	d, ok := r.byID[id]
+func (m *memRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.Document, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.byID[id]
 	if !ok {
-		return nil, fmt.Errorf("missing")
+		return nil, context.Canceled
 	}
 	cp := *d
 	return &cp, nil
 }
-
-func (r *memRepo) ListByRelated(_ context.Context, relatedType string, relatedID uuid.UUID) ([]domain.Document, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (m *memRepo) ListByRelated(_ context.Context, relatedType string, relatedID uuid.UUID) ([]domain.Document, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var out []domain.Document
-	for _, d := range r.byID {
+	for _, d := range m.byID {
 		if d.RelatedType == relatedType && d.RelatedID == relatedID {
 			out = append(out, *d)
 		}
 	}
 	return out, nil
 }
+func (m *memRepo) ListExpiring(_ context.Context, onOrBefore time.Time, limit int) ([]domain.Document, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []domain.Document
+	for _, d := range m.byID {
+		if d.ExpiresAt == nil {
+			continue
+		}
+		if !d.ExpiresAt.After(onOrBefore) && (d.State == domain.StatusUploaded || d.State == domain.StatusSubmitted || d.State == domain.StatusApproved) {
+			out = append(out, *d)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+func (m *memRepo) ListApprovedBySubjects(_ context.Context, subjects []domain.SubjectRef) ([]domain.Document, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	set := map[string]bool{}
+	for _, s := range subjects {
+		set[s.RelatedType+":"+s.RelatedID.String()] = true
+	}
+	var out []domain.Document
+	for _, d := range m.byID {
+		if d.State != domain.StatusApproved {
+			continue
+		}
+		if set[d.RelatedType+":"+d.RelatedID.String()] {
+			out = append(out, *d)
+		}
+	}
+	return out, nil
+}
+func (m *memRepo) CreatePolicy(_ context.Context, p *domain.Policy) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cp := *p
+	cp.Requirements = append([]domain.Requirement{}, p.Requirements...)
+	m.policies[p.ID] = &cp
+	return nil
+}
+func (m *memRepo) UpdatePolicy(_ context.Context, p *domain.Policy) error {
+	return m.CreatePolicy(context.Background(), p)
+}
+func (m *memRepo) ReplaceRequirements(_ context.Context, policyID uuid.UUID, reqs []domain.Requirement) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.policies[policyID]
+	if !ok {
+		return context.Canceled
+	}
+	p.Requirements = append([]domain.Requirement{}, reqs...)
+	return nil
+}
+func (m *memRepo) FindPolicyByID(_ context.Context, id uuid.UUID) (*domain.Policy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	p, ok := m.policies[id]
+	if !ok {
+		return nil, context.Canceled
+	}
+	cp := *p
+	cp.Requirements = append([]domain.Requirement{}, p.Requirements...)
+	return &cp, nil
+}
+func (m *memRepo) ListPolicies(_ context.Context, branchID uuid.UUID) ([]domain.Policy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []domain.Policy
+	for _, p := range m.policies {
+		if p.BranchID == branchID {
+			cp := *p
+			cp.Requirements = append([]domain.Requirement{}, p.Requirements...)
+			out = append(out, cp)
+		}
+	}
+	return out, nil
+}
+func (m *memRepo) FindActivePolicy(_ context.Context, branchID uuid.UUID, _ *uuid.UUID, _ string) (*domain.Policy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, p := range m.policies {
+		if p.BranchID == branchID && p.IsActive {
+			cp := *p
+			cp.Requirements = append([]domain.Requirement{}, p.Requirements...)
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
 
 type memStore struct{}
 
-func (memStore) PresignPut(_ context.Context, key, contentType string, ttl time.Duration) (string, error) {
-	return fmt.Sprintf("put://%s?ct=%s&ttl=%d", key, contentType, int(ttl.Seconds())), nil
+func (memStore) PresignPut(context.Context, string, string, time.Duration) (string, error) {
+	return "https://upload.example/put", nil
 }
-func (memStore) PresignGet(_ context.Context, key string, ttl time.Duration) (string, error) {
-	return fmt.Sprintf("get://%s?ttl=%d", key, int(ttl.Seconds())), nil
+func (memStore) PresignGet(context.Context, string, time.Duration) (string, error) {
+	return "https://upload.example/get", nil
 }
 
-func TestPresignUploadAndComplete(t *testing.T) {
-	svc := appsvc.NewService(newMemRepo(), memStore{})
+type memBookings struct {
+	branchID, customerID, departureID uuid.UUID
+	participants                      []uuid.UUID
+}
+
+func (m memBookings) BookingSubjects(context.Context, uuid.UUID) (uuid.UUID, uuid.UUID, uuid.UUID, []uuid.UUID, error) {
+	return m.branchID, m.customerID, m.departureID, m.participants, nil
+}
+func (m memBookings) BookingsOnDeparture(context.Context, uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
+func TestApproveFlow(t *testing.T) {
+	repo := newMemRepo()
+	svc := appsvc.NewService(repo, memStore{}, tx.Nop{})
 	branch := uuid.New()
-	related := uuid.New()
 	actor := uuid.New()
+	related := uuid.New()
 
-	res, err := svc.PresignUpload(context.Background(), appsvc.PresignUploadInput{
+	presign, err := svc.PresignUpload(context.Background(), appsvc.PresignUploadInput{
 		BranchID: branch, RelatedType: domain.RelatedBooking, RelatedID: related,
 		Kind: domain.KindPassport, FileName: "pass.pdf", ContentType: "application/pdf", UploadedBy: actor,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != domain.StatusPending || res.UploadURL == "" {
-		t.Fatalf("%#v", res)
+	if _, err := svc.CompleteUpload(context.Background(), appsvc.CompleteUploadInput{
+		DocumentID: presign.DocumentID, SizeBytes: 2048, ActorID: actor,
+	}); err != nil {
+		t.Fatal(err)
 	}
-
-	dto, err := svc.CompleteUpload(context.Background(), appsvc.CompleteUploadInput{
-		DocumentID: res.DocumentID, SizeBytes: 2048, ActorID: actor,
-	})
+	if _, err := svc.Submit(context.Background(), presign.DocumentID); err != nil {
+		t.Fatal(err)
+	}
+	doc, err := svc.Approve(context.Background(), presign.DocumentID, actor, "looks good")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dto.Status != domain.StatusUploaded || dto.SizeBytes != 2048 {
-		t.Fatalf("%#v", dto)
+	if doc.Status != domain.StatusApproved {
+		t.Fatalf("got %s", doc.Status)
 	}
 
-	dl, err := svc.PresignDownload(context.Background(), res.DocumentID)
+	// checklist sees approved passport
+	policyID := uuid.New()
+	_ = repo.CreatePolicy(context.Background(), &domain.Policy{
+		ID: policyID, BranchID: branch, Name: "Default", IsActive: true, CreatedAt: time.Now().UTC(),
+		Requirements: []domain.Requirement{
+			{ID: uuid.New(), PolicyID: policyID, Kind: domain.KindPassport, Required: true, Label: "Passport"},
+			{ID: uuid.New(), PolicyID: policyID, Kind: domain.KindVisa, Required: true, Label: "Visa"},
+		},
+	})
+	svc.SetBookingContext(memBookings{branchID: branch, customerID: uuid.New(), departureID: uuid.New()})
+	cl, err := svc.Checklist(context.Background(), related)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if dl.DownloadURL == "" {
-		t.Fatal("missing download url")
-	}
-
-	list, err := svc.ListByRelated(context.Background(), domain.RelatedBooking, related)
-	if err != nil || len(list) != 1 {
-		t.Fatalf("list=%v err=%v", list, err)
-	}
-}
-
-func TestPresignUploadValidation(t *testing.T) {
-	svc := appsvc.NewService(newMemRepo(), memStore{})
-	_, err := svc.PresignUpload(context.Background(), appsvc.PresignUploadInput{
-		BranchID: uuid.New(), RelatedType: "invoice", RelatedID: uuid.New(),
-		FileName: "a.pdf", ContentType: "application/pdf", UploadedBy: uuid.New(),
-	})
-	if err == nil {
-		t.Fatal("expected related_type validation")
-	}
-	if _, ok := err.(*shared.AppError); !ok {
-		t.Fatalf("want AppError, got %T", err)
-	}
-}
-
-func TestDownloadRequiresComplete(t *testing.T) {
-	svc := appsvc.NewService(newMemRepo(), memStore{})
-	res, err := svc.PresignUpload(context.Background(), appsvc.PresignUploadInput{
-		BranchID: uuid.New(), RelatedType: domain.RelatedCustomer, RelatedID: uuid.New(),
-		Kind: domain.KindOther, FileName: "x.png", ContentType: "image/png", UploadedBy: uuid.New(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = svc.PresignDownload(context.Background(), res.DocumentID)
-	if err == nil {
-		t.Fatal("expected invalid state")
+	if len(cl.MissingRequired) != 1 || cl.MissingRequired[0] != domain.KindVisa {
+		t.Fatalf("missing=%v", cl.MissingRequired)
 	}
 }

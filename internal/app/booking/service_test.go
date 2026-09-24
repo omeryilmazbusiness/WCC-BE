@@ -17,11 +17,12 @@ import (
 )
 
 type memBookingRepo struct {
-	byID     map[uuid.UUID]*domain.Booking
-	parts    map[uuid.UUID][]domain.Participant
-	lines    map[uuid.UUID][]domain.LineItem
-	check    map[uuid.UUID][]domain.ChecklistItem
-	sold     map[uuid.UUID]int
+	byID      map[uuid.UUID]*domain.Booking
+	parts     map[uuid.UUID][]domain.Participant
+	lines     map[uuid.UUID][]domain.LineItem
+	check     map[uuid.UUID][]domain.ChecklistItem
+	sold      map[uuid.UUID]int
+	overrides map[uuid.UUID]*domain.ReadinessOverride
 }
 
 func newMemBooking() *memBookingRepo {
@@ -139,6 +140,25 @@ func (m *memBookingRepo) UpdateChecklistItem(_ context.Context, item *domain.Che
 		}
 	}
 	return context.Canceled
+}
+func (m *memBookingRepo) UpsertReadinessOverride(_ context.Context, o *domain.ReadinessOverride) error {
+	if m.overrides == nil {
+		m.overrides = map[uuid.UUID]*domain.ReadinessOverride{}
+	}
+	cp := *o
+	m.overrides[o.BookingID] = &cp
+	return nil
+}
+func (m *memBookingRepo) FindReadinessOverride(_ context.Context, bookingID uuid.UUID) (*domain.ReadinessOverride, error) {
+	if m.overrides == nil {
+		return nil, nil
+	}
+	o, ok := m.overrides[bookingID]
+	if !ok {
+		return nil, nil
+	}
+	cp := *o
+	return &cp, nil
 }
 
 type memDepRepo struct {

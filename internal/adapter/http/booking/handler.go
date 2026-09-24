@@ -322,6 +322,32 @@ func (h Handler) Readiness(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, ready)
 }
 
+func (h Handler) OverrideReadiness(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	o, err := h.Svc.OverrideReadiness(r.Context(), id, claims.UserID, body.Reason)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusCreated, o)
+}
+
 func (h Handler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

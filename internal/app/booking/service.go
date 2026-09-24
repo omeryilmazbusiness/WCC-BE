@@ -80,6 +80,12 @@ type Service struct {
 	tx         tx.Runner
 	bus        *events.Bus
 	audit      audit.Recorder
+	docs       DocReadiness
+}
+
+// DocReadiness evaluates policy-required documents for confirm gates (Epic 12).
+type DocReadiness interface {
+	MissingRequiredKinds(ctx context.Context, bookingID uuid.UUID) ([]string, error)
 }
 
 func NewService(
@@ -92,6 +98,7 @@ func NewService(
 }
 
 func (s *Service) SetAuditor(a audit.Recorder) { s.audit = a }
+func (s *Service) SetDocReadiness(d DocReadiness) { s.docs = d }
 
 func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Booking, error) {
 	if in.PaxCount <= 0 {
@@ -559,6 +566,7 @@ func (s *Service) Readiness(ctx context.Context, bookingID uuid.UUID) (*domain.R
 		Blocking:          []string{},
 		Warnings:          []string{},
 		RiskAlerts:        []string{},
+		MissingDocs:       []string{},
 	}
 
 	missingPassports := 0
@@ -591,6 +599,19 @@ func (s *Service) Readiness(ctx context.Context, bookingID uuid.UUID) (*domain.R
 	}
 	if r.ChecklistIncomplete > 0 {
 		r.Blocking = append(r.Blocking, "required checklist items incomplete")
+	}
+
+	if s.docs != nil {
+		missing, err := s.docs.MissingRequiredKinds(ctx, bookingID)
+		if err == nil && len(missing) > 0 {
+			r.MissingDocs = missing
+			r.Blocking = append(r.Blocking, "required documents not approved: "+strings.Join(missing, ", "))
+		}
+	}
+
+	override, _ := s.repo.FindReadinessOverride(ctx, bookingID)
+	if override != nil {
+		r.OverrideActive = true
 	}
 
 	dep, err := s.departures.FindDeparture(ctx, b.DepartureID)
@@ -626,5 +647,39 @@ func (s *Service) Readiness(ctx context.Context, bookingID uuid.UUID) (*domain.R
 	}
 
 	r.CanConfirm = len(r.Blocking) == 0
+	if r.OverrideActive && b.Status == domain.StatusDraft {
+		// Override lifts document (and soft) blocks but still requires draft + capacity sanity.
+		filtered := make([]string, 0, len(r.Blocking))
+		for _, msg := range r.Blocking {
+			if strings.HasPrefix(msg, "required documents not approved") ||
+				msg == "required checklist items incomplete" {
+				continue
+			}
+			filtered = append(filtered, msg)
+		}
+		r.Blocking = filtered
+		r.Warnings = append(r.Warnings, "readiness override active: "+override.Reason)
+		r.CanConfirm = len(r.Blocking) == 0
+	}
 	return r, nil
+}
+
+// OverrideReadiness records an explicit confirm override for missing docs (Epic 12).
+func (s *Service) OverrideReadiness(ctx context.Context, bookingID, actorID uuid.UUID, reason string) (*domain.ReadinessOverride, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return nil, shared.NewValidation("reason is required")
+	}
+	if _, err := s.repo.FindByID(ctx, bookingID); err != nil {
+		return nil, shared.NewNotFound("booking")
+	}
+	now := time.Now().UTC()
+	aid := actorID
+	o := &domain.ReadinessOverride{
+		ID: uuid.New(), BookingID: bookingID, Reason: reason, ActorID: &aid, CreatedAt: now,
+	}
+	if err := s.repo.UpsertReadinessOverride(ctx, o); err != nil {
+		return nil, err
+	}
+	return o, nil
 }

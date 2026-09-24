@@ -114,7 +114,7 @@ type ListFilter struct {
 	Offset      int
 }
 
-// Readiness for confirm gate + travel checklist (T-065).
+// Readiness for confirm gate + travel checklist (T-065 / Epic 12).
 type Readiness struct {
 	BookingID            uuid.UUID `json:"booking_id"`
 	CanConfirm           bool      `json:"can_confirm"`
@@ -129,6 +129,17 @@ type Readiness struct {
 	BalanceAmt           int64     `json:"balance_amt"`
 	DaysToDeparture      *int      `json:"days_to_departure,omitempty"`
 	RiskAlerts           []string  `json:"risk_alerts"`
+	OverrideActive       bool      `json:"override_active"`
+	MissingDocs          []string  `json:"missing_docs"`
+}
+
+// ReadinessOverride allows confirm despite missing required documents (Epic 12).
+type ReadinessOverride struct {
+	ID        uuid.UUID
+	BookingID uuid.UUID
+	Reason    string
+	ActorID   *uuid.UUID
+	CreatedAt time.Time
 }
 
 var allowed = map[Status][]Status{
@@ -255,4 +266,7 @@ type Repository interface {
 	SeedChecklist(ctx context.Context, items []ChecklistItem) error
 	ListChecklist(ctx context.Context, bookingID uuid.UUID) ([]ChecklistItem, error)
 	UpdateChecklistItem(ctx context.Context, item *ChecklistItem) error
+
+	UpsertReadinessOverride(ctx context.Context, o *ReadinessOverride) error
+	FindReadinessOverride(ctx context.Context, bookingID uuid.UUID) (*ReadinessOverride, error)
 }

@@ -253,6 +253,33 @@ Domain engine is pure (`domain/revenuetarget.Engine`); HTTP/app/adapters depend 
 
 Domain helpers are pure (`domain/importexport` SuggestMapping/Normalize/Parse); app Process is idempotent for worker + sync confirm.
 
+## Epic 12 Documents, Visa & Suppliers
+
+| Task | Status |
+|------|--------|
+| T-156 Configurable document requirements policy | Done |
+| T-157 Document entity + status/review/version/expiry | Done |
+| T-158 VisaCase workflow + external reference | Done |
+| T-159 Expiry/validity reminder rules | Done |
+| T-160 Departure missing-document aggregate API | Done |
+| T-161 Booking readiness docs gate + manager override | Done |
+| T-162 Supplier entity + contacts + terms | Done |
+| T-163 Link supplier + confirmation refs | Done |
+| T-164 Unconfirmed supplier reminder + sold>allotment | Done |
+| T-165 Lightweight supplier cost fields | Done |
+
+- `PATCH /v1/documents/{id}` · `POST .../submit|approve|reject|replace` · `GET/PUT /v1/documents/policies`
+- `GET /v1/documents/checklist?booking_id=` · `GET /v1/documents/missing-docs?departure_id=` · `POST /v1/documents/reminders/expiry`
+- `GET|POST /v1/visa-cases` · `GET /v1/visa-cases/{id}` · `POST .../transition`
+- `GET|POST /v1/suppliers` · `GET|PATCH /v1/suppliers/{id}` · `GET|POST .../links` · `DELETE .../links/{linkId}` · `POST /v1/suppliers/links/{linkId}/confirm`
+- `GET /v1/suppliers/unconfirmed|oversold` · `POST /v1/suppliers/reminders/unconfirmed`
+- `POST /v1/bookings/{id}/readiness-override`
+
+Domain status machines stay pure (`document` / `visa` / `supplier`); HTTP/app/adapters depend inward (SOLID).
+- Permissions: `documents.read|write|review`, `visa.read|write`, `suppliers.read|write` (existing Presign/Complete/List gated)
+
+Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supplier `IsOversold` when `allotment>0 && sold>allotment`. Booking readiness blocks on unapproved policy docs unless an override is active.
+
 ## Design notes
 
 - **ACID**: application services wrap multi-table writes in `tx.Manager.WithinTransaction` (payment ledger + booking balance; lead create + stage history).

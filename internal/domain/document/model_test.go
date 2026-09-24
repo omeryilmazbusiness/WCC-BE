@@ -3,13 +3,16 @@ package document_test
 import (
 	"errors"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/document"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
 func TestMarkUploaded(t *testing.T) {
-	d := &document.Document{}
+	d := &document.Document{State: document.StatusPending}
 	if d.Status() != document.StatusPending {
 		t.Fatal("expected pending")
 	}
@@ -30,6 +33,54 @@ func TestMarkUploaded(t *testing.T) {
 			t.Fatalf("want invalid state, got %v", err)
 		}
 	}
+}
+
+func TestSubmitApproveReject(t *testing.T) {
+	d := &document.Document{State: document.StatusPending, Kind: document.KindPassport}
+	_ = d.MarkUploaded(100)
+	if err := d.Submit(); err != nil {
+		t.Fatal(err)
+	}
+	if d.Status() != document.StatusSubmitted {
+		t.Fatal(d.Status())
+	}
+	actor := uuid.New()
+	if err := d.Approve(actor, "ok"); err != nil {
+		t.Fatal(err)
+	}
+	if d.Status() != document.StatusApproved || d.ReviewedBy == nil {
+		t.Fatal(d.Status())
+	}
+
+	d2 := &document.Document{State: document.StatusUploaded}
+	_ = d2.Submit()
+	if err := d2.Reject(actor, ""); err == nil {
+		t.Fatal("reject requires note")
+	}
+	if err := d2.Reject(actor, "blurry"); err != nil {
+		t.Fatal(err)
+	}
+	if d2.Status() != document.StatusRejected {
+		t.Fatal(d2.Status())
+	}
+}
+
+func TestDocumentTransitions(t *testing.T) {
+	if !document.CanTransition(document.StatusUploaded, document.StatusSubmitted) {
+		t.Fatal("uploaded→submitted")
+	}
+	if document.CanTransition(document.StatusApproved, document.StatusSubmitted) {
+		t.Fatal("approved→submitted forbidden")
+	}
+	d := &document.Document{State: document.StatusApproved, Version: 1, ID: uuid.New(), BranchID: uuid.New()}
+	rep, err := d.NewReplacement(uuid.New(), "p.pdf", "application/pdf", "docs/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Version != 2 || rep.ReplacesID == nil || *rep.ReplacesID != d.ID {
+		t.Fatalf("%#v", rep)
+	}
+	_ = time.Now()
 }
 
 func TestValidKindAndRelated(t *testing.T) {

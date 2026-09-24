@@ -22,9 +22,11 @@ import (
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
+	supplierhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/supplier"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
+	visahttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/visa"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -44,6 +46,8 @@ type Handlers struct {
 	Task      taskhttp.Handler
 	Dashboard dashboardhttp.Handler
 	Document  documenthttp.Handler
+	Visa      visahttp.Handler
+	Supplier  supplierhttp.Handler
 	Package   pkghttp.Handler
 	Ops       opshttp.Handler
 	Inbox     inboxhttp.Handler
@@ -134,6 +138,7 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/confirm", h.Booking.Confirm)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/status", h.Booking.ChangeStatus)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/readiness", h.Booking.Readiness)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/readiness-override", h.Booking.OverrideReadiness)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/participants", h.Booking.ListParticipants)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/participants", h.Booking.AddParticipant)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Patch("/{id}/participants/{participantId}", h.Booking.UpdateParticipant)
@@ -210,11 +215,42 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 			})
 
 			r.Route("/documents", func(r chi.Router) {
-				r.Get("/", h.Document.List)
-				r.Post("/presign", h.Document.PresignUpload)
-				r.Get("/{id}", h.Document.Get)
-				r.Post("/{id}/complete", h.Document.Complete)
-				r.Post("/{id}/download", h.Document.PresignDownload)
+				r.With(middleware.RequirePermission(platformauth.PermDocsRead)).Get("/", h.Document.List)
+				r.With(middleware.RequirePermission(platformauth.PermDocsWrite)).Post("/presign", h.Document.PresignUpload)
+				r.With(middleware.RequirePermission(platformauth.PermDocsRead)).Get("/policies", h.Document.ListPolicies)
+				r.With(middleware.RequirePermission(platformauth.PermDocsWrite)).Put("/policies", h.Document.UpsertPolicy)
+				r.With(middleware.RequirePermission(platformauth.PermDocsRead)).Get("/checklist", h.Document.Checklist)
+				r.With(middleware.RequirePermission(platformauth.PermDocsRead)).Get("/missing-docs", h.Document.MissingDocs)
+				r.With(middleware.RequirePermission(platformauth.PermDocsWrite)).Post("/reminders/expiry", h.Document.ProcessExpiryReminders)
+				r.With(middleware.RequirePermission(platformauth.PermDocsRead)).Get("/{id}", h.Document.Get)
+				r.With(middleware.RequirePermission(platformauth.PermDocsWrite)).Patch("/{id}", h.Document.Classify)
+				r.With(middleware.RequirePermission(platformauth.PermDocsWrite)).Post("/{id}/complete", h.Document.Complete)
+				r.With(middleware.RequirePermission(platformauth.PermDocsRead)).Post("/{id}/download", h.Document.PresignDownload)
+				r.With(middleware.RequirePermission(platformauth.PermDocsWrite)).Post("/{id}/submit", h.Document.Submit)
+				r.With(middleware.RequirePermission(platformauth.PermDocsReview)).Post("/{id}/approve", h.Document.Approve)
+				r.With(middleware.RequirePermission(platformauth.PermDocsReview)).Post("/{id}/reject", h.Document.Reject)
+				r.With(middleware.RequirePermission(platformauth.PermDocsWrite)).Post("/{id}/replace", h.Document.Replace)
+			})
+
+			r.Route("/visa-cases", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermVisaRead)).Get("/", h.Visa.List)
+				r.With(middleware.RequirePermission(platformauth.PermVisaWrite)).Post("/", h.Visa.Create)
+				r.With(middleware.RequirePermission(platformauth.PermVisaRead)).Get("/{id}", h.Visa.Get)
+				r.With(middleware.RequirePermission(platformauth.PermVisaWrite)).Post("/{id}/transition", h.Visa.Transition)
+			})
+
+			r.Route("/suppliers", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/", h.Supplier.List)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/", h.Supplier.Create)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/unconfirmed", h.Supplier.ListUnconfirmed)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/oversold", h.Supplier.ListOversold)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/reminders/unconfirmed", h.Supplier.ProcessUnconfirmedReminders)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/{id}", h.Supplier.Get)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Patch("/{id}", h.Supplier.Update)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/{id}/links", h.Supplier.ListLinks)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/{id}/links", h.Supplier.Link)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Delete("/{id}/links/{linkId}", h.Supplier.Unlink)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/links/{linkId}/confirm", h.Supplier.ConfirmLink)
 			})
 
 			r.Route("/packages", func(r chi.Router) {
