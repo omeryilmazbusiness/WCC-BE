@@ -137,4 +137,7 @@ type Repository interface {
 	ListInvoices(ctx context.Context, branchID uuid.UUID, supplierID *uuid.UUID, status *InvoiceStatus, limit int) ([]Invoice, error)
 	ReplaceInvoiceLines(ctx context.Context, invoiceID uuid.UUID, lines []InvoiceLine) error
 	ListInvoiceLines(ctx context.Context, invoiceID uuid.UUID) ([]InvoiceLine, error)
+
+	CreateIssue(ctx context.Context, e *IssueEvent) error
+	ListIssues(ctx context.Context, supplierID uuid.UUID, limit int) ([]IssueEvent, error)
 }

@@ -33,6 +33,9 @@ import (
 	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
 	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
+	adminconfighttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/adminconfig"
+	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
+	searchhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/search"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
@@ -63,6 +66,9 @@ type Handlers struct {
 	FileSync     filesynchttp.Handler
 	ExtInt       extinthttp.Handler
 	Webhook      webhookhttp.Handler
+	AdminConfig  adminconfighttp.Handler
+	Rooming      roominghttp.Handler
+	Search       searchhttp.Handler
 }
 
 func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers) http.Handler {
@@ -267,6 +273,8 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/{id}/links", h.Supplier.ListLinks)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/{id}/links", h.Supplier.Link)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Delete("/{id}/links/{linkId}", h.Supplier.Unlink)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/{id}/issues", h.Supplier.ListIssues)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/{id}/issues", h.Supplier.AddIssue)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/links/{linkId}/confirm", h.Supplier.ConfirmLink)
 			})
 
@@ -291,7 +299,45 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Post("/{id}/mark-full", h.Package.MarkFull)
 				r.With(middleware.RequirePermission(platformauth.PermPackagesRead)).Get("/{id}/readiness", h.Package.Readiness)
 				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Post("/{id}/recompute-capacity", h.Package.RecomputeCapacity)
+				r.With(middleware.RequirePermission(platformauth.PermPackagesRead)).Get("/{id}/rooms", h.Rooming.ListRooms)
+				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Post("/{id}/rooms", h.Rooming.CreateRoom)
+				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Patch("/{id}/rooms/{roomId}", h.Rooming.PatchRoom)
+				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Delete("/{id}/rooms/{roomId}", h.Rooming.DeleteRoom)
+				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Post("/{id}/rooms/{roomId}/assign", h.Rooming.Assign)
+				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Delete("/{id}/assignments/{participantId}", h.Rooming.Unassign)
+				r.With(middleware.RequirePermission(platformauth.PermPackagesRead)).Get("/{id}/group-list", h.Rooming.GroupList)
+				r.With(middleware.RequirePermission(platformauth.PermPackagesRead)).Get("/{id}/group-list.csv", h.Rooming.GroupListCSV)
 			})
+
+			r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).
+				Post("/conversations/{id}/suggest-next-task", h.Task.SuggestNextTask)
+			r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).
+				Post("/conversations/{id}/confirm-next-task", h.Task.ConfirmNextTask)
+
+			r.With(middleware.RequirePermission(platformauth.PermDashboardRead)).
+				Get("/search", h.Search.Search)
+
+			r.Route("/settings", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermSettingsRead)).Get("/sla", h.AdminConfig.GetSLA)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Put("/sla", h.AdminConfig.PutSLA)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsRead)).Get("/escalation", h.AdminConfig.GetEscalation)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Put("/escalation/{kind}", h.AdminConfig.PutEscalation)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Delete("/escalation/{kind}", h.AdminConfig.DeleteEscalation)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsRead)).Get("/lost-reasons", h.AdminConfig.ListLostReasons)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Post("/lost-reasons", h.AdminConfig.CreateLostReason)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Put("/lost-reasons/{id}", h.AdminConfig.UpdateLostReason)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Delete("/lost-reasons/{id}", h.AdminConfig.DeleteLostReason)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsRead)).Get("/templates", h.AdminConfig.ListTemplates)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Post("/templates", h.AdminConfig.CreateTemplate)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Patch("/templates/{id}", h.AdminConfig.PatchTemplate)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Delete("/templates/{id}", h.AdminConfig.DeleteTemplate)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsRead)).Get("/fields", h.AdminConfig.GetFields)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Put("/fields", h.AdminConfig.PutFields)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsRead)).Get("/thresholds", h.AdminConfig.GetThresholds)
+				r.With(middleware.RequirePermission(platformauth.PermSettingsWrite)).Put("/thresholds", h.AdminConfig.PutThresholds)
+			})
+			r.With(middleware.RequirePermission(platformauth.PermSettingsRead)).
+				Get("/events/catalog", h.AdminConfig.EventsCatalog)
 
 			r.Route("/inbox", func(r chi.Router) {
 				r.With(middleware.RequirePermission(platformauth.PermInboxRead)).Get("/conversations", h.Inbox.List)
@@ -304,6 +350,8 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 			})
 			r.With(middleware.RequirePermission(platformauth.PermIntegrationsRead)).
 				Get("/integrations/health", h.Inbox.Health)
+			r.With(middleware.RequirePermission(platformauth.PermIntegrationsRead)).
+				Get("/integrations/accounts", h.Inbox.ListAccounts)
 			r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).
 				Post("/integrations/accounts/{provider}/connect", h.Inbox.Connect)
 			r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).

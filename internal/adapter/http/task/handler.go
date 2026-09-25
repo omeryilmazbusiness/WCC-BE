@@ -350,3 +350,59 @@ func (h Handler) EscalateOverdue(w http.ResponseWriter, r *http.Request) {
 	}
 	response.JSON(w, http.StatusOK, map[string]any{"escalated": n})
 }
+
+func (h Handler) SuggestNextTask(w http.ResponseWriter, r *http.Request) {
+	if _, ok := middleware.ClaimsFrom(r.Context()); !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	var body struct {
+		Outcome string `json:"outcome"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	sug, err := h.Svc.SuggestNextTask(r.Context(), id, body.Outcome)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, sug)
+}
+
+func (h Handler) ConfirmNextTask(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	var body struct {
+		Outcome string `json:"outcome"`
+		Title   string `json:"title"`
+		Kind    string `json:"kind"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	t, err := h.Svc.ConfirmNextTask(r.Context(), appsvc.ConfirmNextTaskInput{
+		ConversationID: id, BranchID: claims.BranchID, ActorID: claims.UserID,
+		Outcome: body.Outcome, Title: body.Title, Kind: body.Kind,
+	})
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusCreated, mapTask(t))
+}

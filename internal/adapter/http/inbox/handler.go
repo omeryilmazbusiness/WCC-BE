@@ -302,11 +302,16 @@ func (h Handler) Health(w http.ResponseWriter, r *http.Request) {
 		if a.LastOKAt != nil {
 			lastOK = a.LastOKAt.UTC().Format(time.RFC3339Nano)
 		}
+		path := a.WebhookPath
+		if path == "" {
+			path = "/v1/webhooks/" + string(a.Provider)
+		}
 		acctOut = append(acctOut, map[string]any{
 			"id": a.ID, "branch_id": a.BranchID, "provider": a.Provider,
 			"display_name": a.DisplayName, "status": a.Status,
 			"connected": a.Connected, "public_meta": a.PublicMeta,
-			"webhook_path": a.WebhookPath,
+			"webhook_path": path,
+			"webhook_url":  path + "?branch_id=" + claims.BranchID.String(),
 			"last_ok_at":   lastOK, "last_error": a.LastError,
 			"updated_at": a.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		})
@@ -324,6 +329,20 @@ func (h Handler) Health(w http.ResponseWriter, r *http.Request) {
 		"accounts": acctOut,
 		"live":     liveOut,
 	})
+}
+
+func (h Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	items, err := h.Svc.ListAccounts(r.Context(), claims.BranchID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, items)
 }
 
 func (h Handler) Connect(w http.ResponseWriter, r *http.Request) {

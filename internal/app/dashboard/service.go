@@ -11,12 +11,15 @@ import (
 
 const maxPeriod = 366 * 24 * time.Hour
 
-// KPI aggregates for Manager Dashboard (exceptions first) — T-084/T-085.
+// KPI aggregates for Manager Dashboard (exceptions first) — T-084/T-085 / T-230.
 type KPI struct {
 	LeadsOpen      int       `json:"leads_open"`
 	TasksOverdue   int       `json:"tasks_overdue"`
 	BookingsUnpaid int       `json:"bookings_unpaid"`
 	MissingDocs    int       `json:"missing_docs"`
+	BookedAmt      int64     `json:"booked_amt"`
+	CollectedAmt   int64     `json:"collected_amt"`
+	MarginAmt      int64     `json:"margin_amt"`
 	PeriodFrom     time.Time `json:"period_from"`
 	PeriodTo       time.Time `json:"period_to"`
 }

@@ -381,3 +381,46 @@ func scanInvoice(row interface {
 	inv.Status = domain.InvoiceStatus(status)
 	return &inv, nil
 }
+
+func (r *Repository) CreateIssue(ctx context.Context, e *domain.IssueEvent) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	_, err := q.Exec(ctx, `
+		INSERT INTO supplier_issue_events (
+			id, branch_id, supplier_id, link_id, kind, severity, note, actor_id, created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+		e.ID, e.BranchID, e.SupplierID, e.LinkID, string(e.Kind), string(e.Severity),
+		e.Note, e.ActorID, e.CreatedAt,
+	)
+	return err
+}
+
+func (r *Repository) ListIssues(ctx context.Context, supplierID uuid.UUID, limit int) ([]domain.IssueEvent, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	q := tx.QuerierFrom(ctx, r.pool)
+	rows, err := q.Query(ctx, `
+		SELECT id, branch_id, supplier_id, link_id, kind, severity, note, actor_id, created_at
+		FROM supplier_issue_events
+		WHERE supplier_id=$1
+		ORDER BY created_at DESC
+		LIMIT $2`, supplierID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.IssueEvent
+	for rows.Next() {
+		var e domain.IssueEvent
+		var kind, severity string
+		if err := rows.Scan(
+			&e.ID, &e.BranchID, &e.SupplierID, &e.LinkID, &kind, &severity, &e.Note, &e.ActorID, &e.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		e.Kind = domain.IssueKind(kind)
+		e.Severity = domain.IssueSeverity(severity)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}

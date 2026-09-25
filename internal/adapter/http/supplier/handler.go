@@ -441,3 +441,63 @@ func (h Handler) SetInvoiceLines(w http.ResponseWriter, r *http.Request) {
 	}
 	response.JSON(w, http.StatusOK, mapInvoice(inv))
 }
+
+func mapIssue(e *domain.IssueEvent) map[string]any {
+	return map[string]any{
+		"id": e.ID, "branch_id": e.BranchID, "supplier_id": e.SupplierID,
+		"link_id": e.LinkID, "kind": e.Kind, "severity": e.Severity,
+		"note": e.Note, "actor_id": e.ActorID,
+		"created_at": e.CreatedAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+func (h Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := h.Svc.ListIssues(r.Context(), claims.BranchID, id, limit)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(items))
+	for i := range items {
+		out = append(out, mapIssue(&items[i]))
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+func (h Handler) AddIssue(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	var body appsvc.AddIssueInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	body.BranchID = claims.BranchID
+	body.ActorID = claims.UserID
+	body.SupplierID = id
+	e, err := h.Svc.AddIssue(r.Context(), body)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusCreated, mapIssue(e))
+}

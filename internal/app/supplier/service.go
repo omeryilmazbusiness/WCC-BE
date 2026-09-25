@@ -349,3 +349,52 @@ func (s *Service) SetInvoiceLines(ctx context.Context, branchID, id uuid.UUID, i
 	}
 	return inv, nil
 }
+
+// --- Epic 18 supplier issue history (T-235) ---
+
+type AddIssueInput struct {
+	BranchID   uuid.UUID           `json:"-"`
+	ActorID    uuid.UUID           `json:"-"`
+	SupplierID uuid.UUID           `json:"-"`
+	LinkID     *uuid.UUID          `json:"link_id"`
+	Kind       domain.IssueKind    `json:"kind"`
+	Severity   domain.IssueSeverity `json:"severity"`
+	Note       string              `json:"note"`
+}
+
+func (s *Service) AddIssue(ctx context.Context, in AddIssueInput) (*domain.IssueEvent, error) {
+	sup, err := s.repo.FindByID(ctx, in.SupplierID)
+	if err != nil {
+		return nil, shared.NewNotFound("supplier")
+	}
+	if in.BranchID != uuid.Nil && sup.BranchID != in.BranchID {
+		return nil, shared.NewForbidden("supplier branch mismatch")
+	}
+	actor := in.ActorID
+	e := &domain.IssueEvent{
+		ID: uuid.New(), BranchID: sup.BranchID, SupplierID: in.SupplierID,
+		LinkID: in.LinkID, Kind: in.Kind, Severity: in.Severity,
+		Note: in.Note, CreatedAt: time.Now().UTC(),
+	}
+	if actor != uuid.Nil {
+		e.ActorID = &actor
+	}
+	if err := e.Normalize(); err != nil {
+		return nil, err
+	}
+	if err := s.repo.CreateIssue(ctx, e); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+func (s *Service) ListIssues(ctx context.Context, branchID, supplierID uuid.UUID, limit int) ([]domain.IssueEvent, error) {
+	sup, err := s.repo.FindByID(ctx, supplierID)
+	if err != nil {
+		return nil, shared.NewNotFound("supplier")
+	}
+	if branchID != uuid.Nil && sup.BranchID != branchID {
+		return nil, shared.NewForbidden("supplier branch mismatch")
+	}
+	return s.repo.ListIssues(ctx, supplierID, limit)
+}

@@ -35,6 +35,9 @@ import (
 	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
 	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
+	adminconfighttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/adminconfig"
+	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
+	searchhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/search"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/email"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/instagram"
@@ -67,6 +70,9 @@ import (
 	pgai "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/ai"
 	pgfilesync "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/filesync"
 	pgextint "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/extint"
+	pgadminconfig "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/adminconfig"
+	pgrooming "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/rooming"
+	pgsearch "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/search"
 	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/queue"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/storage"
@@ -91,6 +97,9 @@ import (
 	appai "github.com/wodi-crm/wodi-crm-be/internal/app/ai"
 	appfilesync "github.com/wodi-crm/wodi-crm-be/internal/app/filesync"
 	appextint "github.com/wodi-crm/wodi-crm-be/internal/app/extint"
+	appadminconfig "github.com/wodi-crm/wodi-crm-be/internal/app/adminconfig"
+	approoming "github.com/wodi-crm/wodi-crm-be/internal/app/rooming"
+	appsearch "github.com/wodi-crm/wodi-crm-be/internal/app/search"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
@@ -156,6 +165,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	paymentSvc.SetAuditor(auditSvc)
 	paymentSvc.SetFX(apppayment.SettingsFX{Repo: paymentRepo})
 	taskSvc := apptask.NewService(taskRepo, txm, bus)
+	taskSvc.SetConversationReader(taskConvBridge{repo: inboxRepo})
 	taskSeeder := apptask.NewSeeder(taskRepo, txm)
 	paymentSvc.SetTaskCreator(taskSeeder)
 	targetRepo := pgrevenuetarget.NewRepository(pool)
@@ -207,6 +217,13 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
 	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
 
+	adminConfigRepo := pgadminconfig.NewRepository(pool)
+	adminConfigSvc := appadminconfig.NewService(adminConfigRepo, txm)
+	roomingRepo := pgrooming.NewRepository(pool)
+	roomingSvc := approoming.NewService(roomingRepo)
+	searchRepo := pgsearch.NewRepository(pool)
+	searchSvc := appsearch.NewService(searchRepo)
+
 	importRepo := pgimportexport.NewRepository(pool)
 	importSvc := appimportexport.NewService(importRepo, customerRepo, txm)
 	importSvc.SetEnqueuer(q)
@@ -245,6 +262,9 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		AI:           aihttp.Handler{Svc: aiSvc},
 		FileSync:     filesynchttp.Handler{Svc: fileSyncSvc},
 		ExtInt:       extinthttp.Handler{Svc: extIntSvc},
+		AdminConfig:  adminconfighttp.Handler{Svc: adminConfigSvc},
+		Rooming:      roominghttp.Handler{Svc: roomingSvc},
+		Search:       searchhttp.Handler{Svc: searchSvc},
 		Webhook: webhookhttp.Handler{
 			Svc:             inboxSvc,
 			DefaultBranchID: uuid.MustParse("11111111-1111-1111-1111-111111111111"),
@@ -369,6 +389,22 @@ func (b inboxLeadBridge) CreateShell(ctx context.Context, in appinbox.LeadShellI
 		return uuid.Nil, err
 	}
 	return l.ID, nil
+}
+
+// taskConvBridge adapts inbox repo to task.ConversationReader (DIP).
+type taskConvBridge struct {
+	repo *pginbox.Repository
+}
+
+func (b taskConvBridge) GetConversation(ctx context.Context, id uuid.UUID) (*apptask.ConversationRef, error) {
+	c, err := b.repo.GetConversation(ctx, id)
+	if err != nil || c == nil {
+		return nil, err
+	}
+	return &apptask.ConversationRef{
+		ID: c.ID, BranchID: c.BranchID, OwnerID: c.OwnerID,
+		LeadID: c.LeadID, CustomerID: c.CustomerID,
+	}, nil
 }
 
 // identityDirectory adapts identity repo to notification.UserDirectory (DIP).

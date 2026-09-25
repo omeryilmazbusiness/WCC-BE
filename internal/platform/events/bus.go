@@ -69,3 +69,29 @@ const (
 	SLABreached           = "inbox.sla_breached"
 	TaskEscalated         = "task.escalated"
 )
+
+// CatalogEntry describes a domain event for admin/docs (T-234).
+type CatalogEntry struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Idempotent  bool   `json:"idempotent"`
+}
+
+// Catalog returns the canonical in-process event list (pure).
+func Catalog() []CatalogEntry {
+	return []CatalogEntry{
+		{Name: LeadCreated, Description: "Lead created", Idempotent: true},
+		{Name: LeadConverted, Description: "Lead converted to booking", Idempotent: true},
+		{Name: BookingDrafted, Description: "Booking drafted", Idempotent: true},
+		{Name: BookingConfirmed, Description: "Booking confirmed", Idempotent: true},
+		{Name: BookingCancelled, Description: "Booking cancelled", Idempotent: true},
+		{Name: PaymentRecorded, Description: "Payment ledger entry recorded", Idempotent: true},
+		{Name: TaskCreated, Description: "Task created (seeded or manual)", Idempotent: true},
+		{Name: TaskEscalated, Description: "Task escalated", Idempotent: true},
+		{Name: MessageReceived, Description: "Inbound inbox message", Idempotent: true},
+		{Name: MessageSent, Description: "Outbound inbox message", Idempotent: true},
+		{Name: ConversationAssigned, Description: "Conversation assigned", Idempotent: true},
+		{Name: ConversationResolved, Description: "Conversation resolved", Idempotent: true},
+		{Name: SLABreached, Description: "Conversation SLA breached", Idempotent: true},
+	}
+}

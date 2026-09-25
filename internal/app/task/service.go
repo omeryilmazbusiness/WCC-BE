@@ -58,11 +58,28 @@ type Service struct {
 	repo domain.Repository
 	tx   tx.Runner
 	bus  *events.Bus
+	conv ConversationReader
+	now  func() time.Time
+}
+
+// ConversationReader loads inbox conversations for next-task flows (ISP / DIP).
+type ConversationReader interface {
+	GetConversation(ctx context.Context, id uuid.UUID) (*ConversationRef, error)
+}
+
+type ConversationRef struct {
+	ID       uuid.UUID
+	BranchID uuid.UUID
+	OwnerID  *uuid.UUID
+	LeadID   *uuid.UUID
+	CustomerID *uuid.UUID
 }
 
 func NewService(repo domain.Repository, txm tx.Runner, bus *events.Bus) *Service {
-	return &Service{repo: repo, tx: txm, bus: bus}
+	return &Service{repo: repo, tx: txm, bus: bus, now: func() time.Time { return time.Now().UTC() }}
 }
+
+func (s *Service) SetConversationReader(r ConversationReader) { s.conv = r }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, error) {
 	title := strings.TrimSpace(in.Title)
@@ -269,6 +286,131 @@ func (s *Service) EscalateOverdue(ctx context.Context, branchID uuid.UUID) (int,
 		s.bus.Publish(ctx, events.Event{Name: events.TaskEscalated, Payload: &cp})
 	}
 	return len(escalated), nil
+}
+
+// SuggestionDTO is the HTTP-facing next-task proposal (never auto-created).
+type SuggestionDTO struct {
+	Title    string    `json:"title"`
+	Kind     string    `json:"kind"`
+	DueAt    time.Time `json:"due_at"`
+	Priority int       `json:"priority"`
+	Reason   string    `json:"reason"`
+	Outcome  string    `json:"outcome"`
+}
+
+func (s *Service) SuggestNextTask(ctx context.Context, conversationID uuid.UUID, outcome string) (*SuggestionDTO, error) {
+	if s.conv == nil {
+		return nil, shared.NewValidation("conversation reader not configured")
+	}
+	c, err := s.conv.GetConversation(ctx, conversationID)
+	if err != nil || c == nil {
+		return nil, shared.NewNotFound("conversation")
+	}
+	sug, ok := domain.SuggestNextTask(domain.CallOutcome(outcome), s.now())
+	if !ok {
+		return nil, shared.NewValidation("outcome does not require a next task")
+	}
+	return &SuggestionDTO{
+		Title: sug.Title, Kind: sug.Kind, DueAt: domain.SuggestedDueAt(sug, s.now()),
+		Priority: sug.Priority, Reason: sug.Reason, Outcome: strings.ToLower(strings.TrimSpace(outcome)),
+	}, nil
+}
+
+type ConfirmNextTaskInput struct {
+	ConversationID uuid.UUID
+	BranchID       uuid.UUID
+	ActorID        uuid.UUID
+	Outcome        string
+	Title          string
+	Kind           string
+}
+
+func (s *Service) ConfirmNextTask(ctx context.Context, in ConfirmNextTaskInput) (*domain.Task, error) {
+	if s.conv == nil {
+		return nil, shared.NewValidation("conversation reader not configured")
+	}
+	c, err := s.conv.GetConversation(ctx, in.ConversationID)
+	if err != nil || c == nil {
+		return nil, shared.NewNotFound("conversation")
+	}
+	if in.BranchID != uuid.Nil && c.BranchID != in.BranchID {
+		return nil, shared.NewForbidden("conversation branch mismatch")
+	}
+	outcome := strings.ToLower(strings.TrimSpace(in.Outcome))
+	sug, ok := domain.SuggestNextTask(domain.CallOutcome(outcome), s.now())
+	if !ok {
+		return nil, shared.NewValidation("outcome does not require a next task")
+	}
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = sug.Title
+	}
+	kindStr := strings.TrimSpace(in.Kind)
+	if kindStr == "" {
+		kindStr = sug.Kind
+	}
+	kind := mapSuggestionKind(kindStr)
+	prio := mapSuggestionPriority(sug.Priority)
+	assignee := in.ActorID
+	if c.OwnerID != nil && *c.OwnerID != uuid.Nil {
+		assignee = *c.OwnerID
+	}
+	relatedType := "conversation"
+	relatedID := c.ID
+	if c.LeadID != nil && *c.LeadID != uuid.Nil {
+		relatedType = "lead"
+		relatedID = *c.LeadID
+	} else if c.CustomerID != nil && *c.CustomerID != uuid.Nil {
+		relatedType = "customer"
+		relatedID = *c.CustomerID
+	}
+	due := domain.SuggestedDueAt(sug, s.now())
+	key := fmt.Sprintf("conv:%s:outcome:%s", c.ID, outcome)
+	if existing, err := s.repo.FindByIdempotencyKey(ctx, key); err == nil && existing != nil {
+		return existing, nil
+	}
+	now := s.now()
+	t := &domain.Task{
+		ID: uuid.New(), BranchID: c.BranchID, Title: title, Kind: kind, Priority: prio,
+		Status: domain.StatusOpen, AssigneeID: assignee, RelatedType: relatedType,
+		RelatedID: relatedID, DueAt: &due, IdempotencyKey: key,
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.tx.WithinTransaction(ctx, func(txCtx context.Context) error {
+		if existing, err := s.repo.FindByIdempotencyKey(txCtx, key); err == nil && existing != nil {
+			t = existing
+			return nil
+		}
+		return s.repo.Create(txCtx, t)
+	}); err != nil {
+		return nil, err
+	}
+	s.bus.Publish(ctx, events.Event{Name: events.TaskCreated, Payload: t})
+	return t, nil
+}
+
+func mapSuggestionKind(k string) domain.Kind {
+	switch strings.ToLower(strings.TrimSpace(k)) {
+	case "follow_up", "followup":
+		return domain.KindFollowUp
+	case "document", "docs_pending":
+		return domain.KindDocument
+	case "payment", "payment_due":
+		return domain.KindPayment
+	default:
+		return domain.KindCustom
+	}
+}
+
+func mapSuggestionPriority(p int) domain.Priority {
+	switch {
+	case p <= 1:
+		return domain.PriorityHigh
+	case p == 2:
+		return domain.PriorityNormal
+	default:
+		return domain.PriorityLow
+	}
 }
 
 // Seeder listens to domain events and creates tasks idempotently (T-075/T-076).

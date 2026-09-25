@@ -52,6 +52,16 @@ func (a *DashboardAggregator) Compute(ctx context.Context, branchID *uuid.UUID, 
 		  AND ($3::uuid IS NULL OR branch_id = $3)`, from, to, branchID).Scan(&kpi.MissingDocs); err != nil {
 		return nil, err
 	}
+	if err := q.QueryRow(ctx, `
+		SELECT COALESCE(SUM(total_amount),0), COALESCE(SUM(collected_amt),0),
+			COALESCE(SUM(total_amount - COALESCE(cost_amt,0)),0)
+		FROM bookings
+		WHERE status IN ('confirmed','completed')
+		  AND created_at >= $1 AND created_at < $2
+		  AND ($3::uuid IS NULL OR branch_id = $3)`, from, to, branchID).
+		Scan(&kpi.BookedAmt, &kpi.CollectedAmt, &kpi.MarginAmt); err != nil {
+		return nil, err
+	}
 	return kpi, nil
 }
 

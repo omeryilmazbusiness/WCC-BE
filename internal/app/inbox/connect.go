@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -157,6 +158,43 @@ func (s *Service) IntegrationHealth(ctx context.Context, branchID uuid.UUID) ([]
 		}
 	}
 	return out, live, nil
+}
+
+// AccountPublic is a secrets-stripped integration account for list APIs (T-218).
+type AccountPublic struct {
+	ID          uuid.UUID         `json:"id,omitempty"`
+	BranchID    uuid.UUID         `json:"branch_id"`
+	Provider    domain.Channel    `json:"provider"`
+	DisplayName string            `json:"display_name"`
+	Status      string            `json:"status"`
+	Connected   bool              `json:"connected"`
+	PublicMeta  map[string]string `json:"public_meta"`
+	WebhookPath string            `json:"webhook_path"`
+	WebhookURL  string            `json:"webhook_url"`
+	LastOKAt    *time.Time        `json:"last_ok_at,omitempty"`
+	LastError   string            `json:"last_error,omitempty"`
+}
+
+func (s *Service) ListAccounts(ctx context.Context, branchID uuid.UUID) ([]AccountPublic, error) {
+	accounts, _, err := s.IntegrationHealth(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AccountPublic, 0, len(accounts))
+	for i := range accounts {
+		a := &accounts[i]
+		path := a.WebhookPath
+		if path == "" {
+			path = "/v1/webhooks/" + string(a.Provider)
+		}
+		out = append(out, AccountPublic{
+			ID: a.ID, BranchID: a.BranchID, Provider: a.Provider, DisplayName: a.DisplayName,
+			Status: a.Status, Connected: a.Connected, PublicMeta: a.PublicMeta,
+			WebhookPath: path, WebhookURL: path + "?branch_id=" + branchID.String(),
+			LastOKAt: a.LastOKAt, LastError: a.LastError,
+		})
+	}
+	return out, nil
 }
 
 func isConnectable(c domain.Channel) bool {

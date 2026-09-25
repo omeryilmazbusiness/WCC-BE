@@ -48,6 +48,8 @@ const (
 	PermAISetup            Permission = "ai.setup"
 	PermFileSyncRead       Permission = "filesync.read"
 	PermFileSyncWrite      Permission = "filesync.write"
+	PermSettingsRead       Permission = "settings.read"
+	PermSettingsWrite      Permission = "settings.write"
 )
 
 const (
@@ -90,6 +92,7 @@ func PermissionsFor(role Role) []Permission {
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite, PermAISetup,
 			PermFileSyncRead, PermFileSyncWrite,
+			PermSettingsRead, PermSettingsWrite,
 		}
 	case RoleAdmin:
 		return []Permission{
@@ -99,6 +102,7 @@ func PermissionsFor(role Role) []Permission {
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite, PermAISetup,
 			PermFileSyncRead, PermFileSyncWrite,
+			PermSettingsRead, PermSettingsWrite,
 		}
 	case RoleManager:
 		return []Permission{
@@ -114,6 +118,7 @@ func PermissionsFor(role Role) []Permission {
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite, PermAISetup,
 			PermFileSyncRead, PermFileSyncWrite,
+			PermSettingsRead, PermSettingsWrite,
 		}
 	case RoleEmployee:
 		return []Permission{
@@ -135,6 +140,7 @@ func PermissionsFor(role Role) []Permission {
 			PermReportsRead, PermReportsExport,
 			PermAIRead,
 			PermFileSyncRead,
+			PermSettingsRead,
 		}
 	case RoleOperations:
 		return []Permission{
@@ -147,6 +153,7 @@ func PermissionsFor(role Role) []Permission {
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite,
 			PermFileSyncRead, PermFileSyncWrite,
+			PermSettingsRead,
 		}
 	default:
 		return nil

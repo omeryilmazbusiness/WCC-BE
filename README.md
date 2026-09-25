@@ -356,6 +356,42 @@ Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supp
 - Platform DB remains authoritative on sync; conflict policy applied via pure domain `ResolveConflict` / `ApplySampleRows`
 - Cloud + external adapters are stubs (no live network in MVP)
 
+## Epic 17 Cross-Cutting Hardening & Definition of Done
+
+| Task | Status |
+|------|--------|
+| T-208 E2E workflow contract (inbound→report) | Done |
+| T-209 Idempotency key contract + task replay tests | Done |
+| T-210 Permission matrix + AI leakage tests | Done |
+| T-211 Backup/restore + secrets verification docs | Done |
+| T-212 Perf indexes + pagination guarantees | Done |
+| T-213–T-216 FE RTL / mobile / acceptance / state polish | Done (FE) |
+| T-217 Acceptance gate checklist | Done |
+
+- Domain: `internal/domain/hardening` (pure workflow + idempotency; DIP-friendly)
+- Migration: `00020_epic17_hardening.sql` (list/dashboard composite indexes)
+- Docs: `docs/BACKUP_RESTORE.md`, `docs/SECRETS.md`, `docs/ACCEPTANCE_GATE.md`
+- Tests: `go test ./internal/domain/hardening/...` · expanded `rbac_test.go` · paging clamps
+
+## Epic 18 %100 Gap Closure
+
+| Task | Status |
+|------|--------|
+| T-218 Integrations accounts list (webhook_url + public_meta, secrets stripped) | Done |
+| T-219–T-227 Admin settings (SLA, escalation merge, lost reasons, templates, fields, thresholds) | Done |
+| T-228–T-229 Rooming + group list / CSV | Done |
+| T-230 Dashboard KPI booked/collected/margin amounts | Done |
+| T-231–T-232 Suggest / confirm next task (idempotent; never auto-create) | Done |
+| T-233 Global search (customer/lead/booking/passport ILIKE) | Done |
+| T-234 Events catalog | Done |
+| T-235 Supplier issue history | Done |
+| Settings / rooming / search FE surfaces | Done (FE) |
+
+- Migration: `00021_epic18_gap_closure.sql` (escalation overlays, lost reasons, templates, field configs, thresholds, rooms, supplier issues)
+- Domain: `adminconfig`, `rooming`, `search`, `task.SuggestNextTask`, `supplier.IssueEvent`
+- Routes: `/v1/settings/*`, `/v1/events/catalog`, `/v1/search`, `/v1/departures/{id}/rooms|group-list`, `/v1/conversations/{id}/suggest-next-task|confirm-next-task`, `/v1/suppliers/{id}/issues`, `/v1/integrations/accounts`
+- Permissions: `settings.read` / `settings.write` (GM/Admin/Manager write; Operations+Finance read)
+
 ## Design notes
 
 - **ACID**: application services wrap multi-table writes in `tx.Manager.WithinTransaction` (payment ledger + booking balance; lead create + stage history).
