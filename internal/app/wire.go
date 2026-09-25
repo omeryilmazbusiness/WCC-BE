@@ -29,6 +29,7 @@ import (
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
 	visahttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/visa"
 	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
+	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/email"
@@ -52,6 +53,7 @@ import (
 	pkgpg "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/tourpackage"
 	pgvisa "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/visa"
 	pgnotification "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/notification"
+	pgreport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/report"
 	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/queue"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/storage"
@@ -72,6 +74,7 @@ import (
 	appuser "github.com/wodi-crm/wodi-crm-be/internal/app/useradmin"
 	appvisa "github.com/wodi-crm/wodi-crm-be/internal/app/visa"
 	appnotification "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
+	appreport "github.com/wodi-crm/wodi-crm-be/internal/app/report"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
@@ -161,6 +164,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	notifSvc.SetExternal(appnotification.LogExternal{Log: log})
 	notifReactor := appnotification.NewReactor(notifSvc)
 	notifReactor.Register(bus)
+	reportRepo := pgreport.NewRepository(pool)
+	reportSvc := appreport.NewService(reportRepo)
 	inboxSvc := appinbox.NewService(inboxRepo, providers, txm, bus)
 	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
 	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
@@ -199,6 +204,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Inbox:     inboxhttp.Handler{Svc: inboxSvc},
 		Import:    importhttp.Handler{Svc: importSvc},
 		Notification: notificationhttp.Handler{Svc: notifSvc},
+		Report:       reporthttp.Handler{Svc: reportSvc},
 		Webhook: webhookhttp.Handler{
 			Svc:             inboxSvc,
 			DefaultBranchID: uuid.MustParse("11111111-1111-1111-1111-111111111111"),

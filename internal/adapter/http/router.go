@@ -28,6 +28,7 @@ import (
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
 	visahttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/visa"
 	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
+	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -54,6 +55,7 @@ type Handlers struct {
 	Inbox     inboxhttp.Handler
 	Import       importhttp.Handler
 	Notification notificationhttp.Handler
+	Report       reporthttp.Handler
 	Webhook      webhookhttp.Handler
 }
 
@@ -320,6 +322,17 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermNotificationsManage)).Post("/emit", h.Notification.Emit)
 				r.With(middleware.RequirePermission(platformauth.PermNotificationsWrite)).Post("/{id}/acknowledge", h.Notification.Acknowledge)
 				r.With(middleware.RequirePermission(platformauth.PermNotificationsWrite)).Post("/{id}/resolve", h.Notification.Resolve)
+			})
+
+			r.Route("/reports", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/kinds", h.Report.Kinds)
+				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/sales", h.Report.Sales)
+				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/targets", h.Report.Targets)
+				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/readiness", h.Report.Readiness)
+				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/sla", h.Report.SLA)
+				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/finance", h.Report.Finance)
+				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/integrations", h.Report.Integrations)
+				r.With(middleware.RequirePermission(platformauth.PermReportsExport)).Get("/export", h.Report.Export)
 			})
 		})
 

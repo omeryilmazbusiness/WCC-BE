@@ -41,6 +41,8 @@ const (
 	PermNotificationsRead  Permission = "notifications.read"
 	PermNotificationsWrite Permission = "notifications.write"
 	PermNotificationsManage Permission = "notifications.manage"
+	PermReportsRead        Permission = "reports.read"
+	PermReportsExport      Permission = "reports.export"
 )
 
 const (
@@ -80,12 +82,14 @@ func PermissionsFor(role Role) []Permission {
 			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermIntegrationsWrite,
 			PermTargetsRead, PermTargetsWrite, PermImportsRead, PermImportsWrite,
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
+			PermReportsRead, PermReportsExport,
 		}
 	case RoleAdmin:
 		return []Permission{
 			PermUsersRead, PermUsersWrite, PermRolesRead, PermAuditRead, PermBranchesRead, PermOpsRead,
 			PermIntegrationsRead,
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
+			PermReportsRead, PermReportsExport,
 		}
 	case RoleManager:
 		return []Permission{
@@ -98,6 +102,7 @@ func PermissionsFor(role Role) []Permission {
 			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermIntegrationsWrite,
 			PermTargetsRead, PermTargetsWrite, PermImportsRead, PermImportsWrite,
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
+			PermReportsRead, PermReportsExport,
 		}
 	case RoleEmployee:
 		return []Permission{
@@ -106,6 +111,7 @@ func PermissionsFor(role Role) []Permission {
 			PermTasksRead, PermTasksWrite, PermPackagesRead,
 			PermInboxRead, PermInboxWrite, PermTargetsRead, PermImportsRead,
 			PermNotificationsRead, PermNotificationsWrite,
+			PermReportsRead,
 		}
 	case RoleFinance:
 		return []Permission{
@@ -113,6 +119,7 @@ func PermissionsFor(role Role) []Permission {
 			PermDocsRead, PermSuppliersRead,
 			PermTasksRead, PermTargetsRead, PermImportsRead, PermImportsWrite,
 			PermNotificationsRead, PermNotificationsWrite,
+			PermReportsRead, PermReportsExport,
 		}
 	case RoleOperations:
 		return []Permission{
@@ -122,6 +129,7 @@ func PermissionsFor(role Role) []Permission {
 			PermBookingsRead, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
 			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermImportsRead, PermImportsWrite,
 			PermNotificationsRead, PermNotificationsWrite,
+			PermReportsRead, PermReportsExport,
 		}
 	default:
 		return nil

@@ -298,6 +298,24 @@ Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supp
 - Groupable kinds upsert by `group_key` and bump `occurrence_count` (“12 conversations overdue”)
 - In-app is always on; email/push are opt-in stubs (`LogExternal`)
 
+## Epic 14 Reporting & Audit Completion
+
+| Task | Status |
+|------|--------|
+| T-180 Sales performance report API | Done |
+| T-181 Target performance report API | Done |
+| T-182 Operational readiness report API | Done |
+| T-183 Communication SLA report API | Done |
+| T-184 Finance report API | Done |
+| T-185 Integration log query API | Done |
+| T-186–T-188 FE reports hub / drill-down / export | Done (FE) |
+
+- `GET /v1/reports/kinds` · `GET /v1/reports/{sales|targets|readiness|sla|finance|integrations}`
+- `GET /v1/reports/export?kind=` (UTF-8 BOM CSV; sensitive kinds write `report_export_audits`)
+- Query: `from`/`to` (RFC3339 or YYYY-MM-DD), `owner_id`, `channel`, `provider`, `status`, `departure_id`, `limit`
+- Permissions: `reports.read` / `reports.export`
+- Domain owns kind matrix + CSV builder; postgres adapter aggregates; rows include `drilldowns` href hints
+
 ## Design notes
 
 - **ACID**: application services wrap multi-table writes in `tx.Manager.WithinTransaction` (payment ledger + booking balance; lead create + stage history).
