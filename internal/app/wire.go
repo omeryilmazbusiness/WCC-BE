@@ -32,12 +32,17 @@ import (
 	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	aihttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ai"
+	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
+	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/email"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/instagram"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/stub"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/whatsapp"
+	aiprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/ai"
+	filesyncprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/filesync"
+	extintadapter "github.com/wodi-crm/wodi-crm-be/internal/adapter/extint"
 	domaininbox "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	domainai "github.com/wodi-crm/wodi-crm-be/internal/domain/ai"
 	taskdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/task"
@@ -60,7 +65,8 @@ import (
 	pgnotification "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/notification"
 	pgreport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/report"
 	pgai "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/ai"
-	aiprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/ai"
+	pgfilesync "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/filesync"
+	pgextint "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/extint"
 	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/queue"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/storage"
@@ -83,6 +89,8 @@ import (
 	appnotification "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
 	appreport "github.com/wodi-crm/wodi-crm-be/internal/app/report"
 	appai "github.com/wodi-crm/wodi-crm-be/internal/app/ai"
+	appfilesync "github.com/wodi-crm/wodi-crm-be/internal/app/filesync"
+	appextint "github.com/wodi-crm/wodi-crm-be/internal/app/extint"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
@@ -186,6 +194,15 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	aiSvc.SetConversationReader(aiInboxBridge{repo: inboxRepo})
 	aiSvc.SetLeadReader(aiLeadBridge{repo: leadRepo, tasks: taskRepo})
 	aiSvc.SetTargetReader(aiTargetBridge{svc: targetSvc})
+	fileSyncRepo := pgfilesync.NewRepository(pool)
+	fileSyncReg := filesyncprovider.NewRegistry(
+		filesyncprovider.NewOneDrive(),
+		filesyncprovider.NewSharePoint(),
+	)
+	fileSyncSvc := appfilesync.NewService(fileSyncRepo, fileSyncReg)
+	extIntRepo := pgextint.NewRepository(pool)
+	extIntReg := extintadapter.DefaultRegistry()
+	extIntSvc := appextint.NewService(extIntRepo, extIntReg, extintadapter.Catalog())
 	inboxSvc := appinbox.NewService(inboxRepo, providers, txm, bus)
 	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
 	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
@@ -226,6 +243,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Notification: notificationhttp.Handler{Svc: notifSvc},
 		Report:       reporthttp.Handler{Svc: reportSvc},
 		AI:           aihttp.Handler{Svc: aiSvc},
+		FileSync:     filesynchttp.Handler{Svc: fileSyncSvc},
+		ExtInt:       extinthttp.Handler{Svc: extIntSvc},
 		Webhook: webhookhttp.Handler{
 			Svc:             inboxSvc,
 			DefaultBranchID: uuid.MustParse("11111111-1111-1111-1111-111111111111"),

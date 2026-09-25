@@ -233,3 +233,151 @@ func (r *Repository) ListOversold(ctx context.Context, branchID uuid.UUID, limit
 	defer rows.Close()
 	return scanLinks(rows)
 }
+
+func (r *Repository) CreateInvoice(ctx context.Context, inv *domain.Invoice) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	_, err := q.Exec(ctx, `
+		INSERT INTO supplier_invoices (
+			id, branch_id, supplier_id, invoice_number, status, currency,
+			subtotal, tax_total, grand_total, issued_on, due_on, paid_at,
+			notes, created_by, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		inv.ID, inv.BranchID, inv.SupplierID, inv.InvoiceNumber, string(inv.Status), inv.Currency,
+		inv.Subtotal, inv.TaxTotal, inv.GrandTotal, inv.IssuedOn, inv.DueOn, inv.PaidAt,
+		inv.Notes, inv.CreatedBy, inv.CreatedAt, inv.UpdatedAt,
+	)
+	return err
+}
+
+func (r *Repository) UpdateInvoice(ctx context.Context, inv *domain.Invoice) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	ct, err := q.Exec(ctx, `
+		UPDATE supplier_invoices SET
+			invoice_number=$2, status=$3, currency=$4, subtotal=$5, tax_total=$6, grand_total=$7,
+			issued_on=$8, due_on=$9, paid_at=$10, notes=$11, updated_at=$12
+		WHERE id=$1`,
+		inv.ID, inv.InvoiceNumber, string(inv.Status), inv.Currency,
+		inv.Subtotal, inv.TaxTotal, inv.GrandTotal, inv.IssuedOn, inv.DueOn, inv.PaidAt,
+		inv.Notes, inv.UpdatedAt,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("%w", pgx.ErrNoRows)
+	}
+	return nil
+}
+
+func (r *Repository) FindInvoiceByID(ctx context.Context, id uuid.UUID) (*domain.Invoice, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	row := q.QueryRow(ctx, `
+		SELECT id, branch_id, supplier_id, invoice_number, status, currency,
+			subtotal, tax_total, grand_total, issued_on, due_on, paid_at,
+			notes, created_by, created_at, updated_at
+		FROM supplier_invoices WHERE id=$1`, id)
+	inv, err := scanInvoice(row)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
+	}
+	return inv, err
+}
+
+func (r *Repository) ListInvoices(ctx context.Context, branchID uuid.UUID, supplierID *uuid.UUID, status *domain.InvoiceStatus, limit int) ([]domain.Invoice, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	q := tx.QuerierFrom(ctx, r.pool)
+	statusStr := ""
+	if status != nil {
+		statusStr = string(*status)
+	}
+	rows, err := q.Query(ctx, `
+		SELECT id, branch_id, supplier_id, invoice_number, status, currency,
+			subtotal, tax_total, grand_total, issued_on, due_on, paid_at,
+			notes, created_by, created_at, updated_at
+		FROM supplier_invoices
+		WHERE branch_id=$1
+			AND ($2::uuid IS NULL OR supplier_id=$2)
+			AND ($3 = '' OR status=$3)
+		ORDER BY created_at DESC
+		LIMIT $4`, branchID, supplierID, statusStr, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Invoice
+	for rows.Next() {
+		inv, err := scanInvoice(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *inv)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) ReplaceInvoiceLines(ctx context.Context, invoiceID uuid.UUID, lines []domain.InvoiceLine) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	if _, err := q.Exec(ctx, `DELETE FROM supplier_invoice_lines WHERE invoice_id=$1`, invoiceID); err != nil {
+		return err
+	}
+	for i := range lines {
+		l := &lines[i]
+		if l.ID == uuid.Nil {
+			l.ID = uuid.New()
+		}
+		l.InvoiceID = invoiceID
+		if _, err := q.Exec(ctx, `
+			INSERT INTO supplier_invoice_lines (
+				id, invoice_id, link_id, description, quantity, unit_cost, line_total, sort_order, created_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			l.ID, l.InvoiceID, l.LinkID, l.Description, l.Quantity, l.UnitCost, l.LineTotal, l.SortOrder, l.CreatedAt,
+		); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Repository) ListInvoiceLines(ctx context.Context, invoiceID uuid.UUID) ([]domain.InvoiceLine, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	rows, err := q.Query(ctx, `
+		SELECT id, invoice_id, link_id, description, quantity, unit_cost, line_total, sort_order, created_at
+		FROM supplier_invoice_lines
+		WHERE invoice_id=$1
+		ORDER BY sort_order, created_at`, invoiceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.InvoiceLine
+	for rows.Next() {
+		var l domain.InvoiceLine
+		if err := rows.Scan(
+			&l.ID, &l.InvoiceID, &l.LinkID, &l.Description, &l.Quantity, &l.UnitCost,
+			&l.LineTotal, &l.SortOrder, &l.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+func scanInvoice(row interface {
+	Scan(dest ...any) error
+}) (*domain.Invoice, error) {
+	var inv domain.Invoice
+	var status string
+	err := row.Scan(
+		&inv.ID, &inv.BranchID, &inv.SupplierID, &inv.InvoiceNumber, &status, &inv.Currency,
+		&inv.Subtotal, &inv.TaxTotal, &inv.GrandTotal, &inv.IssuedOn, &inv.DueOn, &inv.PaidAt,
+		&inv.Notes, &inv.CreatedBy, &inv.CreatedAt, &inv.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	inv.Status = domain.InvoiceStatus(status)
+	return &inv, nil
+}

@@ -249,3 +249,195 @@ func (h Handler) ProcessUnconfirmedReminders(w http.ResponseWriter, r *http.Requ
 	}
 	response.JSON(w, http.StatusOK, map[string]any{"reminders_sent": n})
 }
+
+func mapInvoice(inv *domain.Invoice) map[string]any {
+	m := map[string]any{
+		"id": inv.ID, "branch_id": inv.BranchID, "supplier_id": inv.SupplierID,
+		"invoice_number": inv.InvoiceNumber, "status": inv.Status, "currency": inv.Currency,
+		"subtotal": inv.Subtotal, "tax_total": inv.TaxTotal, "grand_total": inv.GrandTotal,
+		"notes": inv.Notes,
+		"created_at": inv.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"updated_at": inv.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	if inv.IssuedOn != nil {
+		m["issued_on"] = inv.IssuedOn.UTC().Format("2006-01-02")
+	}
+	if inv.DueOn != nil {
+		m["due_on"] = inv.DueOn.UTC().Format("2006-01-02")
+	}
+	if inv.PaidAt != nil {
+		m["paid_at"] = inv.PaidAt.UTC().Format(time.RFC3339Nano)
+	}
+	if inv.CreatedBy != nil {
+		m["created_by"] = inv.CreatedBy
+	}
+	if inv.Lines != nil {
+		lines := make([]map[string]any, 0, len(inv.Lines))
+		for i := range inv.Lines {
+			l := &inv.Lines[i]
+			lm := map[string]any{
+				"id": l.ID, "invoice_id": l.InvoiceID, "description": l.Description,
+				"quantity": l.Quantity, "unit_cost": l.UnitCost, "line_total": l.LineTotal,
+				"sort_order": l.SortOrder,
+				"created_at": l.CreatedAt.UTC().Format(time.RFC3339Nano),
+			}
+			if l.LinkID != nil {
+				lm["link_id"] = l.LinkID
+			}
+			lines = append(lines, lm)
+		}
+		m["lines"] = lines
+	}
+	return m
+}
+
+func (h Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	var supplierID *uuid.UUID
+	if q := r.URL.Query().Get("supplier_id"); q != "" {
+		id, err := uuid.Parse(q)
+		if err != nil {
+			response.Error(w, shared.NewValidation("invalid supplier_id"))
+			return
+		}
+		supplierID = &id
+	}
+	var status *domain.InvoiceStatus
+	if q := r.URL.Query().Get("status"); q != "" {
+		st := domain.InvoiceStatus(q)
+		if !domain.ValidInvoiceStatus(st) {
+			response.Error(w, shared.NewValidation("invalid status"))
+			return
+		}
+		status = &st
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := h.Svc.ListInvoices(r.Context(), claims.BranchID, supplierID, status, limit)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(items))
+	for i := range items {
+		out = append(out, mapInvoice(&items[i]))
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+func (h Handler) ListSupplierInvoices(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	sid, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := h.Svc.ListInvoices(r.Context(), claims.BranchID, &sid, nil, limit)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(items))
+	for i := range items {
+		out = append(out, mapInvoice(&items[i]))
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+func (h Handler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	var body appsvc.CreateInvoiceInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	body.BranchID = claims.BranchID
+	body.ActorID = claims.UserID
+	inv, err := h.Svc.CreateInvoice(r.Context(), body)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusCreated, mapInvoice(inv))
+}
+
+func (h Handler) GetInvoice(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	inv, err := h.Svc.GetInvoice(r.Context(), claims.BranchID, id)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, mapInvoice(inv))
+}
+
+func (h Handler) UpdateInvoiceStatus(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	inv, err := h.Svc.UpdateInvoiceStatus(r.Context(), claims.BranchID, id, domain.InvoiceStatus(body.Status))
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, mapInvoice(inv))
+}
+
+func (h Handler) SetInvoiceLines(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	var body []appsvc.SetInvoiceLinesInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	inv, err := h.Svc.SetInvoiceLines(r.Context(), claims.BranchID, id, body)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, mapInvoice(inv))
+}

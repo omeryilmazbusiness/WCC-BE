@@ -46,6 +46,8 @@ const (
 	PermAIRead             Permission = "ai.read"
 	PermAIWrite            Permission = "ai.write"
 	PermAISetup            Permission = "ai.setup"
+	PermFileSyncRead       Permission = "filesync.read"
+	PermFileSyncWrite      Permission = "filesync.write"
 )
 
 const (
@@ -87,14 +89,16 @@ func PermissionsFor(role Role) []Permission {
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite, PermAISetup,
+			PermFileSyncRead, PermFileSyncWrite,
 		}
 	case RoleAdmin:
 		return []Permission{
 			PermUsersRead, PermUsersWrite, PermRolesRead, PermAuditRead, PermBranchesRead, PermOpsRead,
-			PermIntegrationsRead,
+			PermIntegrationsRead, PermIntegrationsWrite,
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite, PermAISetup,
+			PermFileSyncRead, PermFileSyncWrite,
 		}
 	case RoleManager:
 		return []Permission{
@@ -109,6 +113,7 @@ func PermissionsFor(role Role) []Permission {
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite, PermAISetup,
+			PermFileSyncRead, PermFileSyncWrite,
 		}
 	case RoleEmployee:
 		return []Permission{
@@ -119,6 +124,7 @@ func PermissionsFor(role Role) []Permission {
 			PermNotificationsRead, PermNotificationsWrite,
 			PermReportsRead,
 			PermAIRead, PermAIWrite,
+			PermFileSyncRead,
 		}
 	case RoleFinance:
 		return []Permission{
@@ -128,6 +134,7 @@ func PermissionsFor(role Role) []Permission {
 			PermNotificationsRead, PermNotificationsWrite,
 			PermReportsRead, PermReportsExport,
 			PermAIRead,
+			PermFileSyncRead,
 		}
 	case RoleOperations:
 		return []Permission{
@@ -139,6 +146,7 @@ func PermissionsFor(role Role) []Permission {
 			PermNotificationsRead, PermNotificationsWrite,
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite,
+			PermFileSyncRead, PermFileSyncWrite,
 		}
 	default:
 		return nil

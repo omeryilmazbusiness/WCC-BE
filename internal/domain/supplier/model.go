@@ -130,4 +130,11 @@ type Repository interface {
 	ListLinksBySupplier(ctx context.Context, supplierID uuid.UUID) ([]Link, error)
 	ListUnconfirmed(ctx context.Context, branchID uuid.UUID, limit int) ([]Link, error)
 	ListOversold(ctx context.Context, branchID uuid.UUID, limit int) ([]Link, error)
+
+	CreateInvoice(ctx context.Context, inv *Invoice) error
+	UpdateInvoice(ctx context.Context, inv *Invoice) error
+	FindInvoiceByID(ctx context.Context, id uuid.UUID) (*Invoice, error)
+	ListInvoices(ctx context.Context, branchID uuid.UUID, supplierID *uuid.UUID, status *InvoiceStatus, limit int) ([]Invoice, error)
+	ReplaceInvoiceLines(ctx context.Context, invoiceID uuid.UUID, lines []InvoiceLine) error
+	ListInvoiceLines(ctx context.Context, invoiceID uuid.UUID) ([]InvoiceLine, error)
 }

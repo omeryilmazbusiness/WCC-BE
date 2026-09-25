@@ -30,6 +30,8 @@ import (
 	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	aihttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ai"
+	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
+	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -58,6 +60,8 @@ type Handlers struct {
 	Notification notificationhttp.Handler
 	Report       reporthttp.Handler
 	AI           aihttp.Handler
+	FileSync     filesynchttp.Handler
+	ExtInt       extinthttp.Handler
 	Webhook      webhookhttp.Handler
 }
 
@@ -252,8 +256,14 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/unconfirmed", h.Supplier.ListUnconfirmed)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/oversold", h.Supplier.ListOversold)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/reminders/unconfirmed", h.Supplier.ProcessUnconfirmedReminders)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/invoices", h.Supplier.ListInvoices)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/invoices", h.Supplier.CreateInvoice)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/invoices/{id}", h.Supplier.GetInvoice)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Patch("/invoices/{id}", h.Supplier.UpdateInvoiceStatus)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Put("/invoices/{id}/lines", h.Supplier.SetInvoiceLines)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/{id}", h.Supplier.Get)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Patch("/{id}", h.Supplier.Update)
+				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/{id}/invoices", h.Supplier.ListSupplierInvoices)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/{id}/links", h.Supplier.ListLinks)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/{id}/links", h.Supplier.Link)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Delete("/{id}/links/{linkId}", h.Supplier.Unlink)
@@ -348,6 +358,27 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Get("/targets/{id}/insight", h.AI.TargetInsight)
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/ocr", h.AI.OCRExtract)
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/runs/{id}/feedback", h.AI.Feedback)
+			})
+
+			r.Route("/file-sync", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermFileSyncRead)).Get("/connections", h.FileSync.List)
+				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Post("/connections", h.FileSync.Create)
+				r.With(middleware.RequirePermission(platformauth.PermFileSyncRead)).Get("/connections/{id}", h.FileSync.Get)
+				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Patch("/connections/{id}", h.FileSync.Update)
+				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Delete("/connections/{id}", h.FileSync.Delete)
+				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Post("/connections/{id}/connect", h.FileSync.Connect)
+				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Post("/connections/{id}/sync", h.FileSync.Sync)
+				r.With(middleware.RequirePermission(platformauth.PermFileSyncRead)).Get("/runs", h.FileSync.ListRuns)
+			})
+
+			r.Route("/external-integrations", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermIntegrationsRead)).Get("/catalog", h.ExtInt.Catalog)
+				r.With(middleware.RequirePermission(platformauth.PermIntegrationsRead)).Get("/", h.ExtInt.List)
+				r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).Post("/", h.ExtInt.Enable)
+				r.With(middleware.RequirePermission(platformauth.PermIntegrationsRead)).Get("/{id}", h.ExtInt.Get)
+				r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).Patch("/{id}", h.ExtInt.Patch)
+				r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).Delete("/{id}", h.ExtInt.Delete)
+				r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).Post("/{id}/probe", h.ExtInt.Probe)
 			})
 		})
 

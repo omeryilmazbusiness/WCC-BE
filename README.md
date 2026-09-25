@@ -337,6 +337,25 @@ Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supp
 - Providers in `adapter/ai` (OCP); domain scoring pure; runs stored in `ai_runs`
 - Without a key, summaries/insights fall back to deterministic rules (`source=deterministic`)
 
+## Epic 16 P2 Advanced Extensions
+
+| Task | Status |
+|------|--------|
+| T-202 Connected Excel sync (OneDrive / SharePoint) | Done |
+| T-203 Advanced supplier invoice / cost tracking | Done |
+| T-204 External accounting / GDS / payment stubs | Done |
+| T-205 File sync FE surfaces | Done (FE) |
+| T-206 Supplier invoice FE | Done (FE) |
+| T-207 External integrations FE | Done (FE) |
+
+- `GET/POST /v1/file-sync/connections` · `GET/PATCH/DELETE /v1/file-sync/connections/{id}`
+- `POST /v1/file-sync/connections/{id}/connect` · `POST /v1/file-sync/connections/{id}/sync` · `GET /v1/file-sync/runs`
+- `GET/POST /v1/suppliers/invoices` · `GET/PATCH /v1/suppliers/invoices/{id}` · `PUT /v1/suppliers/invoices/{id}/lines` · `GET /v1/suppliers/{id}/invoices`
+- `GET /v1/external-integrations/catalog` · `GET/POST /v1/external-integrations` · `GET/PATCH/DELETE /v1/external-integrations/{id}` · `POST .../probe`
+- Permissions: `filesync.read` / `filesync.write`; extint reuses `integrations.read` / `integrations.write`; invoices reuse `suppliers.*`
+- Platform DB remains authoritative on sync; conflict policy applied via pure domain `ResolveConflict` / `ApplySampleRows`
+- Cloud + external adapters are stubs (no live network in MVP)
+
 ## Design notes
 
 - **ACID**: application services wrap multi-table writes in `tx.Manager.WithinTransaction` (payment ledger + booking balance; lead create + stage history).

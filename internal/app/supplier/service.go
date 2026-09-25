@@ -206,3 +206,146 @@ func (s *Service) ProcessUnconfirmedReminders(ctx context.Context, branchID uuid
 	}
 	return n, nil
 }
+
+// --- Epic 16 supplier invoices ---
+
+type CreateInvoiceInput struct {
+	BranchID      uuid.UUID `json:"-"`
+	ActorID       uuid.UUID `json:"-"`
+	SupplierID    uuid.UUID `json:"supplier_id"`
+	InvoiceNumber string    `json:"invoice_number"`
+	Currency      string    `json:"currency"`
+	TaxTotal      int64     `json:"tax_total"`
+	IssuedOn      *time.Time `json:"issued_on"`
+	DueOn         *time.Time `json:"due_on"`
+	Notes         string    `json:"notes"`
+}
+
+type SetInvoiceLinesInput struct {
+	Description string     `json:"description"`
+	LinkID      *uuid.UUID `json:"link_id"`
+	Quantity    int        `json:"quantity"`
+	UnitCost    int64      `json:"unit_cost"`
+}
+
+type UpdateInvoiceStatusInput struct {
+	Status domain.InvoiceStatus `json:"status"`
+}
+
+func (s *Service) CreateInvoice(ctx context.Context, in CreateInvoiceInput) (*domain.Invoice, error) {
+	if in.BranchID == uuid.Nil {
+		return nil, shared.NewValidation("branch_id is required")
+	}
+	sup, err := s.repo.FindByID(ctx, in.SupplierID)
+	if err != nil {
+		return nil, shared.NewNotFound("supplier")
+	}
+	if sup.BranchID != in.BranchID {
+		return nil, shared.NewForbidden("supplier branch mismatch")
+	}
+	now := time.Now().UTC()
+	actor := in.ActorID
+	inv := &domain.Invoice{
+		ID: uuid.New(), BranchID: in.BranchID, SupplierID: in.SupplierID,
+		InvoiceNumber: in.InvoiceNumber, Status: domain.InvoiceDraft,
+		Currency: in.Currency, TaxTotal: in.TaxTotal,
+		IssuedOn: in.IssuedOn, DueOn: in.DueOn, Notes: in.Notes,
+		CreatedBy: &actor, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := inv.Normalize(); err != nil {
+		return nil, err
+	}
+	inv.RecalcTotals()
+	if err := s.repo.CreateInvoice(ctx, inv); err != nil {
+		return nil, err
+	}
+	return inv, nil
+}
+
+func (s *Service) GetInvoice(ctx context.Context, branchID, id uuid.UUID) (*domain.Invoice, error) {
+	inv, err := s.repo.FindInvoiceByID(ctx, id)
+	if err != nil {
+		return nil, shared.NewNotFound("supplier_invoice")
+	}
+	if inv.BranchID != branchID {
+		return nil, shared.NewForbidden("invoice branch mismatch")
+	}
+	lines, err := s.repo.ListInvoiceLines(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	inv.Lines = lines
+	return inv, nil
+}
+
+func (s *Service) ListInvoices(ctx context.Context, branchID uuid.UUID, supplierID *uuid.UUID, status *domain.InvoiceStatus, limit int) ([]domain.Invoice, error) {
+	return s.repo.ListInvoices(ctx, branchID, supplierID, status, limit)
+}
+
+func (s *Service) UpdateInvoiceStatus(ctx context.Context, branchID, id uuid.UUID, to domain.InvoiceStatus) (*domain.Invoice, error) {
+	inv, err := s.repo.FindInvoiceByID(ctx, id)
+	if err != nil {
+		return nil, shared.NewNotFound("supplier_invoice")
+	}
+	if inv.BranchID != branchID {
+		return nil, shared.NewForbidden("invoice branch mismatch")
+	}
+	if !domain.ValidInvoiceStatus(to) {
+		return nil, shared.NewValidation("invalid status")
+	}
+	if !domain.CanTransition(inv.Status, to) {
+		return nil, shared.NewInvalidState("invalid invoice status transition")
+	}
+	now := time.Now().UTC()
+	inv.Status = to
+	if to == domain.InvoicePaid {
+		inv.PaidAt = &now
+	}
+	inv.UpdatedAt = now
+	if err := s.repo.UpdateInvoice(ctx, inv); err != nil {
+		return nil, err
+	}
+	lines, _ := s.repo.ListInvoiceLines(ctx, id)
+	inv.Lines = lines
+	return inv, nil
+}
+
+func (s *Service) SetInvoiceLines(ctx context.Context, branchID, id uuid.UUID, inputs []SetInvoiceLinesInput) (*domain.Invoice, error) {
+	inv, err := s.repo.FindInvoiceByID(ctx, id)
+	if err != nil {
+		return nil, shared.NewNotFound("supplier_invoice")
+	}
+	if inv.BranchID != branchID {
+		return nil, shared.NewForbidden("invoice branch mismatch")
+	}
+	if inv.Status != domain.InvoiceDraft && inv.Status != domain.InvoiceSubmitted {
+		return nil, shared.NewInvalidState("lines can only be edited in draft or submitted")
+	}
+	now := time.Now().UTC()
+	lines := make([]domain.InvoiceLine, 0, len(inputs))
+	for i, in := range inputs {
+		q := in.Quantity
+		if q <= 0 {
+			q = 1
+		}
+		lines = append(lines, domain.InvoiceLine{
+			ID: uuid.New(), InvoiceID: id, LinkID: in.LinkID,
+			Description: strings.TrimSpace(in.Description),
+			Quantity: q, UnitCost: in.UnitCost, SortOrder: i, CreatedAt: now,
+		})
+	}
+	inv.Lines = lines
+	inv.RecalcTotals()
+	inv.UpdatedAt = now
+
+	err = s.tx.WithinTransaction(ctx, func(txCtx context.Context) error {
+		if err := s.repo.ReplaceInvoiceLines(txCtx, id, inv.Lines); err != nil {
+			return err
+		}
+		return s.repo.UpdateInvoice(txCtx, inv)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return inv, nil
+}
