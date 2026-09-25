@@ -246,7 +246,7 @@ func (s *Service) EscalateOverdue(ctx context.Context, branchID uuid.UUID) (int,
 		return 0, err
 	}
 	now := time.Now().UTC()
-	n := 0
+	var escalated []domain.Task
 	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		for i := range items {
 			t := items[i]
@@ -257,11 +257,18 @@ func (s *Service) EscalateOverdue(ctx context.Context, branchID uuid.UUID) (int,
 			if err := s.repo.Update(ctx, &t); err != nil {
 				return err
 			}
-			n++
+			escalated = append(escalated, t)
 		}
 		return nil
 	})
-	return n, err
+	if err != nil {
+		return 0, err
+	}
+	for i := range escalated {
+		cp := escalated[i]
+		s.bus.Publish(ctx, events.Event{Name: events.TaskEscalated, Payload: &cp})
+	}
+	return len(escalated), nil
 }
 
 // Seeder listens to domain events and creates tasks idempotently (T-075/T-076).

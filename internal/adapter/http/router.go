@@ -27,6 +27,7 @@ import (
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
 	visahttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/visa"
+	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -51,8 +52,9 @@ type Handlers struct {
 	Package   pkghttp.Handler
 	Ops       opshttp.Handler
 	Inbox     inboxhttp.Handler
-	Import    importhttp.Handler
-	Webhook   webhookhttp.Handler
+	Import       importhttp.Handler
+	Notification notificationhttp.Handler
+	Webhook      webhookhttp.Handler
 }
 
 func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers) http.Handler {
@@ -306,6 +308,19 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 			})
 			r.With(middleware.RequirePermission(platformauth.PermImportsWrite)).Post("/exports", h.Import.Export)
 			r.With(middleware.RequirePermission(platformauth.PermImportsRead)).Get("/exports/schemas", h.Import.Schemas)
+
+			r.Route("/notifications", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsRead)).Get("/", h.Notification.List)
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsRead)).Get("/unread-count", h.Notification.UnreadCount)
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsRead)).Get("/preferences", h.Notification.GetPreferences)
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsWrite)).Put("/preferences", h.Notification.UpdatePreferences)
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsRead)).Get("/rules", h.Notification.Rules)
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsWrite)).Post("/ack-all", h.Notification.AcknowledgeAll)
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsManage)).Post("/escalate", h.Notification.ProcessEscalations)
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsManage)).Post("/emit", h.Notification.Emit)
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsWrite)).Post("/{id}/acknowledge", h.Notification.Acknowledge)
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsWrite)).Post("/{id}/resolve", h.Notification.Resolve)
+			})
 		})
 
 		// Provider webhooks — signature verification added when live credentials land.

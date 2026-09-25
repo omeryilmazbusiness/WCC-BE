@@ -67,4 +67,5 @@ const (
 	ConversationAssigned  = "inbox.conversation_assigned"
 	ConversationResolved  = "inbox.conversation_resolved"
 	SLABreached           = "inbox.sla_breached"
+	TaskEscalated         = "task.escalated"
 )

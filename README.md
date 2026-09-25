@@ -280,6 +280,24 @@ Domain status machines stay pure (`document` / `visa` / `supplier`); HTTP/app/ad
 
 Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supplier `IsOversold` when `allotment>0 && sold>allotment`. Booking readiness blocks on unapproved policy docs unless an override is active.
 
+## Epic 13 Notifications & Escalation
+
+| Task | Status |
+|------|--------|
+| T-173 In-app notification domain (mandatory channel) | Done |
+| T-174 Escalation rules matrix (message/lead/task/payment/doc/target/integration) | Done |
+| T-175 Alert acknowledge/resolve + high-volume grouping | Done |
+| T-176 Optional external email/push toggles | Done |
+| T-177–T-179 FE notification center / ack-resolve / prefs | Done (FE) |
+
+- `GET /v1/notifications` · `GET .../unread-count` · `POST .../{id}/acknowledge|resolve` · `POST .../ack-all`
+- `GET|PUT /v1/notifications/preferences` · `GET /v1/notifications/rules`
+- `POST /v1/notifications/escalate` · `POST /v1/notifications/emit` (manage)
+- Permissions: `notifications.read|write|manage`
+- Domain matrix is pure (`domain/notification` MatchRule / ShouldEscalate / BuildGroupKey); reactors subscribe to SLA / booking / task events
+- Groupable kinds upsert by `group_key` and bump `occurrence_count` (“12 conversations overdue”)
+- In-app is always on; email/push are opt-in stubs (`LogExternal`)
+
 ## Design notes
 
 - **ACID**: application services wrap multi-table writes in `tx.Manager.WithinTransaction` (payment ledger + booking balance; lead create + stage history).

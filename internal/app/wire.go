@@ -28,6 +28,7 @@ import (
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
 	visahttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/visa"
+	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/email"
@@ -35,6 +36,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/stub"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/whatsapp"
 	domaininbox "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
 	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgbooking "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/booking"
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
@@ -49,6 +51,7 @@ import (
 	pgtask "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/task"
 	pkgpg "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/tourpackage"
 	pgvisa "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/visa"
+	pgnotification "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/notification"
 	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/queue"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/storage"
@@ -68,6 +71,7 @@ import (
 	apppkg "github.com/wodi-crm/wodi-crm-be/internal/app/tourpackage"
 	appuser "github.com/wodi-crm/wodi-crm-be/internal/app/useradmin"
 	appvisa "github.com/wodi-crm/wodi-crm-be/internal/app/visa"
+	appnotification "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
@@ -151,6 +155,12 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	visaSvc := appvisa.NewService(visaRepo, txm)
 	supplierSvc := appsupplier.NewService(supplierRepo, txm)
 	supplierSvc.SetEnqueuer(q)
+	notifRepo := pgnotification.NewRepository(pool)
+	notifSvc := appnotification.NewService(notifRepo, txm, log)
+	notifSvc.SetUserDirectory(identityDirectory{repo: identityRepo})
+	notifSvc.SetExternal(appnotification.LogExternal{Log: log})
+	notifReactor := appnotification.NewReactor(notifSvc)
+	notifReactor.Register(bus)
 	inboxSvc := appinbox.NewService(inboxRepo, providers, txm, bus)
 	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
 	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
@@ -188,6 +198,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Ops:       opshttp.Handler{Queue: q},
 		Inbox:     inboxhttp.Handler{Svc: inboxSvc},
 		Import:    importhttp.Handler{Svc: importSvc},
+		Notification: notificationhttp.Handler{Svc: notifSvc},
 		Webhook: webhookhttp.Handler{
 			Svc:             inboxSvc,
 			DefaultBranchID: uuid.MustParse("11111111-1111-1111-1111-111111111111"),
@@ -312,4 +323,40 @@ func (b inboxLeadBridge) CreateShell(ctx context.Context, in appinbox.LeadShellI
 		return uuid.Nil, err
 	}
 	return l.ID, nil
+}
+
+// identityDirectory adapts identity repo to notification.UserDirectory (DIP).
+type identityDirectory struct {
+	repo *pgidentity.Repository
+}
+
+func (d identityDirectory) ListActiveByRoles(ctx context.Context, branchID uuid.UUID, roles []string) ([]appnotification.UserRef, error) {
+	active := true
+	seen := map[uuid.UUID]struct{}{}
+	var out []appnotification.UserRef
+	for _, role := range roles {
+		r := platformauth.Role(role)
+		users, _, err := d.repo.ListUsers(ctx, identity.UserFilter{
+			BranchID: &branchID, Role: &r, Active: &active, Limit: 100,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range users {
+			if _, ok := seen[u.ID]; ok {
+				continue
+			}
+			seen[u.ID] = struct{}{}
+			out = append(out, appnotification.UserRef{ID: u.ID, Email: u.Email, Role: string(u.Role)})
+		}
+	}
+	return out, nil
+}
+
+func (d identityDirectory) FindByID(ctx context.Context, id uuid.UUID) (*appnotification.UserRef, error) {
+	u, err := d.repo.FindUserByID(ctx, id)
+	if err != nil || u == nil {
+		return nil, err
+	}
+	return &appnotification.UserRef{ID: u.ID, Email: u.Email, Role: string(u.Role)}, nil
 }
