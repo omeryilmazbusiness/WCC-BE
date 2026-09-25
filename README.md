@@ -316,6 +316,27 @@ Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supp
 - Permissions: `reports.read` / `reports.export`
 - Domain owns kind matrix + CSV builder; postgres adapter aggregates; rows include `drilldowns` href hints
 
+## Epic 15 AI Intelligence Layer
+
+| Task | Status |
+|------|--------|
+| T-189 AI module contract + audited runs | Done |
+| T-190 Manager daily summary | Done |
+| T-191 Conversation summary + next step | Done |
+| T-192 Reply draft (never auto-send) | Done |
+| T-193 Lead priority scoring (deterministic + optional explain) | Done |
+| T-194 Target recovery insights | Done |
+| T-195 OCR extract + confirm gate | Done |
+| T-196 Money/SLA/target stay deterministic | Done |
+| T-197–T-201 FE surfaces + BYO setup wizard | Done |
+
+- `GET/POST /v1/ai/setup` — BYO `openai` \| `anthropic` \| `gemini` API key (per branch; key never returned raw)
+- `GET /v1/ai/daily-summary` · `POST /v1/ai/conversations/{id}/assist` · `POST /v1/ai/leads/{id}/score`
+- `GET /v1/ai/targets/{id}/insight` · `POST /v1/ai/ocr` · `POST /v1/ai/runs/{id}/feedback`
+- Permissions: `ai.read` / `ai.write` / `ai.setup`
+- Providers in `adapter/ai` (OCP); domain scoring pure; runs stored in `ai_runs`
+- Without a key, summaries/insights fall back to deterministic rules (`source=deterministic`)
+
 ## Design notes
 
 - **ACID**: application services wrap multi-table writes in `tx.Manager.WithinTransaction` (payment ledger + booking balance; lead create + stage history).

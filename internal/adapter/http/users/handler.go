@@ -197,6 +197,47 @@ func (h Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, out)
 }
 
+func (h Handler) UpdateBranch(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	// GM may only update own branch
+	if claims.Role != platformauth.RoleGM && claims.Role != platformauth.RoleAdmin {
+		response.Error(w, shared.NewForbidden("branch update requires gm or admin"))
+		return
+	}
+	if claims.Role == platformauth.RoleGM && claims.BranchID != id {
+		response.Error(w, shared.NewForbidden("branch mismatch"))
+		return
+	}
+	var body struct {
+		Code   string `json:"code"`
+		NameEN string `json:"name_en"`
+		NameAR string `json:"name_ar"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	actor := claims.UserID
+	b, err := h.Svc.UpdateBranch(r.Context(), appuser.UpdateBranchInput{
+		BranchID: id, Code: body.Code, NameEN: body.NameEN, NameAR: body.NameAR,
+		ActorID: actor, IP: r.RemoteAddr, UserAgent: r.UserAgent(),
+	})
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, mapBranch(b))
+}
+
 func (h Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 	var branchID *uuid.UUID
 	if bid := request.FilterString(r, "branch_id"); bid != "" {

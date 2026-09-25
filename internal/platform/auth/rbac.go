@@ -43,6 +43,9 @@ const (
 	PermNotificationsManage Permission = "notifications.manage"
 	PermReportsRead        Permission = "reports.read"
 	PermReportsExport      Permission = "reports.export"
+	PermAIRead             Permission = "ai.read"
+	PermAIWrite            Permission = "ai.write"
+	PermAISetup            Permission = "ai.setup"
 )
 
 const (
@@ -83,6 +86,7 @@ func PermissionsFor(role Role) []Permission {
 			PermTargetsRead, PermTargetsWrite, PermImportsRead, PermImportsWrite,
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
 			PermReportsRead, PermReportsExport,
+			PermAIRead, PermAIWrite, PermAISetup,
 		}
 	case RoleAdmin:
 		return []Permission{
@@ -90,6 +94,7 @@ func PermissionsFor(role Role) []Permission {
 			PermIntegrationsRead,
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
 			PermReportsRead, PermReportsExport,
+			PermAIRead, PermAIWrite, PermAISetup,
 		}
 	case RoleManager:
 		return []Permission{
@@ -103,6 +108,7 @@ func PermissionsFor(role Role) []Permission {
 			PermTargetsRead, PermTargetsWrite, PermImportsRead, PermImportsWrite,
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
 			PermReportsRead, PermReportsExport,
+			PermAIRead, PermAIWrite, PermAISetup,
 		}
 	case RoleEmployee:
 		return []Permission{
@@ -112,6 +118,7 @@ func PermissionsFor(role Role) []Permission {
 			PermInboxRead, PermInboxWrite, PermTargetsRead, PermImportsRead,
 			PermNotificationsRead, PermNotificationsWrite,
 			PermReportsRead,
+			PermAIRead, PermAIWrite,
 		}
 	case RoleFinance:
 		return []Permission{
@@ -120,6 +127,7 @@ func PermissionsFor(role Role) []Permission {
 			PermTasksRead, PermTargetsRead, PermImportsRead, PermImportsWrite,
 			PermNotificationsRead, PermNotificationsWrite,
 			PermReportsRead, PermReportsExport,
+			PermAIRead,
 		}
 	case RoleOperations:
 		return []Permission{
@@ -130,6 +138,7 @@ func PermissionsFor(role Role) []Permission {
 			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermImportsRead, PermImportsWrite,
 			PermNotificationsRead, PermNotificationsWrite,
 			PermReportsRead, PermReportsExport,
+			PermAIRead, PermAIWrite,
 		}
 	default:
 		return nil

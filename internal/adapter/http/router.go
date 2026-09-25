@@ -29,6 +29,7 @@ import (
 	visahttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/visa"
 	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
+	aihttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ai"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -56,6 +57,7 @@ type Handlers struct {
 	Import       importhttp.Handler
 	Notification notificationhttp.Handler
 	Report       reporthttp.Handler
+	AI           aihttp.Handler
 	Webhook      webhookhttp.Handler
 }
 
@@ -95,6 +97,7 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 			r.Use(middleware.Authenticate(tokens))
 
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Users.ListBranches)
+			r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Patch("/branches/{id}", h.Users.UpdateBranch)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/teams", h.Users.ListTeams)
 			r.With(middleware.RequirePermission(platformauth.PermRolesRead)).Get("/permissions", h.Users.PermissionsMatrix)
 
@@ -333,6 +336,18 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/finance", h.Report.Finance)
 				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/integrations", h.Report.Integrations)
 				r.With(middleware.RequirePermission(platformauth.PermReportsExport)).Get("/export", h.Report.Export)
+			})
+
+			r.Route("/ai", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Get("/setup", h.AI.GetSetup)
+				r.With(middleware.RequirePermission(platformauth.PermAISetup)).Post("/setup", h.AI.CompleteSetup)
+				r.With(middleware.RequirePermission(platformauth.PermAISetup)).Post("/setup/disable", h.AI.Disable)
+				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Get("/daily-summary", h.AI.DailySummary)
+				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/conversations/{id}/assist", h.AI.ConversationAssist)
+				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/leads/{id}/score", h.AI.ScoreLead)
+				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Get("/targets/{id}/insight", h.AI.TargetInsight)
+				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/ocr", h.AI.OCRExtract)
+				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/runs/{id}/feedback", h.AI.Feedback)
 			})
 		})
 

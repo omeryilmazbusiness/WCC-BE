@@ -145,6 +145,14 @@ func (r *Repository) ListBranches(ctx context.Context) ([]identity.Branch, error
 	return out, rows.Err()
 }
 
+func (r *Repository) UpdateBranch(ctx context.Context, b *identity.Branch) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	_, err := q.Exec(ctx, `
+		UPDATE branches SET code=$2, name_en=$3, name_ar=$4, is_active=$5
+		WHERE id=$1`, b.ID, b.Code, b.NameEN, b.NameAR, b.IsActive)
+	return err
+}
+
 func (r *Repository) ListTeams(ctx context.Context, branchID *uuid.UUID) ([]identity.Team, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	var rows pgx.Rows

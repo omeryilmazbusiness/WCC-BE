@@ -196,6 +196,60 @@ func (s *Service) ListBranches(ctx context.Context) ([]identity.Branch, error) {
 	return s.users.ListBranches(ctx)
 }
 
+type UpdateBranchInput struct {
+	BranchID  uuid.UUID
+	Code      string
+	NameEN    string
+	NameAR    string
+	ActorID   uuid.UUID
+	IP        string
+	UserAgent string
+}
+
+func (s *Service) UpdateBranch(ctx context.Context, in UpdateBranchInput) (*identity.Branch, error) {
+	items, err := s.users.ListBranches(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var cur *identity.Branch
+	for i := range items {
+		if items[i].ID == in.BranchID {
+			cur = &items[i]
+			break
+		}
+	}
+	if cur == nil {
+		return nil, shared.NewNotFound("branch")
+	}
+	code := strings.TrimSpace(in.Code)
+	nameEN := strings.TrimSpace(in.NameEN)
+	nameAR := strings.TrimSpace(in.NameAR)
+	if code == "" || nameEN == "" {
+		return nil, shared.NewValidation("code and name_en are required")
+	}
+	before := map[string]any{"code": cur.Code, "name_en": cur.NameEN, "name_ar": cur.NameAR}
+	cur.Code = code
+	cur.NameEN = nameEN
+	cur.NameAR = nameAR
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.users.UpdateBranch(ctx, cur); err != nil {
+			return err
+		}
+		id := cur.ID
+		return s.audit.Record(ctx, audit.RecordInput{
+			ActorID: in.ActorID, Action: "branch.updated", EntityType: "branch",
+			EntityID: &id, BranchID: &id,
+			Before: before,
+			After:  map[string]any{"code": cur.Code, "name_en": cur.NameEN, "name_ar": cur.NameAR},
+			IP: in.IP, UserAgent: in.UserAgent,
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return cur, nil
+}
+
 func (s *Service) ListTeams(ctx context.Context, branchID *uuid.UUID) ([]identity.Team, error) {
 	return s.users.ListTeams(ctx, branchID)
 }

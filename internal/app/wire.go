@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -30,6 +31,7 @@ import (
 	visahttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/visa"
 	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
+	aihttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ai"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/email"
@@ -37,7 +39,10 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/stub"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/whatsapp"
 	domaininbox "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
+	domainai "github.com/wodi-crm/wodi-crm-be/internal/domain/ai"
+	taskdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/task"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgbooking "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/booking"
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
@@ -54,6 +59,8 @@ import (
 	pgvisa "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/visa"
 	pgnotification "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/notification"
 	pgreport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/report"
+	pgai "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/ai"
+	aiprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/ai"
 	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/queue"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/storage"
@@ -75,6 +82,7 @@ import (
 	appvisa "github.com/wodi-crm/wodi-crm-be/internal/app/visa"
 	appnotification "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
 	appreport "github.com/wodi-crm/wodi-crm-be/internal/app/report"
+	appai "github.com/wodi-crm/wodi-crm-be/internal/app/ai"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
@@ -166,6 +174,18 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	notifReactor.Register(bus)
 	reportRepo := pgreport.NewRepository(pool)
 	reportSvc := appreport.NewService(reportRepo)
+	aiRepo := pgai.NewRepository(pool)
+	aiReg := aiprovider.NewRegistry(
+		aiprovider.NewOpenAI(),
+		aiprovider.NewAnthropic(),
+		aiprovider.NewGemini(),
+	)
+	aiSvc := appai.NewService(aiRepo, aiReg)
+	aiSvc.SetLeadPriorityWriter(aiRepo)
+	aiSvc.SetDashboardReader(aiDashBridge{dash: dashSvc})
+	aiSvc.SetConversationReader(aiInboxBridge{repo: inboxRepo})
+	aiSvc.SetLeadReader(aiLeadBridge{repo: leadRepo, tasks: taskRepo})
+	aiSvc.SetTargetReader(aiTargetBridge{svc: targetSvc})
 	inboxSvc := appinbox.NewService(inboxRepo, providers, txm, bus)
 	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
 	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
@@ -205,6 +225,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Import:    importhttp.Handler{Svc: importSvc},
 		Notification: notificationhttp.Handler{Svc: notifSvc},
 		Report:       reporthttp.Handler{Svc: reportSvc},
+		AI:           aihttp.Handler{Svc: aiSvc},
 		Webhook: webhookhttp.Handler{
 			Svc:             inboxSvc,
 			DefaultBranchID: uuid.MustParse("11111111-1111-1111-1111-111111111111"),
@@ -365,4 +386,114 @@ func (d identityDirectory) FindByID(ctx context.Context, id uuid.UUID) (*appnoti
 		return nil, err
 	}
 	return &appnotification.UserRef{ID: u.ID, Email: u.Email, Role: string(u.Role)}, nil
+}
+
+// --- Epic 15 AI bridges (DIP / ISP) ---
+
+type aiDashBridge struct {
+	dash *appdashboard.Service
+}
+
+func (b aiDashBridge) Facts(ctx context.Context, branchID uuid.UUID) (*appai.DashboardFacts, error) {
+	bid := branchID
+	to := time.Now().UTC()
+	from := to.AddDate(0, 0, -30)
+	kpi, err := b.dash.KPIs(ctx, &bid, from, to)
+	if err != nil {
+		return nil, err
+	}
+	att, _ := b.dash.Attention(ctx, &bid, 8)
+	titles := make([]string, 0, len(att))
+	for _, a := range att {
+		titles = append(titles, a.Title)
+	}
+	tp, _ := b.dash.MyTarget(ctx, branchID, nil)
+	f := &appai.DashboardFacts{
+		LeadsOpen: kpi.LeadsOpen, TasksOverdue: kpi.TasksOverdue,
+		BookingsUnpaid: kpi.BookingsUnpaid, MissingDocs: kpi.MissingDocs,
+		Attention: titles,
+	}
+	if tp != nil {
+		f.TargetStatus = tp.Status
+		f.TargetLabel = tp.Label
+		f.CollectedAmt = tp.ActualAmount
+	}
+	return f, nil
+}
+
+type aiInboxBridge struct {
+	repo *pginbox.Repository
+}
+
+func (b aiInboxBridge) Messages(ctx context.Context, conversationID, branchID uuid.UUID, limit int) (string, []string, error) {
+	c, err := b.repo.GetConversation(ctx, conversationID)
+	if err != nil || c == nil {
+		return "", nil, shared.NewNotFound("conversation")
+	}
+	if c.BranchID != branchID {
+		return "", nil, shared.NewForbidden("conversation branch mismatch")
+	}
+	msgs, err := b.repo.ListMessages(ctx, conversationID, limit)
+	if err != nil {
+		return "", nil, err
+	}
+	lines := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		lines = append(lines, string(m.Direction)+": "+m.Body)
+	}
+	return c.Subject, lines, nil
+}
+
+type aiLeadBridge struct {
+	repo  *pglead.Repository
+	tasks *pgtask.Repository
+}
+
+func (b aiLeadBridge) LoadSignals(ctx context.Context, leadID, branchID uuid.UUID) (domainai.LeadSignals, string, error) {
+	l, err := b.repo.FindByID(ctx, leadID)
+	if err != nil || l == nil {
+		return domainai.LeadSignals{}, "", shared.NewNotFound("lead")
+	}
+	if l.BranchID != branchID {
+		return domainai.LeadSignals{}, "", shared.NewForbidden("lead branch mismatch")
+	}
+	now := time.Now().UTC()
+	sig := domainai.LeadSignals{
+		Stage: string(l.Stage), NoFollowUp: l.NoFollowUp,
+		HoursSinceTouch: domainai.HoursSince(&l.UpdatedAt, now),
+		Source: l.Source,
+	}
+	if b.tasks != nil {
+		items, _, _ := b.tasks.List(ctx, taskdomain.ListFilter{
+			BranchID: &branchID, RelatedType: "lead", RelatedID: &leadID, Limit: 20,
+		})
+		for _, t := range items {
+			if t.Status == taskdomain.StatusOpen || t.Status == taskdomain.StatusInProgress {
+				sig.HasOpenTask = true
+				if t.DueAt != nil && t.DueAt.Before(now) {
+					sig.OverdueTask = true
+				}
+			}
+		}
+	}
+	return sig, l.FullName, nil
+}
+
+type aiTargetBridge struct {
+	svc *apprevenuetarget.Service
+}
+
+func (b aiTargetBridge) LoadProgress(ctx context.Context, targetID, branchID uuid.UUID) (string, int64, int64, int64, string, error) {
+	t, err := b.svc.Get(ctx, targetID)
+	if err != nil || t == nil {
+		return "", 0, 0, 0, "", shared.NewNotFound("revenue_target")
+	}
+	if t.BranchID != branchID {
+		return "", 0, 0, 0, "", shared.NewForbidden("target branch mismatch")
+	}
+	p, err := b.svc.Progress(ctx, targetID)
+	if err != nil || p == nil {
+		return t.Label, t.TargetAmount, 0, 0, "unknown", nil
+	}
+	return p.Label, p.TargetAmount, p.ActualAmount, p.ExpectedToDate, string(p.Status), nil
 }
