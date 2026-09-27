@@ -137,7 +137,18 @@ func (h Handler) ConversationAssist(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, out)
 }
 
+// LeadPriority is the read path for list badges: always the deterministic score,
+// never an LLM call, whatever the query says.
+func (h Handler) LeadPriority(w http.ResponseWriter, r *http.Request) {
+	h.scoreLead(w, r, false)
+}
+
 func (h Handler) ScoreLead(w http.ResponseWriter, r *http.Request) {
+	explain := r.URL.Query().Get("explain") == "1" || r.URL.Query().Get("explain") == "true"
+	h.scoreLead(w, r, explain)
+}
+
+func (h Handler) scoreLead(w http.ResponseWriter, r *http.Request, explain bool) {
 	claims, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
@@ -153,7 +164,6 @@ func (h Handler) ScoreLead(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	explain := r.URL.Query().Get("explain") == "1" || r.URL.Query().Get("explain") == "true"
 	out, err := h.Svc.ScoreLead(r.Context(), branchID, claims.UserID, id, explain)
 	if err != nil {
 		response.Error(w, err)

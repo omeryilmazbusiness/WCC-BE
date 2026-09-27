@@ -462,6 +462,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermAISetup)).Post("/setup/disable", h.AI.Disable)
 				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Get("/daily-summary", h.AI.DailySummary)
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/conversations/{id}/assist", h.AI.ConversationAssist)
+				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Get("/leads/{id}/score", h.AI.LeadPriority)
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/leads/{id}/score", h.AI.ScoreLead)
 				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Get("/targets/{id}/insight", h.AI.TargetInsight)
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/ocr", h.AI.OCRExtract)

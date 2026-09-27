@@ -99,6 +99,8 @@ func TestEveryBusinessRouteRequiresPermission(t *testing.T) {
 		"GET /v1/bookings/{id}/payment-promises": false, "POST /v1/bookings/{id}/payment-promises": false,
 		"POST /v1/payment-promises/{id}/cancel": false,
 		"POST /v1/bookings/{id}/status":         false, "POST /v1/bookings/{id}/readiness-override": false,
+		"GET /v1/ai/leads/{id}/score": false, "POST /v1/ai/leads/{id}/score": false,
+		"POST /v1/tasks/escalate-overdue": false,
 	}
 
 	routes, ok := router.(chi.Routes)

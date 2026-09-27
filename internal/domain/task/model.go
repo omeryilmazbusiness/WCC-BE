@@ -33,6 +33,10 @@ const (
 	DefaultGrace = 24 * time.Hour
 )
 
+// JobEscalateOverdue escalates overdue tasks across all branches on a schedule,
+// so escalation never depends on someone opening the task screen.
+const JobEscalateOverdue shared.JobName = "task.escalate_overdue"
+
 type Task struct {
 	ID             uuid.UUID
 	BranchID       uuid.UUID

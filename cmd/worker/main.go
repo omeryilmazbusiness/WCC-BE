@@ -20,6 +20,7 @@ import (
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	fxdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
 	paymentdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
+	taskdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/task"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/logger"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
@@ -84,6 +85,9 @@ func main() {
 	srv.Register(bookingdomain.JobRecomputeSweep, bookings.HandleRecomputeSweep)
 	srv.Register(bookingdomain.JobRecompute, bookings.HandleRecompute)
 
+	tasks := app.NewTaskJobs(pool, log)
+	srv.Register(taskdomain.JobEscalateOverdue, tasks.EscalateOverdue)
+
 	// Periodic jobs; every job listed here must also be registered on srv.
 	schedule := []worker.ScheduleEntry{}
 	schedule = append(schedule,
@@ -92,6 +96,7 @@ func main() {
 		worker.ScheduleEntry{Spec: "*/5 * * * *", Job: bookingdomain.JobHoldExpiry},
 		worker.ScheduleEntry{Spec: "15 0 * * *", Job: bookingdomain.JobTravelledSweep},
 		worker.ScheduleEntry{Spec: "45 * * * *", Job: bookingdomain.JobRecomputeSweep},
+		worker.ScheduleEntry{Spec: "*/15 * * * *", Job: taskdomain.JobEscalateOverdue},
 	)
 	if cfg.FX.ProviderURL != "" || cfg.FX.AccountingEnabled() {
 		schedule = append(schedule, worker.ScheduleEntry{Spec: "30 6 * * *", Job: fxdomain.JobRatesSync})
