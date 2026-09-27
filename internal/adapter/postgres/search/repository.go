@@ -29,7 +29,8 @@ func NewRepository(pool *pgxpool.Pool, pii *pgpii.Passports) *Repository {
 // caller's scope; branchID nil searches every branch the scope allows.
 // Passport hits match the full number exactly (blind index) and carry only
 // the last four characters as subtitle.
-func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, limit int) ([]domain.Hit, error) {
+func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, query domain.Query) ([]domain.Hit, error) {
+	q, limit := query.Text, query.Limit
 	if limit <= 0 {
 		limit = 20
 	}
@@ -37,7 +38,7 @@ func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, 
 		limit = 50
 	}
 	pat := "%" + strings.ToLower(strings.TrimSpace(q)) + "%"
-	args := []any{branchID, q, pat, r.pii.Hash(q), shared.NormalizePassport(q)}
+	args := []any{branchID, q, pat, r.pii.Hash(q), shared.NormalizePassport(q), kindFilter(query.Kinds)}
 	var sc [3]string
 	for i, cols := range []pgscope.Columns{
 		{Branch: "c.branch_id"},
@@ -66,6 +67,7 @@ func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, 
 				END AS score
 			FROM customers c
 			WHERE ($1::uuid IS NULL OR c.branch_id=$1)`+csc+`
+			  AND ($6::text[] IS NULL OR 'customer' = ANY($6::text[]))
 			  AND (lower(c.full_name) LIKE $3 OR lower(c.phone) LIKE $3 OR lower(c.email) LIKE $3)
 		)
 		UNION ALL
@@ -76,6 +78,7 @@ func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, 
 				CASE WHEN lower(l.full_name) = lower($2) THEN 95 ELSE 65 END
 			FROM leads l
 			WHERE ($1::uuid IS NULL OR l.branch_id=$1)`+lsc+`
+			  AND ($6::text[] IS NULL OR 'lead' = ANY($6::text[]))
 			  AND (lower(l.full_name) LIKE $3 OR lower(l.phone) LIKE $3)
 		)
 		UNION ALL
@@ -88,6 +91,7 @@ func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, 
 			FROM bookings b
 			JOIN customers c ON c.id = b.customer_id
 			WHERE ($1::uuid IS NULL OR b.branch_id=$1)`+bsc+`
+			  AND ($6::text[] IS NULL OR 'booking' = ANY($6::text[]))
 			  AND (
 				b.id::text ILIKE $3
 				OR lower(c.full_name) LIKE $3
@@ -108,6 +112,7 @@ func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, 
 			FROM booking_participants p
 			JOIN bookings b ON b.id = p.booking_id
 			WHERE ($1::uuid IS NULL OR b.branch_id=$1)`+bsc+`
+			  AND ($6::text[] IS NULL OR 'passport' = ANY($6::text[]))
 			  AND $4 <> ''
 			  AND (p.passport_hash = $4
 			    OR (p.passport_no <> '' AND upper(replace(p.passport_no,' ','')) = $5))
@@ -129,4 +134,16 @@ func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, 
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+// kindFilter is NULL (every kind) when no kinds were requested.
+func kindFilter(kinds []domain.Kind) []string {
+	if len(kinds) == 0 {
+		return nil
+	}
+	out := make([]string, len(kinds))
+	for i, k := range kinds {
+		out[i] = string(k)
+	}
+	return out
 }

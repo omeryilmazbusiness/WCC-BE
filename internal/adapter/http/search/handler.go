@@ -26,8 +26,13 @@ func (h Handler) Search(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	kinds, err := domain.ParseKinds(r.URL.Query()["kind"]...)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	hits, err := h.Svc.Search(r.Context(), branchID, r.URL.Query().Get("q"), limit)
+	hits, err := h.Svc.Search(r.Context(), branchID, r.URL.Query().Get("q"), kinds, limit)
 	if err != nil {
 		response.Error(w, err)
 		return

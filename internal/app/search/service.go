@@ -20,7 +20,7 @@ func NewService(searcher domain.Searcher) *Service {
 
 // Search looks up records visible to the caller; requested nil means all
 // branches for global callers and the caller's branch otherwise.
-func (s *Service) Search(ctx context.Context, requested *uuid.UUID, q string, limit int) ([]domain.Hit, error) {
+func (s *Service) Search(ctx context.Context, requested *uuid.UUID, q string, kinds []domain.Kind, limit int) ([]domain.Hit, error) {
 	nq := domain.NormalizeQuery(q)
 	if nq == "" {
 		return nil, shared.NewValidation("q must be at least 2 characters")
@@ -33,5 +33,5 @@ func (s *Service) Search(ctx context.Context, requested *uuid.UUID, q string, li
 	if err != nil {
 		return nil, err
 	}
-	return s.searcher.Search(ctx, branchID, nq, limit)
+	return s.searcher.Search(ctx, branchID, domain.Query{Text: nq, Kinds: kinds, Limit: limit})
 }

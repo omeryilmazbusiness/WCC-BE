@@ -390,6 +390,9 @@ Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supp
 - Migration: `00021_epic18_gap_closure.sql` (escalation overlays, lost reasons, templates, field configs, thresholds, rooms, supplier issues)
 - Domain: `adminconfig`, `rooming`, `search`, `task.SuggestNextTask`, `supplier.IssueEvent`
 - Routes: `/v1/settings/*`, `/v1/events/catalog`, `/v1/search`, `/v1/departures/{id}/rooms|group-list`, `/v1/conversations/{id}/suggest-next-task|confirm-next-task`, `/v1/suppliers/{id}/issues`, `/v1/integrations/accounts`
+- `GET /v1/search?q=...&kind=customer,lead,booking,passport&limit=20` — `q` ≥ 2 characters; `kind` (comma-separated or
+  repeated) narrows the kinds, omitted = all; an unknown kind is `400 validation_error`. Hits: `{kind,id,title,subtitle,href_hint,score}`
+  (passport hits carry the participant id and a masked last-four subtitle).
 - Permissions: `settings.read` / `settings.write` (GM/Admin/Manager write; Operations+Finance read)
 
 ## Design notes
