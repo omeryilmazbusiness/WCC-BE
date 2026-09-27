@@ -12,12 +12,12 @@ import (
 )
 
 type memRepo struct {
-	targets  map[uuid.UUID]*domain.Target
-	weights  map[uuid.UUID][]domain.Weight
-	shares   map[uuid.UUID][]domain.Share
-	snaps    map[string]*domain.Snapshot
-	actual   int64
-	byOwner  []domain.Contribution
+	targets map[uuid.UUID]*domain.Target
+	weights map[uuid.UUID][]domain.Weight
+	shares  map[uuid.UUID][]domain.Share
+	snaps   map[string]*domain.Snapshot
+	actual  int64
+	byOwner []domain.Contribution
 }
 
 func newMemRepo() *memRepo {
@@ -47,8 +47,15 @@ func (m *memRepo) Get(ctx context.Context, id uuid.UUID) (*domain.Target, error)
 	cp := *t
 	return &cp, nil
 }
-func (m *memRepo) List(ctx context.Context, branchID uuid.UUID) ([]domain.Target, error) {
-	return m.ListTargetsForBranch(ctx, branchID)
+func (m *memRepo) List(ctx context.Context, branchID *uuid.UUID) ([]domain.Target, error) {
+	if branchID == nil {
+		out := make([]domain.Target, 0, len(m.targets))
+		for _, t := range m.targets {
+			out = append(out, *t)
+		}
+		return out, nil
+	}
+	return m.ListTargetsForBranch(ctx, *branchID)
 }
 func (m *memRepo) ListTargetsForBranch(ctx context.Context, branchID uuid.UUID) ([]domain.Target, error) {
 	var out []domain.Target

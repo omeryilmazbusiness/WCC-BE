@@ -91,24 +91,24 @@ type Revision struct {
 }
 
 type Progress struct {
-	TargetID         uuid.UUID `json:"target_id"`
-	Label            string    `json:"label"`
-	Currency         string    `json:"currency"`
-	Metric           Metric    `json:"metric"`
-	ScopeType        ScopeType `json:"scope_type"`
-	CurveType        CurveType `json:"curve_type"`
-	TargetAmount     int64     `json:"target_amount"`
-	ActualAmount     int64     `json:"actual_amount"`
-	ExpectedToDate   int64     `json:"expected_to_date"`
-	Variance         int64     `json:"variance"`
-	ProgressBps      int       `json:"progress_bps"`
-	PaceBps          int       `json:"pace_bps"`
-	ForecastAmount   int64     `json:"forecast_amount"`
-	RequiredPaceDaily int64    `json:"required_pace_daily"`
-	Status           Status    `json:"status"`
-	PeriodStart      string    `json:"period_start"`
-	PeriodEnd        string    `json:"period_end"`
-	AsOf             string    `json:"as_of"`
+	TargetID          uuid.UUID `json:"target_id"`
+	Label             string    `json:"label"`
+	Currency          string    `json:"currency"`
+	Metric            Metric    `json:"metric"`
+	ScopeType         ScopeType `json:"scope_type"`
+	CurveType         CurveType `json:"curve_type"`
+	TargetAmount      int64     `json:"target_amount"`
+	ActualAmount      int64     `json:"actual_amount"`
+	ExpectedToDate    int64     `json:"expected_to_date"`
+	Variance          int64     `json:"variance"`
+	ProgressBps       int       `json:"progress_bps"`
+	PaceBps           int       `json:"pace_bps"`
+	ForecastAmount    int64     `json:"forecast_amount"`
+	RequiredPaceDaily int64     `json:"required_pace_daily"`
+	Status            Status    `json:"status"`
+	PeriodStart       string    `json:"period_start"`
+	PeriodEnd         string    `json:"period_end"`
+	AsOf              string    `json:"as_of"`
 }
 
 type Contribution struct {
@@ -127,15 +127,15 @@ type SeriesPoint struct {
 }
 
 type SourceRow struct {
-	Kind        string    `json:"kind"` // booking|payment
-	ID          uuid.UUID `json:"id"`
-	BookingID   uuid.UUID `json:"booking_id"`
-	Amount      int64     `json:"amount"`
-	Currency    string    `json:"currency"`
-	OwnerID     uuid.UUID `json:"owner_id"`
-	OwnerName   string    `json:"owner_name"`
-	OccurredAt  string    `json:"occurred_at"`
-	Label       string    `json:"label"`
+	Kind       string    `json:"kind"` // booking|payment
+	ID         uuid.UUID `json:"id"`
+	BookingID  uuid.UUID `json:"booking_id"`
+	Amount     int64     `json:"amount"`
+	Currency   string    `json:"currency"`
+	OwnerID    uuid.UUID `json:"owner_id"`
+	OwnerName  string    `json:"owner_name"`
+	OccurredAt string    `json:"occurred_at"`
+	Label      string    `json:"label"`
 }
 
 // Repository is the persistence port (DIP).
@@ -143,7 +143,7 @@ type Repository interface {
 	Create(ctx context.Context, t *Target) error
 	Update(ctx context.Context, t *Target) error
 	Get(ctx context.Context, id uuid.UUID) (*Target, error)
-	List(ctx context.Context, branchID uuid.UUID) ([]Target, error)
+	List(ctx context.Context, branchID *uuid.UUID) ([]Target, error)
 	ReplaceWeights(ctx context.Context, targetID uuid.UUID, weights []Weight) error
 	ListWeights(ctx context.Context, targetID uuid.UUID) ([]Weight, error)
 	ReplaceShares(ctx context.Context, targetID uuid.UUID, shares []Share) error

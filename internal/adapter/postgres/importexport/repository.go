@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/importexport"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
@@ -28,6 +29,22 @@ const jobCols = `id, branch_id, entity_type, mode, status, file_name, content_ty
 	COALESCE(file_bytes, ''::bytea), storage_key, headers_json, mapping_json, preview_json,
 	total_rows, success_count, failed_count, skipped_count, rollback_token,
 	error_message, created_by, created_at, updated_at`
+
+var (
+	branchScope   = pgscope.Columns{Branch: "branch_id"}
+	bookingScope  = pgscope.Columns{Branch: "b.branch_id", Owner: "b.owner_id"}
+	customerScope = pgscope.Columns{Branch: "branch_id", Owner: "created_by"}
+	packageScope  = pgscope.Columns{Branch: "pkg.branch_id"}
+)
+
+// jobVisible renders an EXISTS guard on the parent import job of a row.
+func jobVisible(ctx context.Context, jobCol string, args []any) (string, []any, error) {
+	clause, args, err := pgscope.Clause(ctx, pgscope.Columns{Branch: "j.branch_id"}, args)
+	if err != nil {
+		return "", args, err
+	}
+	return ` AND EXISTS (SELECT 1 FROM import_jobs j WHERE j.id=` + jobCol + clause + `)`, args, nil
+}
 
 func scanJob(scan func(dest ...any) error) (*domain.ImportJob, error) {
 	var j domain.ImportJob
@@ -61,6 +78,9 @@ func scanJob(scan func(dest ...any) error) (*domain.ImportJob, error) {
 }
 
 func (r *Repository) CreateJob(ctx context.Context, j *domain.ImportJob) error {
+	if err := pgscope.EnsureBranch(ctx, j.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	headers, _ := json.Marshal(j.Headers)
 	mapping, _ := json.Marshal(j.Mapping)
@@ -85,24 +105,38 @@ func (r *Repository) UpdateJob(ctx context.Context, j *domain.ImportJob) error {
 	headers, _ := json.Marshal(j.Headers)
 	mapping, _ := json.Marshal(j.Mapping)
 	preview, _ := json.Marshal(j.PreviewRows)
-	_, err := q.Exec(ctx, `
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{
+		j.ID, string(j.Mode), string(j.Status), j.FileName, j.ContentType, j.FileBytes, j.StorageKey,
+		headers, mapping, preview,
+		j.TotalRows, j.SuccessCount, j.FailedCount, j.SkippedCount,
+		j.ErrorMessage, j.UpdatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `
 		UPDATE import_jobs SET
 			mode=$2, status=$3, file_name=$4, content_type=$5, file_bytes=$6, storage_key=$7,
 			headers_json=$8, mapping_json=$9, preview_json=$10,
 			total_rows=$11, success_count=$12, failed_count=$13, skipped_count=$14,
 			error_message=$15, updated_at=$16
-		WHERE id=$1`,
-		j.ID, string(j.Mode), string(j.Status), j.FileName, j.ContentType, j.FileBytes, j.StorageKey,
-		headers, mapping, preview,
-		j.TotalRows, j.SuccessCount, j.FailedCount, j.SkippedCount,
-		j.ErrorMessage, j.UpdatedAt,
-	)
-	return err
+		WHERE id=$1`+clause, args...)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return shared.NewNotFound("import_job")
+	}
+	return nil
 }
 
 func (r *Repository) GetJob(ctx context.Context, id uuid.UUID) (*domain.ImportJob, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	row := q.QueryRow(ctx, `SELECT `+jobCols+` FROM import_jobs WHERE id=$1`, id)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{id})
+	if err != nil {
+		return nil, err
+	}
+	row := q.QueryRow(ctx, `SELECT `+jobCols+` FROM import_jobs WHERE id=$1`+clause, args...)
 	j, err := scanJob(row.Scan)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -112,9 +146,13 @@ func (r *Repository) GetJob(ctx context.Context, id uuid.UUID) (*domain.ImportJo
 
 func (r *Repository) ListJobs(ctx context.Context, branchID uuid.UUID, limit int) ([]domain.ImportJob, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID, limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT `+jobCols+` FROM import_jobs
-		WHERE branch_id=$1 ORDER BY created_at DESC LIMIT $2`, branchID, limit)
+		WHERE branch_id=$1`+clause+` ORDER BY created_at DESC LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +172,11 @@ func (r *Repository) ListJobs(ctx context.Context, branchID uuid.UUID, limit int
 
 func (r *Repository) ReplaceRowErrors(ctx context.Context, jobID uuid.UUID, errs []domain.RowError) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	if _, err := q.Exec(ctx, `DELETE FROM import_row_errors WHERE job_id=$1`, jobID); err != nil {
+	guard, args, err := jobVisible(ctx, "e.job_id", []any{jobID})
+	if err != nil {
+		return err
+	}
+	if _, err := q.Exec(ctx, `DELETE FROM import_row_errors e WHERE e.job_id=$1`+guard, args...); err != nil {
 		return err
 	}
 	for i := range errs {
@@ -161,9 +203,13 @@ func (r *Repository) ReplaceRowErrors(ctx context.Context, jobID uuid.UUID, errs
 
 func (r *Repository) ListRowErrors(ctx context.Context, jobID uuid.UUID) ([]domain.RowError, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	guard, args, err := jobVisible(ctx, "e.job_id", []any{jobID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT id, job_id, row_number, field, message, raw_json, created_at
-		FROM import_row_errors WHERE job_id=$1 ORDER BY row_number, created_at`, jobID)
+		SELECT e.id, e.job_id, e.row_number, e.field, e.message, e.raw_json, e.created_at
+		FROM import_row_errors e WHERE e.job_id=$1`+guard+` ORDER BY e.row_number, e.created_at`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -180,6 +226,9 @@ func (r *Repository) ListRowErrors(ctx context.Context, jobID uuid.UUID) ([]doma
 }
 
 func (r *Repository) CreateTemplate(ctx context.Context, t *domain.MappingTemplate) error {
+	if err := pgscope.EnsureBranch(ctx, t.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	mapping, _ := json.Marshal(t.Mapping)
 	_, err := q.Exec(ctx, `
@@ -192,18 +241,14 @@ func (r *Repository) CreateTemplate(ctx context.Context, t *domain.MappingTempla
 
 func (r *Repository) ListTemplates(ctx context.Context, branchID uuid.UUID, entityType domain.EntityType) ([]domain.MappingTemplate, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	var rows pgx.Rows
-	var err error
-	if entityType == "" {
-		rows, err = q.Query(ctx, `
-			SELECT id, branch_id, name, entity_type, mapping_json, created_by, created_at
-			FROM import_mapping_templates WHERE branch_id=$1 ORDER BY name`, branchID)
-	} else {
-		rows, err = q.Query(ctx, `
-			SELECT id, branch_id, name, entity_type, mapping_json, created_by, created_at
-			FROM import_mapping_templates WHERE branch_id=$1 AND entity_type=$2 ORDER BY name`,
-			branchID, string(entityType))
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID, string(entityType)})
+	if err != nil {
+		return nil, err
 	}
+	rows, err := q.Query(ctx, `
+		SELECT id, branch_id, name, entity_type, mapping_json, created_by, created_at
+		FROM import_mapping_templates WHERE branch_id=$1 AND ($2 = '' OR entity_type=$2)`+clause+`
+		ORDER BY name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +273,11 @@ func (r *Repository) ListTemplates(ctx context.Context, branchID uuid.UUID, enti
 
 func (r *Repository) DeleteTemplate(ctx context.Context, id, branchID uuid.UUID) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	tag, err := q.Exec(ctx, `DELETE FROM import_mapping_templates WHERE id=$1 AND branch_id=$2`, id, branchID)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{id, branchID})
+	if err != nil {
+		return err
+	}
+	tag, err := q.Exec(ctx, `DELETE FROM import_mapping_templates WHERE id=$1 AND branch_id=$2`+clause, args...)
 	if err != nil {
 		return err
 	}
@@ -240,14 +289,18 @@ func (r *Repository) DeleteTemplate(ctx context.Context, id, branchID uuid.UUID)
 
 func (r *Repository) ExportCustomers(ctx context.Context, branchID uuid.UUID, limit int) ([]domain.ExportRow, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, customerScope, []any{branchID, limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT full_name, COALESCE(full_name_ar,''), phone, COALESCE(email,''),
 			COALESCE(nationality,''), COALESCE(passport_no,''),
 			COALESCE(to_char(date_of_birth,'YYYY-MM-DD'),''),
 			COALESCE(notes,''), COALESCE(special_requirements,'')
 		FROM customers
-		WHERE branch_id=$1 AND is_active=true AND merged_into_id IS NULL
-		ORDER BY created_at DESC LIMIT $2`, branchID, limit)
+		WHERE branch_id=$1 AND is_active=true AND merged_into_id IS NULL`+clause+`
+		ORDER BY created_at DESC LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -269,14 +322,18 @@ func (r *Repository) ExportCustomers(ctx context.Context, branchID uuid.UUID, li
 
 func (r *Repository) ExportBookings(ctx context.Context, branchID uuid.UUID, limit int) ([]domain.ExportRow, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, bookingScope, []any{branchID, limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT COALESCE(c.phone,''), COALESCE(d.code,''), b.status::text, b.pax_count,
 			b.total_amount::text, COALESCE(b.currency,''), COALESCE(b.notes,'')
 		FROM bookings b
 		LEFT JOIN customers c ON c.id = b.customer_id
 		LEFT JOIN departures d ON d.id = b.departure_id
-		WHERE b.branch_id=$1
-		ORDER BY b.created_at DESC LIMIT $2`, branchID, limit)
+		WHERE b.branch_id=$1`+clause+`
+		ORDER BY b.created_at DESC LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -298,13 +355,17 @@ func (r *Repository) ExportBookings(ctx context.Context, branchID uuid.UUID, lim
 
 func (r *Repository) ExportPayments(ctx context.Context, branchID uuid.UUID, limit int) ([]domain.ExportRow, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, bookingScope, []any{branchID, limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT p.booking_id::text, p.amount::text, COALESCE(p.currency,''),
 			COALESCE(p.method,''), COALESCE(p.reference,''), p.status::text, COALESCE(p.note,'')
 		FROM payments p
 		JOIN bookings b ON b.id = p.booking_id
-		WHERE b.branch_id=$1
-		ORDER BY p.created_at DESC LIMIT $2`, branchID, limit)
+		WHERE b.branch_id=$1`+clause+`
+		ORDER BY p.created_at DESC LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -325,14 +386,18 @@ func (r *Repository) ExportPayments(ctx context.Context, branchID uuid.UUID, lim
 
 func (r *Repository) ExportDepartures(ctx context.Context, branchID uuid.UUID, limit int) ([]domain.ExportRow, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, packageScope, []any{branchID, limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT COALESCE(pkg.code,''), d.code,
 			to_char(d.depart_date,'YYYY-MM-DD'), COALESCE(to_char(d.return_date,'YYYY-MM-DD'),''),
 			d.capacity_total, d.base_price::text, COALESCE(d.currency,'')
 		FROM departures d
 		JOIN packages pkg ON pkg.id = d.package_id
-		WHERE pkg.branch_id=$1
-		ORDER BY d.depart_date DESC LIMIT $2`, branchID, limit)
+		WHERE pkg.branch_id=$1`+clause+`
+		ORDER BY d.depart_date DESC LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}

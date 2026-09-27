@@ -75,16 +75,16 @@ func (p *Participant) PassportMissing() bool {
 }
 
 type LineItem struct {
-	ID         uuid.UUID
-	BookingID  uuid.UUID
-	Kind       string
-	Label      string
-	Quantity   int
-	UnitPrice  int64
-	UnitCost   int64
-	SortOrder  int
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	ID        uuid.UUID
+	BookingID uuid.UUID
+	Kind      string
+	Label     string
+	Quantity  int
+	UnitPrice int64
+	UnitCost  int64
+	SortOrder int
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 func (l *LineItem) LineTotal() int64 { return int64(l.Quantity) * l.UnitPrice }
@@ -116,21 +116,21 @@ type ListFilter struct {
 
 // Readiness for confirm gate + travel checklist (T-065 / Epic 12).
 type Readiness struct {
-	BookingID            uuid.UUID `json:"booking_id"`
-	CanConfirm           bool      `json:"can_confirm"`
-	Blocking             []string  `json:"blocking"`
-	Warnings             []string  `json:"warnings"`
-	ParticipantsCount    int       `json:"participants_count"`
-	PaxCount             int       `json:"pax_count"`
-	MissingPassports     int       `json:"missing_passports"`
-	ChecklistRequired    int       `json:"checklist_required"`
-	ChecklistCompleted   int       `json:"checklist_completed"`
-	ChecklistIncomplete  int       `json:"checklist_incomplete"`
-	BalanceAmt           int64     `json:"balance_amt"`
-	DaysToDeparture      *int      `json:"days_to_departure,omitempty"`
-	RiskAlerts           []string  `json:"risk_alerts"`
-	OverrideActive       bool      `json:"override_active"`
-	MissingDocs          []string  `json:"missing_docs"`
+	BookingID           uuid.UUID `json:"booking_id"`
+	CanConfirm          bool      `json:"can_confirm"`
+	Blocking            []string  `json:"blocking"`
+	Warnings            []string  `json:"warnings"`
+	ParticipantsCount   int       `json:"participants_count"`
+	PaxCount            int       `json:"pax_count"`
+	MissingPassports    int       `json:"missing_passports"`
+	ChecklistRequired   int       `json:"checklist_required"`
+	ChecklistCompleted  int       `json:"checklist_completed"`
+	ChecklistIncomplete int       `json:"checklist_incomplete"`
+	BalanceAmt          int64     `json:"balance_amt"`
+	DaysToDeparture     *int      `json:"days_to_departure,omitempty"`
+	RiskAlerts          []string  `json:"risk_alerts"`
+	OverrideActive      bool      `json:"override_active"`
+	MissingDocs         []string  `json:"missing_docs"`
 }
 
 // ReadinessOverride allows confirm despite missing required documents (Epic 12).

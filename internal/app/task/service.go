@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	leaddomain "github.com/wodi-crm/wodi-crm-be/internal/domain/lead"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -41,7 +42,7 @@ type CompleteInput struct {
 }
 
 type ListInput struct {
-	BranchID      uuid.UUID
+	BranchID      *uuid.UUID
 	AssigneeID    *uuid.UUID
 	Status        domain.Status
 	Kind          domain.Kind
@@ -68,10 +69,10 @@ type ConversationReader interface {
 }
 
 type ConversationRef struct {
-	ID       uuid.UUID
-	BranchID uuid.UUID
-	OwnerID  *uuid.UUID
-	LeadID   *uuid.UUID
+	ID         uuid.UUID
+	BranchID   uuid.UUID
+	OwnerID    *uuid.UUID
+	LeadID     *uuid.UUID
 	CustomerID *uuid.UUID
 }
 
@@ -92,12 +93,27 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, err
 	if !domain.ValidPriority(in.Priority) {
 		return nil, shared.NewValidation("invalid priority")
 	}
-	if in.AssigneeID == uuid.Nil || in.RelatedID == uuid.Nil {
+	if in.RelatedID == uuid.Nil {
 		return nil, shared.NewValidation("assignee_id and related_id are required")
 	}
 	relatedType := strings.TrimSpace(in.RelatedType)
 	if relatedType == "" {
 		return nil, shared.NewValidation("related_type is required")
+	}
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branchID, err := scope.WriteBranch(in.BranchID)
+	if err != nil {
+		return nil, err
+	}
+	assigneeID, err := scope.ResolveOwner(in.AssigneeID)
+	if err != nil {
+		return nil, err
+	}
+	if assigneeID == uuid.Nil {
+		return nil, shared.NewValidation("assignee_id and related_id are required")
 	}
 	prio := in.Priority
 	if prio == "" {
@@ -105,8 +121,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, err
 	}
 	now := time.Now().UTC()
 	t := &domain.Task{
-		ID: uuid.New(), BranchID: in.BranchID, Title: title, Kind: in.Kind, Priority: prio,
-		Status: domain.StatusOpen, AssigneeID: in.AssigneeID, RelatedType: relatedType,
+		ID: uuid.New(), BranchID: branchID, Title: title, Kind: in.Kind, Priority: prio,
+		Status: domain.StatusOpen, AssigneeID: assigneeID, RelatedType: relatedType,
 		RelatedID: in.RelatedID, DueAt: in.DueAt, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
@@ -126,16 +142,22 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
 	return t, nil
 }
 
+// List pins the branch filter to the caller's scope; the repository also
+// restricts assignees, so in.AssigneeID can only narrow visibility.
 func (s *Service) List(ctx context.Context, in ListInput) ([]domain.Task, int, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	branchID, err := scope.ResolveBranch(in.BranchID)
+	if err != nil {
+		return nil, 0, err
+	}
 	f := domain.ListFilter{
-		AssigneeID: in.AssigneeID, Status: in.Status, Kind: in.Kind,
+		BranchID: branchID, AssigneeID: in.AssigneeID, Status: in.Status, Kind: in.Kind,
 		RelatedType: in.RelatedType, RelatedID: in.RelatedID,
 		OverdueOnly: in.OverdueOnly, EscalatedOnly: in.EscalatedOnly,
 		Query: in.Query, Limit: in.Limit, Offset: in.Offset,
-	}
-	if in.BranchID != uuid.Nil {
-		bid := in.BranchID
-		f.BranchID = &bid
 	}
 	return s.repo.List(ctx, f)
 }
@@ -209,6 +231,9 @@ func (s *Service) Reschedule(ctx context.Context, id uuid.UUID, due *time.Time) 
 }
 
 func (s *Service) Assign(ctx context.Context, id uuid.UUID, in AssignInput) (*domain.Task, error) {
+	if err := s.checkAssignee(ctx, in.AssigneeID); err != nil {
+		return nil, err
+	}
 	var out *domain.Task
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		t, err := s.repo.FindByID(ctx, id)
@@ -234,6 +259,9 @@ func (s *Service) BulkAssign(ctx context.Context, in BulkAssignInput) ([]domain.
 	if len(in.TaskIDs) == 0 {
 		return nil, shared.NewValidation("task_ids are required")
 	}
+	if err := s.checkAssignee(ctx, in.AssigneeID); err != nil {
+		return nil, err
+	}
 	var out []domain.Task
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		for _, id := range in.TaskIDs {
@@ -254,10 +282,34 @@ func (s *Service) BulkAssign(ctx context.Context, in BulkAssignInput) ([]domain.
 	return out, err
 }
 
-// EscalateOverdue marks open tasks past due+grace as escalated (T-077).
-func (s *Service) EscalateOverdue(ctx context.Context, branchID uuid.UUID) (int, error) {
+// checkAssignee rejects handing a task to someone else unless the caller's
+// scope allows reassignment.
+func (s *Service) checkAssignee(ctx context.Context, assigneeID uuid.UUID) error {
+	if assigneeID == uuid.Nil {
+		return nil
+	}
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = scope.ResolveOwner(assigneeID)
+	return err
+}
+
+// EscalateOverdue marks open tasks past due+grace as escalated (T-077) among
+// those visible to the caller; requested nil means all branches for global
+// callers and the caller's branch otherwise.
+func (s *Service) EscalateOverdue(ctx context.Context, requested *uuid.UUID) (int, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return 0, err
+	}
+	branchID, err := scope.ResolveBranch(requested)
+	if err != nil {
+		return 0, err
+	}
 	items, _, err := s.repo.List(ctx, domain.ListFilter{
-		BranchID: &branchID, OverdueOnly: true, Limit: 500,
+		BranchID: branchID, OverdueOnly: true, Limit: 500,
 	})
 	if err != nil {
 		return 0, err
@@ -318,7 +370,6 @@ func (s *Service) SuggestNextTask(ctx context.Context, conversationID uuid.UUID,
 
 type ConfirmNextTaskInput struct {
 	ConversationID uuid.UUID
-	BranchID       uuid.UUID
 	ActorID        uuid.UUID
 	Outcome        string
 	Title          string
@@ -333,8 +384,12 @@ func (s *Service) ConfirmNextTask(ctx context.Context, in ConfirmNextTaskInput) 
 	if err != nil || c == nil {
 		return nil, shared.NewNotFound("conversation")
 	}
-	if in.BranchID != uuid.Nil && c.BranchID != in.BranchID {
-		return nil, shared.NewForbidden("conversation branch mismatch")
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !scope.CanAccessBranch(c.BranchID) {
+		return nil, shared.NewNotFound("conversation")
 	}
 	outcome := strings.ToLower(strings.TrimSpace(in.Outcome))
 	sug, ok := domain.SuggestNextTask(domain.CallOutcome(outcome), s.now())
@@ -473,7 +528,14 @@ func (s *Seeder) onBookingConfirmed(ctx context.Context, ev events.Event) error 
 	return nil
 }
 
+// ensureTask creates a system-generated task once per idempotency key. It
+// runs with system scope even when invoked inside a user request (payment
+// reminders, target recovery): the task is assigned to the record owner, not
+// the caller, and idempotency keys are global, so both the dedupe lookup and
+// the insert must see every task. Callers must only pass records the user was
+// already authorized to act on.
 func (s *Seeder) ensureTask(ctx context.Context, t domain.Task) error {
+	ctx = access.WithScope(ctx, access.System())
 	if existing, err := s.tasks.FindByIdempotencyKey(ctx, t.IdempotencyKey); err == nil && existing != nil {
 		return nil
 	}
@@ -494,7 +556,7 @@ func (s *Seeder) EnsurePaymentDueTask(ctx context.Context, branchID, bookingID, 
 		Kind: domain.KindPayment, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
 		AssigneeID: actorID, RelatedType: "booking", RelatedID: bookingID, DueAt: &dueAt,
 		IdempotencyKey: fmt.Sprintf("booking:%s:payment-due:%s", bookingID, dueAt.UTC().Format("2006-01-02")),
-		CreatedAt: now, UpdatedAt: now,
+		CreatedAt:      now, UpdatedAt: now,
 	})
 }
 
@@ -509,6 +571,6 @@ func (s *Seeder) EnsureTargetRecoveryTask(ctx context.Context, branchID, targetI
 		Kind: domain.KindCustom, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
 		AssigneeID: assigneeID, RelatedType: "revenue_target", RelatedID: targetID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("target:%s:recovery:%s", targetID, asOf),
-		CreatedAt: now, UpdatedAt: now,
+		CreatedAt:      now, UpdatedAt: now,
 	})
 }

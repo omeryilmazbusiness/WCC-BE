@@ -37,7 +37,7 @@ type ConnectInput struct {
 
 type ConnectResult struct {
 	Account    *domain.IntegrationAccount
-	WebhookURL string // relative: /v1/webhooks/{provider}?branch_id=
+	WebhookURL string // relative; the branch is resolved from the signed payload's account
 }
 
 func (s *Service) Connect(ctx context.Context, in ConnectInput) (*ConnectResult, error) {
@@ -92,7 +92,7 @@ func (s *Service) Connect(ctx context.Context, in ConnectInput) (*ConnectResult,
 	acc.ConfigJSON = nil // strip secrets from response path
 	return &ConnectResult{
 		Account:    acc,
-		WebhookURL: acc.WebhookPath + "?branch_id=" + in.BranchID.String(),
+		WebhookURL: acc.WebhookPath,
 	}, nil
 }
 
@@ -190,7 +190,7 @@ func (s *Service) ListAccounts(ctx context.Context, branchID uuid.UUID) ([]Accou
 		out = append(out, AccountPublic{
 			ID: a.ID, BranchID: a.BranchID, Provider: a.Provider, DisplayName: a.DisplayName,
 			Status: a.Status, Connected: a.Connected, PublicMeta: a.PublicMeta,
-			WebhookPath: path, WebhookURL: path + "?branch_id=" + branchID.String(),
+			WebhookPath: path, WebhookURL: path,
 			LastOKAt: a.LastOKAt, LastError: a.LastError,
 		})
 	}

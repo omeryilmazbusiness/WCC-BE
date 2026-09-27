@@ -139,7 +139,7 @@ func (m *memPkgRepo) ReplaceDepartureTiers(_ context.Context, departureID uuid.U
 }
 
 type fakeBooks struct {
-	pax int
+	pax  int
 	list []bookingdomain.Booking
 }
 

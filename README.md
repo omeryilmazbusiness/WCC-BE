@@ -398,3 +398,81 @@ Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supp
 - **SOLID**: domain ports in `internal/domain/*`; adapters depend inward; composition root in `internal/app/wire.go`.
 - **Idempotency**: payments and auto-seeded tasks use `idempotency_key`.
 - **Events**: published after successful commit (`booking.confirmed` → document/payment tasks).
+
+## Epic 19 Security Foundation
+
+| Task | Status |
+|------|--------|
+| T-236 Access scope model (`domain/access`, fail-closed) + role → level mapping | Done |
+| T-237/T-238 Branch/owner-scoped repositories via `pgscope` (all business modules) | Done |
+| T-239 Services/handlers resolve branch via scope (`request.Branch` / `TargetBranch`) | Done |
+| T-240 Employee = own records, Manager = team, Finance/Ops = branch, GM/Admin = global | Done |
+| T-241 Route-guard regression test (every `/v1` route → 403 without permission) | Done |
+| T-242 `/customers` RBAC (`customers.read` / `customers.write`), `/dashboard/my-target` guarded | Done |
+| T-243 Field redaction: cost/margin need `payments.read`, full passport needs `pii.read` | Done |
+| T-246 `/v1/auth/me` returns permissions + scope | Done |
+| T-248 Webhook signatures (Meta `X-Hub-Signature-256`, HMAC `X-Wodi-Signature`), Meta handshake | Done |
+| T-249 Webhook branch resolved from integration account (`external_account_id`), no query param | Done |
+| T-250 `webhook_events` idempotency log, per-IP rate limit, 1 MB body cap | Done |
+| T-251 TOTP MFA (RFC 6238, encrypted secret, replay guard, recovery codes, GM/Admin enforced) | Done |
+| T-253 Login rate limit + progressive lockout (15 min → 24 h), admin unlock | Done |
+| T-255 Rotating refresh tokens with family reuse detection; revoke on password change/deactivation | Done |
+| T-257 Security headers, HSTS, body limit, trusted-proxy client IP | Done |
+
+**Scope rules.** Every authenticated request carries an `access.Scope`; repositories add predicates through
+`pgscope.Append/Clause` and return NotFound for out-of-scope ids. Missing scope = 403 (fail closed).
+Event reactors and worker jobs run with `access.System()`; verified webhooks with `access.ForBranch`.
+
+**Login contract.** `POST /v1/auth/login` returns tokens, or `{mfa_required, mfa_challenge}`, or
+`{mfa_enrollment_required, enrollment_token}` (GM/Admin without MFA get no tokens until
+`/v1/auth/mfa/setup` + `/v1/auth/mfa/setup/confirm`). Locked: `423 account_locked` + `Retry-After`;
+throttled: `429 rate_limited`. Refresh rotates on every call; reusing an old token revokes the family.
+
+- Migration: `00022_epic19_security.sql` (MFA columns/challenges/recovery codes, lockout columns,
+  `refresh_tokens` + revoke trigger, `integration_accounts.external_account_id`, `webhook_events`).
+- Env: `ENCRYPTION_KEY` (base64 32 bytes, required in production), `ENCRYPTION_KEY_ID`,
+  `ENCRYPTION_PREVIOUS_KEYS`, `TRUSTED_PROXIES`, `HTTP_MAX_BODY_BYTES`, `LOGIN_MAX_ATTEMPTS`,
+  `LOGIN_LOCKOUT`, `LOGIN_LOCKOUT_MAX`, `LOGIN_WINDOW`, `LOGIN_IP_MAX_ATTEMPTS`, `MFA_ENFORCE`,
+  `MFA_ISSUER`, `WEBHOOK_SECRET_<PROVIDER>`, `WEBHOOK_VERIFY_TOKEN_<PROVIDER>`, `WEBHOOK_RATE_LIMIT`,
+  `WEBHOOK_RATE_WINDOW`.
+- After deploy every user signs in once more (pre-rotation refresh tokens are invalid).
+- Deferred to later epics: encrypted storage of channel secrets on connect (T-259, env fallback today),
+  scheduling of the security cleanup job (T-279 scheduler; the job and ops endpoint exist).
+
+### Session security
+
+Server-side sessions (`auth_sessions`) back every login. The session id is the refresh-token family id and
+the access token's `sid` claim; the middleware checks each request against the session and the user's
+`token_version` (OWASP ASVS L2 V3, RFC 9700, BFF-ready).
+
+| Token | Format | Lifetime | Storage | Revocation |
+|-------|--------|----------|---------|------------|
+| Access | JWT HS256, `kid` header; claims `iss`, `aud`, `sub`, `uid`, `sid`, `ver`, `iat`, `nbf`, `exp`, `jti` | `JWT_ACCESS_TTL` (15m) | not stored | session revoked → `401 session_revoked`; role/branch/team/active/password change bumps `users.token_version` → `401 token_stale` |
+| Refresh | opaque `wrt_` + 256-bit base64url | idle `JWT_REFRESH_TTL` (7d), sliding, capped by `SESSION_ABSOLUTE_TTL` (30d) | SHA-256 hash only | rotated on every use; replay after `REFRESH_REUSE_GRACE` revokes the session |
+| Session | UUID (`sid`) | `min(last refresh + idle, created + absolute)` | `auth_sessions` | logout, user/admin revoke, reuse, expiry, credential change (DB trigger) |
+
+- Refresh within `REFRESH_REUSE_GRACE` of a rotation (concurrent tabs) returns a fresh sibling token
+  (`auth.refresh_grace`); later replays revoke the session (`auth.refresh_reuse`). Refresh past the absolute
+  limit returns 401 and ends the session with reason `expired`.
+- **Revocation latency**: session checks are cached per instance for `SESSION_CHECK_CACHE_TTL` (default 10s).
+  The revoking instance invalidates its cache immediately; other instances converge within the TTL.
+  If the session store is unreachable the API fails closed with `503 service_unavailable`.
+- Key rotation: set a new `JWT_ACCESS_SECRET` + `JWT_ACCESS_KEY_ID`, move the old pair into
+  `JWT_PREVIOUS_ACCESS_SECRETS` for at least `JWT_ACCESS_TTL`, then drop it. Tokens without `kid` are rejected.
+- Env: `JWT_ACCESS_KEY_ID` (`a1`), `JWT_PREVIOUS_ACCESS_SECRETS` (`kid:secret,...`), `JWT_AUDIENCE`
+  (`wodi-crm-api`), `SESSION_ABSOLUTE_TTL` (`720h`, ≤ 90d in production), `SESSION_CHECK_CACHE_TTL` (`10s`),
+  `REFRESH_REUSE_GRACE` (`10s`, `0` disables). `JWT_REFRESH_SECRET` is removed.
+- Endpoints:
+  - `POST /v1/auth/logout` `{"refresh_token"}` → always 200; needs no valid session, so it works after the
+    access token expires. Revokes the refresh token's session and, if a signed Bearer is sent, its `sid` session.
+  - `GET /v1/auth/sessions` → `{"data":[{"id","created_at","last_seen_at","last_ip","user_agent","auth_method","idle_expires_at","absolute_expires_at","current"}]}`
+  - `DELETE /v1/auth/sessions/{id}` → `{"data":{"revoked":true}}` (404 unless the caller's active session; current = logout)
+  - `POST /v1/auth/sessions/revoke-others` → `{"data":{"revoked":<int>}}`
+  - `POST /v1/users/{id}/sessions/revoke` (`users.write`) → `{"data":{"revoked":<int>}}`
+  - `POST /v1/ops/security-cleanup` (`users.write`) purges sessions/refresh tokens revoked or expired > 30 days,
+    expired MFA challenges and webhook events > 90 days (also worker job `security.cleanup`).
+- Migration: `00023_session_security.sql`. Existing refresh tokens are revoked; every user signs in once more.
+
+## Go-Live Backlog (Epic 19–26)
+
+Monzer.pdf %100 uyum ve canlıya çıkış için 110 task (T-236–T-345), sprint sırası ve kabul kriterleri: [`docs/GO_LIVE_BACKLOG.md`](docs/GO_LIVE_BACKLOG.md).

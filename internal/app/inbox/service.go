@@ -59,7 +59,7 @@ func NewService(repo domain.Repository, providers domain.Registry, txm tx.Runner
 	}
 }
 
-func (s *Service) SetCustomerMatcher(m CustomerMatcher) { s.customers = m }
+func (s *Service) SetCustomerMatcher(m CustomerMatcher)   { s.customers = m }
 func (s *Service) SetLeadShellCreator(l LeadShellCreator) { s.leads = l }
 
 func (s *Service) List(ctx context.Context, f domain.ListFilter) ([]domain.Conversation, int64, error) {

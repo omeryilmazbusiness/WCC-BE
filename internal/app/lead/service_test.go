@@ -8,11 +8,16 @@ import (
 	"github.com/google/uuid"
 
 	applead "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/lead"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
+
+func sysCtx() context.Context {
+	return access.WithScope(context.Background(), access.System())
+}
 
 type memRepo struct {
 	leads   map[uuid.UUID]*domain.Lead
@@ -61,7 +66,7 @@ func (m *memRepo) ListStageHistory(_ context.Context, leadID uuid.UUID) ([]domai
 	}
 	return out, nil
 }
-func (m *memRepo) Analytics(_ context.Context, _ uuid.UUID) (*domain.Analytics, error) {
+func (m *memRepo) Analytics(_ context.Context, _ *uuid.UUID) (*domain.Analytics, error) {
 	return &domain.Analytics{Total: len(m.leads)}, nil
 }
 
@@ -72,7 +77,7 @@ func TestCreateAssignLostAndNoFollowUp(t *testing.T) {
 	branch := uuid.New()
 	owner := uuid.New()
 	actor := uuid.New()
-	l, err := svc.Create(context.Background(), applead.CreateInput{
+	l, err := svc.Create(sysCtx(), applead.CreateInput{
 		BranchID: branch, FullName: "Test Lead", Phone: "+966500000099",
 		OwnerID: owner, ActorID: actor, Source: "WhatsApp",
 	})
@@ -87,14 +92,14 @@ func TestCreateAssignLostAndNoFollowUp(t *testing.T) {
 	}
 
 	other := uuid.New()
-	assigned, err := svc.Assign(context.Background(), applead.AssignInput{
+	assigned, err := svc.Assign(sysCtx(), applead.AssignInput{
 		LeadIDs: []uuid.UUID{l.ID}, OwnerID: other, ActorID: actor,
 	})
 	if err != nil || len(assigned) != 1 || assigned[0].OwnerID != other {
 		t.Fatalf("assign: %v %#v", err, assigned)
 	}
 
-	_, err = svc.ChangeStage(context.Background(), applead.ChangeStageInput{
+	_, err = svc.ChangeStage(sysCtx(), applead.ChangeStageInput{
 		LeadID: l.ID, To: domain.StageLost, ActorID: actor,
 	})
 	if err == nil {
@@ -105,7 +110,7 @@ func TestCreateAssignLostAndNoFollowUp(t *testing.T) {
 		t.Fatalf("want AppError, got %v", err)
 	}
 
-	updated, err := svc.ChangeStage(context.Background(), applead.ChangeStageInput{
+	updated, err := svc.ChangeStage(sysCtx(), applead.ChangeStageInput{
 		LeadID: l.ID, To: domain.StageLost, LostReasonCode: domain.LostPrice,
 		LostReasonNote: "too expensive", ActorID: actor,
 	})
@@ -117,14 +122,14 @@ func TestCreateAssignLostAndNoFollowUp(t *testing.T) {
 	}
 
 	// reopen path not allowed from lost — create fresh for no_follow_up
-	open, err := svc.Create(context.Background(), applead.CreateInput{
+	open, err := svc.Create(sysCtx(), applead.CreateInput{
 		BranchID: branch, FullName: "Open", Phone: "+966500000088",
 		OwnerID: owner, ActorID: actor,
 	})
 	if err != nil {
 		t.Fatalf("create2: %v", err)
 	}
-	flagged, err := svc.SetNoFollowUp(context.Background(), applead.SetNoFollowUpInput{
+	flagged, err := svc.SetNoFollowUp(sysCtx(), applead.SetNoFollowUpInput{
 		LeadID: open.ID, NoFollowUp: true, ActorID: actor,
 	})
 	if err != nil || !flagged.NoFollowUp {
@@ -143,7 +148,7 @@ func TestConvertRequiresCustomer(t *testing.T) {
 	svc := applead.NewService(repo, tx.Nop{}, events.NewBus(nil))
 	svc.SetBookingCreator(fakeBooking{id: uuid.New()})
 
-	l, err := svc.Create(context.Background(), applead.CreateInput{
+	l, err := svc.Create(sysCtx(), applead.CreateInput{
 		BranchID: uuid.New(), FullName: "A", Phone: "+966511",
 		OwnerID: uuid.New(), ActorID: uuid.New(),
 	})
@@ -152,17 +157,47 @@ func TestConvertRequiresCustomer(t *testing.T) {
 	}
 	// Walk to proposal so convert can win
 	for _, st := range []domain.Stage{domain.StageContacted, domain.StageQualified, domain.StageProposal} {
-		l, err = svc.ChangeStage(context.Background(), applead.ChangeStageInput{
+		l, err = svc.ChangeStage(sysCtx(), applead.ChangeStageInput{
 			LeadID: l.ID, To: st, ActorID: uuid.New(),
 		})
 		if err != nil {
 			t.Fatalf("stage %s: %v", st, err)
 		}
 	}
-	_, err = svc.Convert(context.Background(), applead.ConvertInput{
+	_, err = svc.Convert(sysCtx(), applead.ConvertInput{
 		LeadID: l.ID, DepartureID: uuid.New(), PaxCount: 2, ActorID: uuid.New(),
 	})
 	if err == nil {
 		t.Fatal("expected customer required")
+	}
+}
+
+func TestEmployeeCannotAssignOthers(t *testing.T) {
+	repo := newMem()
+	svc := applead.NewService(repo, tx.Nop{}, events.NewBus(nil))
+	me, branch := uuid.New(), uuid.New()
+	ctx := access.WithScope(context.Background(), access.Scope{Level: access.LevelOwn, UserID: me, BranchID: branch})
+
+	if _, err := svc.Create(ctx, applead.CreateInput{
+		FullName: "X", Phone: "+966500000011", OwnerID: uuid.New(), ActorID: me,
+	}); !errors.Is(err, access.ErrOwnerForbidden) {
+		t.Fatalf("create for other: want ErrOwnerForbidden, got %v", err)
+	}
+	if _, err := svc.Create(ctx, applead.CreateInput{
+		BranchID: uuid.New(), FullName: "X", Phone: "+966500000011", ActorID: me,
+	}); !errors.Is(err, access.ErrBranchForbidden) {
+		t.Fatalf("create in other branch: want ErrBranchForbidden, got %v", err)
+	}
+	l, err := svc.Create(ctx, applead.CreateInput{FullName: "X", Phone: "+966500000011", ActorID: me})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.OwnerID != me || l.BranchID != branch {
+		t.Fatalf("defaults: owner=%v branch=%v", l.OwnerID, l.BranchID)
+	}
+	if _, err := svc.Assign(ctx, applead.AssignInput{
+		LeadIDs: []uuid.UUID{l.ID}, OwnerID: uuid.New(), ActorID: me,
+	}); !errors.Is(err, access.ErrOwnerForbidden) {
+		t.Fatalf("assign: want ErrOwnerForbidden, got %v", err)
 	}
 }

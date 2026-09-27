@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -11,7 +12,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/notification"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
@@ -26,6 +30,34 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 const cols = `id, branch_id, recipient_user_id, kind, severity, title, body,
 	entity_type, entity_id, group_key, occurrence_count, status, href_hint, meta_json,
 	created_at, updated_at, acknowledged_at, acknowledged_by, resolved_at, resolved_by`
+
+// recipientScope: in-app notifications are private, so any user-bound scope
+// sees only rows addressed to that user regardless of role. User-less scopes
+// (system jobs, branch delivery) are limited by branch only.
+func recipientScope(ctx context.Context, args []any) (string, []any, error) {
+	clause, args, err := pgscope.Clause(ctx, pgscope.Columns{Branch: "branch_id"}, args)
+	if err != nil {
+		return "", args, err
+	}
+	if u := access.From(ctx).UserID; u != uuid.Nil {
+		args = append(args, u)
+		clause += fmt.Sprintf(" AND recipient_user_id=$%d", len(args))
+	}
+	return clause, args, nil
+}
+
+// ownPreference limits preference rows to the calling user when user-bound.
+func ownPreference(ctx context.Context, args []any) (string, []any, error) {
+	s, err := access.Require(ctx)
+	if err != nil {
+		return "", args, err
+	}
+	if s.UserID == uuid.Nil {
+		return "", args, nil
+	}
+	args = append(args, s.UserID)
+	return fmt.Sprintf(" AND user_id=$%d", len(args)), args, nil
+}
 
 func scan(row pgx.Row) (*domain.Notification, error) {
 	var n domain.Notification
@@ -47,6 +79,9 @@ func scan(row pgx.Row) (*domain.Notification, error) {
 }
 
 func (r *Repository) Create(ctx context.Context, n *domain.Notification) error {
+	if err := pgscope.EnsureBranch(ctx, n.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	meta := n.MetaJSON
 	if len(meta) == 0 {
@@ -73,20 +108,34 @@ func (r *Repository) Update(ctx context.Context, n *domain.Notification) error {
 	if len(meta) == 0 {
 		meta = json.RawMessage(`{}`)
 	}
-	_, err := q.Exec(ctx, `
+	clause, args, err := recipientScope(ctx, []any{
+		n.ID, string(n.Severity), n.Title, n.Body, n.OccurrenceCount, string(n.Status), n.HrefHint, meta,
+		n.UpdatedAt, n.AcknowledgedAt, n.AcknowledgedBy, n.ResolvedAt, n.ResolvedBy,
+	})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `
 		UPDATE notifications SET
 			severity=$2, title=$3, body=$4, occurrence_count=$5, status=$6, href_hint=$7, meta_json=$8,
 			updated_at=$9, acknowledged_at=$10, acknowledged_by=$11, resolved_at=$12, resolved_by=$13
-		WHERE id=$1`,
-		n.ID, string(n.Severity), n.Title, n.Body, n.OccurrenceCount, string(n.Status), n.HrefHint, meta,
-		n.UpdatedAt, n.AcknowledgedAt, n.AcknowledgedBy, n.ResolvedAt, n.ResolvedBy,
-	)
-	return err
+		WHERE id=$1`+clause, args...)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("%w", pgx.ErrNoRows)
+	}
+	return nil
 }
 
 func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Notification, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	n, err := scan(q.QueryRow(ctx, `SELECT `+cols+` FROM notifications WHERE id=$1`, id))
+	clause, args, err := recipientScope(ctx, []any{id})
+	if err != nil {
+		return nil, err
+	}
+	n, err := scan(q.QueryRow(ctx, `SELECT `+cols+` FROM notifications WHERE id=$1`+clause, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -98,10 +147,14 @@ func (r *Repository) FindOpenByGroup(ctx context.Context, recipientUserID uuid.U
 		return nil, nil
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := recipientScope(ctx, []any{recipientUserID, groupKey})
+	if err != nil {
+		return nil, err
+	}
 	n, err := scan(q.QueryRow(ctx, `
 		SELECT `+cols+` FROM notifications
-		WHERE recipient_user_id=$1 AND group_key=$2 AND status='open'
-		ORDER BY updated_at DESC LIMIT 1`, recipientUserID, groupKey))
+		WHERE recipient_user_id=$1 AND group_key=$2 AND status='open'`+clause+`
+		ORDER BY updated_at DESC LIMIT 1`, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -132,6 +185,12 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.No
 		args = append(args, f.Kinds)
 		i++
 	}
+	clause, args, err := recipientScope(ctx, args)
+	if err != nil {
+		return nil, 0, err
+	}
+	where += clause
+	i = len(args) + 1
 	var total int
 	if err := q.QueryRow(ctx, `SELECT COUNT(*) FROM notifications WHERE `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -160,10 +219,14 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.No
 
 func (r *Repository) CountUnread(ctx context.Context, recipientUserID uuid.UUID) (int, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := recipientScope(ctx, []any{recipientUserID})
+	if err != nil {
+		return 0, err
+	}
 	var n int
-	err := q.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT COUNT(*) FROM notifications
-		WHERE recipient_user_id=$1 AND status='open'`, recipientUserID).Scan(&n)
+		WHERE recipient_user_id=$1 AND status='open'`+clause, args...).Scan(&n)
 	return n, err
 }
 
@@ -172,10 +235,14 @@ func (r *Repository) ListOpenOlderThan(ctx context.Context, olderThan time.Time,
 		limit = 200
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := recipientScope(ctx, []any{olderThan, limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT `+cols+` FROM notifications
-		WHERE status='open' AND created_at < $1
-		ORDER BY created_at ASC LIMIT $2`, olderThan, limit)
+		WHERE status='open' AND created_at < $1`+clause+`
+		ORDER BY created_at ASC LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -193,10 +260,14 @@ func (r *Repository) ListOpenOlderThan(ctx context.Context, olderThan time.Time,
 
 func (r *Repository) GetPreference(ctx context.Context, userID uuid.UUID) (*domain.Preference, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := ownPreference(ctx, []any{userID})
+	if err != nil {
+		return nil, err
+	}
 	var p domain.Preference
-	err := q.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT user_id, email_enabled, push_enabled, updated_at
-		FROM notification_preferences WHERE user_id=$1`, userID).
+		FROM notification_preferences WHERE user_id=$1`+clause, args...).
 		Scan(&p.UserID, &p.EmailEnabled, &p.PushEnabled, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -208,8 +279,15 @@ func (r *Repository) GetPreference(ctx context.Context, userID uuid.UUID) (*doma
 }
 
 func (r *Repository) UpsertPreference(ctx context.Context, p *domain.Preference) error {
+	s, err := access.Require(ctx)
+	if err != nil {
+		return err
+	}
+	if s.UserID != uuid.Nil && s.UserID != p.UserID {
+		return shared.NewForbidden("cannot change another user's preferences")
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		INSERT INTO notification_preferences (user_id, email_enabled, push_enabled, updated_at)
 		VALUES ($1,$2,$3,$4)
 		ON CONFLICT (user_id) DO UPDATE SET

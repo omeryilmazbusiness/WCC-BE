@@ -8,9 +8,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/adminconfig"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/adminconfig"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/adminconfig"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
@@ -21,12 +22,17 @@ type Handler struct {
 }
 
 func (h Handler) GetSLA(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	items, err := h.Svc.GetSLA(r.Context(), claims.BranchID)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	items, err := h.Svc.GetSLA(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -35,9 +41,14 @@ func (h Handler) GetSLA(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) PutSLA(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	var body []appsvc.UpsertSLAInput
@@ -45,7 +56,7 @@ func (h Handler) PutSLA(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	items, err := h.Svc.PutSLA(r.Context(), claims.BranchID, body)
+	items, err := h.Svc.PutSLA(r.Context(), branchID, body)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -54,12 +65,17 @@ func (h Handler) PutSLA(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) GetEscalation(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	items, err := h.Svc.GetEscalationMatrix(r.Context(), claims.BranchID)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	items, err := h.Svc.GetEscalationMatrix(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -68,9 +84,14 @@ func (h Handler) GetEscalation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) PutEscalation(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	kind := chi.URLParam(r, "kind")
@@ -79,7 +100,7 @@ func (h Handler) PutEscalation(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	o, err := h.Svc.UpsertEscalation(r.Context(), claims.BranchID, kind, body)
+	o, err := h.Svc.UpsertEscalation(r.Context(), branchID, kind, body)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -88,12 +109,17 @@ func (h Handler) PutEscalation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) DeleteEscalation(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	if err := h.Svc.DeleteEscalation(r.Context(), claims.BranchID, chi.URLParam(r, "kind")); err != nil {
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	if err := h.Svc.DeleteEscalation(r.Context(), branchID, chi.URLParam(r, "kind")); err != nil {
 		response.Error(w, err)
 		return
 	}
@@ -101,13 +127,18 @@ func (h Handler) DeleteEscalation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) ListLostReasons(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	activeOnly := r.URL.Query().Get("active") == "1" || r.URL.Query().Get("active") == "true"
-	items, err := h.Svc.GetLostReasons(r.Context(), claims.BranchID, activeOnly)
+	items, err := h.Svc.GetLostReasons(r.Context(), branchID, activeOnly)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -116,9 +147,14 @@ func (h Handler) ListLostReasons(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) CreateLostReason(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	var body appsvc.LostReasonInput
@@ -126,7 +162,7 @@ func (h Handler) CreateLostReason(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	lr, err := h.Svc.CreateLostReason(r.Context(), claims.BranchID, body)
+	lr, err := h.Svc.CreateLostReason(r.Context(), branchID, body)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -135,9 +171,14 @@ func (h Handler) CreateLostReason(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) UpdateLostReason(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -150,7 +191,7 @@ func (h Handler) UpdateLostReason(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	lr, err := h.Svc.UpdateLostReason(r.Context(), claims.BranchID, id, body)
+	lr, err := h.Svc.UpdateLostReason(r.Context(), branchID, id, body)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -159,9 +200,14 @@ func (h Handler) UpdateLostReason(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) DeleteLostReason(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -169,7 +215,7 @@ func (h Handler) DeleteLostReason(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	if err := h.Svc.DeleteLostReason(r.Context(), claims.BranchID, id); err != nil {
+	if err := h.Svc.DeleteLostReason(r.Context(), branchID, id); err != nil {
 		response.Error(w, err)
 		return
 	}
@@ -187,12 +233,17 @@ func mapTemplate(t *domain.MessageTemplate) map[string]any {
 }
 
 func (h Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	items, err := h.Svc.ListTemplates(r.Context(), claims.BranchID, r.URL.Query().Get("channel"))
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	items, err := h.Svc.ListTemplates(r.Context(), branchID, r.URL.Query().Get("channel"))
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -210,6 +261,11 @@ func (h Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	var body struct {
 		Channel       string          `json:"channel"`
 		Name          string          `json:"name"`
@@ -221,7 +277,7 @@ func (h Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	t, err := h.Svc.CreateTemplate(r.Context(), claims.BranchID, claims.UserID, appsvc.TemplateInput{
+	t, err := h.Svc.CreateTemplate(r.Context(), branchID, claims.UserID, appsvc.TemplateInput{
 		Channel: body.Channel, Name: body.Name, Body: body.Body,
 		VariablesJSON: body.VariablesJSON, IsActive: body.IsActive,
 	})
@@ -233,9 +289,14 @@ func (h Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) PatchTemplate(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -254,7 +315,7 @@ func (h Handler) PatchTemplate(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	t, err := h.Svc.PatchTemplate(r.Context(), claims.BranchID, id, appsvc.TemplateInput{
+	t, err := h.Svc.PatchTemplate(r.Context(), branchID, id, appsvc.TemplateInput{
 		Channel: body.Channel, Name: body.Name, Body: body.Body,
 		VariablesJSON: body.VariablesJSON, IsActive: body.IsActive,
 	})
@@ -266,9 +327,14 @@ func (h Handler) PatchTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -276,7 +342,7 @@ func (h Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	if err := h.Svc.DeleteTemplate(r.Context(), claims.BranchID, id); err != nil {
+	if err := h.Svc.DeleteTemplate(r.Context(), branchID, id); err != nil {
 		response.Error(w, err)
 		return
 	}
@@ -284,12 +350,17 @@ func (h Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) GetFields(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	items, err := h.Svc.GetFields(r.Context(), claims.BranchID, r.URL.Query().Get("entity"))
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	items, err := h.Svc.GetFields(r.Context(), branchID, r.URL.Query().Get("entity"))
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -298,9 +369,14 @@ func (h Handler) GetFields(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) PutFields(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	entity := r.URL.Query().Get("entity")
@@ -309,7 +385,7 @@ func (h Handler) PutFields(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	items, err := h.Svc.PutFields(r.Context(), claims.BranchID, entity, body)
+	items, err := h.Svc.PutFields(r.Context(), branchID, entity, body)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -318,12 +394,17 @@ func (h Handler) PutFields(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) GetThresholds(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	a, err := h.Svc.GetThresholds(r.Context(), claims.BranchID)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	a, err := h.Svc.GetThresholds(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -332,9 +413,14 @@ func (h Handler) GetThresholds(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) PutThresholds(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	var body domain.AlertThresholds
@@ -342,7 +428,7 @@ func (h Handler) PutThresholds(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	a, err := h.Svc.PutThresholds(r.Context(), claims.BranchID, body)
+	a, err := h.Svc.PutThresholds(r.Context(), branchID, body)
 	if err != nil {
 		response.Error(w, err)
 		return

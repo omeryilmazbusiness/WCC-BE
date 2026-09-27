@@ -8,11 +8,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/visa"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
-	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/visa"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/visa"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/visa"
 )
 
 type Handler struct {
@@ -51,6 +52,11 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	var body struct {
 		BookingID     uuid.UUID  `json:"booking_id"`
 		ParticipantID *uuid.UUID `json:"participant_id"`
@@ -73,7 +79,7 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		expires = &t
 	}
 	v, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
-		BranchID: claims.BranchID, BookingID: body.BookingID, ParticipantID: body.ParticipantID,
+		BranchID: branchID, BookingID: body.BookingID, ParticipantID: body.ParticipantID,
 		CustomerID: body.CustomerID, ExternalRef: body.ExternalRef, Notes: body.Notes,
 		ExpiresAt: expires, CreatedBy: claims.UserID,
 	})

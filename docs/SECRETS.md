@@ -8,7 +8,7 @@ outside SQL backups. This checklist verifies the secrets contract.
 | Secret | Env / config key | Used by | Exposed to clients? |
 |--------|------------------|---------|---------------------|
 | Postgres URL | `DATABASE_URL` | API, migrate | No |
-| JWT signing key | `AUTH_JWT_SECRET` / config | TokenService | No (tokens only) |
+| JWT signing keys | `JWT_ACCESS_SECRET` + `JWT_ACCESS_KEY_ID`, retired: `JWT_PREVIOUS_ACCESS_SECRETS` | TokenSigner | No (tokens only) |
 | Redis / Asynq | queue URL | workers | No |
 | MinIO keys | storage access/secret | documents | No |
 | AI provider key | `ai_settings.config_json` (per branch) | AI adapters | **Never raw** — UI gets `key_hint` only |

@@ -8,9 +8,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -57,7 +58,7 @@ func mapSchedule(s *domain.Schedule) map[string]any {
 	m := map[string]any{
 		"id": s.ID, "booking_id": s.BookingID, "amount": s.Amount, "currency": s.Currency,
 		"label": s.Label, "status": s.Status,
-		"due_at": s.DueAt.UTC().Format(time.RFC3339Nano),
+		"due_at":     s.DueAt.UTC().Format(time.RFC3339Nano),
 		"created_at": s.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at": s.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
@@ -362,13 +363,13 @@ func (h Handler) CancelSchedule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Queue(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	kind := domain.QueueKind(chi.URLParam(r, "kind"))
-	items, err := h.Svc.FinanceQueue(r.Context(), claims.BranchID, kind, 100)
+	items, err := h.Svc.FinanceQueue(r.Context(), branchID, kind, 100)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -377,16 +378,16 @@ func (h Handler) Queue(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Export(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	kind := domain.QueueKind(r.URL.Query().Get("kind"))
 	if kind == "" {
 		kind = domain.QueueOverdue
 	}
-	csv, err := h.Svc.ExportQueueCSV(r.Context(), claims.BranchID, kind)
+	csv, err := h.Svc.ExportQueueCSV(r.Context(), branchID, kind)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -423,7 +424,14 @@ func (h Handler) SetReportingCurrency(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	if err := h.Svc.SetReportingCurrency(r.Context(), claims.BranchID, body.Currency, claims.UserID); err != nil {
+	var branchID uuid.UUID
+	if requested, err := request.OptionalUUID(r, "branch_id"); err != nil {
+		response.Error(w, err)
+		return
+	} else if requested != nil {
+		branchID = *requested
+	}
+	if err := h.Svc.SetReportingCurrency(r.Context(), branchID, body.Currency, claims.UserID); err != nil {
 		response.Error(w, err)
 		return
 	}

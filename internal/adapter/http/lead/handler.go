@@ -9,10 +9,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/lead"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -104,12 +104,12 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	owner := claims.UserID
+	var owner uuid.UUID
 	if req.OwnerID != nil {
 		owner = *req.OwnerID
 	}
 	l, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
-		BranchID: claims.BranchID, CustomerID: req.CustomerID, FullName: req.FullName,
+		CustomerID: req.CustomerID, FullName: req.FullName,
 		Phone: req.Phone, Source: req.Source, OwnerID: owner, Notes: req.Notes,
 		ActorID: claims.UserID, IP: r.RemoteAddr, UserAgent: r.UserAgent(),
 	})
@@ -121,17 +121,16 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
-		return
-	}
 	page := request.Page(r)
 	f := domain.ListFilter{
 		Query: request.FilterString(r, "q"), Limit: page.Limit, Offset: page.Offset,
 	}
-	bid := claims.BranchID
-	f.BranchID = middleware.ScopeBranch(claims, &bid)
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	f.BranchID = branchID
 	if oid := request.FilterString(r, "owner_id"); oid != "" {
 		id, err := uuid.Parse(oid)
 		if err != nil {
@@ -339,12 +338,12 @@ func (h Handler) SetNoFollowUp(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Analytics(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
-	a, err := h.Svc.Analytics(r.Context(), claims.BranchID)
+	a, err := h.Svc.Analytics(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return

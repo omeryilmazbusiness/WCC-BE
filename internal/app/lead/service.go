@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/lead"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -96,7 +97,7 @@ func NewService(repo domain.Repository, txm tx.Runner, bus *events.Bus) *Service
 	return &Service{repo: repo, tx: txm, bus: bus}
 }
 
-func (s *Service) SetAuditor(a audit.Recorder)          { s.audit = a }
+func (s *Service) SetAuditor(a audit.Recorder)             { s.audit = a }
 func (s *Service) SetBookingCreator(b BookingDraftCreator) { s.bookings = b }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Lead, error) {
@@ -105,25 +106,37 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Lead, err
 	if name == "" || phone == "" {
 		return nil, shared.NewValidation("full_name and phone are required")
 	}
-	if in.OwnerID == uuid.Nil {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branchID, err := scope.WriteBranch(in.BranchID)
+	if err != nil {
+		return nil, err
+	}
+	ownerID, err := scope.ResolveOwner(in.OwnerID)
+	if err != nil {
+		return nil, err
+	}
+	if ownerID == uuid.Nil {
 		return nil, shared.NewValidation("owner_id is required")
 	}
 	now := time.Now().UTC()
 	l := &domain.Lead{
 		ID:         uuid.New(),
-		BranchID:   in.BranchID,
+		BranchID:   branchID,
 		CustomerID: in.CustomerID,
 		FullName:   name,
 		Phone:      phone,
 		Source:     strings.TrimSpace(in.Source),
 		Stage:      domain.StageNew,
-		OwnerID:    in.OwnerID,
+		OwnerID:    ownerID,
 		Notes:      in.Notes,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
 
-	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		if err := s.repo.Create(ctx, l); err != nil {
 			return err
 		}
@@ -150,7 +163,16 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Lead, error) {
 	return l, nil
 }
 
+// List pins f.BranchID to the caller's scope; the repository additionally
+// restricts owners, so f.OwnerID can only narrow visibility.
 func (s *Service) List(ctx context.Context, f domain.ListFilter) ([]domain.Lead, int, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	if f.BranchID, err = scope.ResolveBranch(f.BranchID); err != nil {
+		return nil, 0, err
+	}
 	if f.Limit <= 0 {
 		f.Limit = 50
 	}
@@ -164,7 +186,17 @@ func (s *Service) History(ctx context.Context, leadID uuid.UUID) ([]domain.Stage
 	return s.repo.ListStageHistory(ctx, leadID)
 }
 
-func (s *Service) Analytics(ctx context.Context, branchID uuid.UUID) (*domain.Analytics, error) {
+// Analytics aggregates leads visible to the caller; requested nil means all
+// branches for global callers and the caller's branch otherwise.
+func (s *Service) Analytics(ctx context.Context, requested *uuid.UUID) (*domain.Analytics, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branchID, err := scope.ResolveBranch(requested)
+	if err != nil {
+		return nil, err
+	}
 	return s.repo.Analytics(ctx, branchID)
 }
 
@@ -244,8 +276,15 @@ func (s *Service) Assign(ctx context.Context, in AssignInput) ([]domain.Lead, er
 	if len(in.LeadIDs) == 0 {
 		return nil, shared.NewValidation("lead_ids required")
 	}
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := scope.ResolveOwner(in.OwnerID); err != nil {
+		return nil, err
+	}
 	var out []domain.Lead
-	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		for _, id := range in.LeadIDs {
 			l, err := s.repo.FindByID(ctx, id)
 			if err != nil {

@@ -113,13 +113,13 @@ type FieldConfig struct {
 
 // AlertThresholds are global branch alert knobs (T-227).
 type AlertThresholds struct {
-	BranchID             uuid.UUID `json:"branch_id"`
-	CapacitySoftPct      int       `json:"capacity_soft_pct"`
-	PaymentOverdueHours  int       `json:"payment_overdue_hours"`
-	MissingDocHours      int       `json:"missing_doc_hours"`
-	LeadNoFollowupHours  int       `json:"lead_no_followup_hours"`
-	TargetBehindPct      int       `json:"target_behind_pct"`
-	UpdatedAt            time.Time `json:"updated_at"`
+	BranchID            uuid.UUID `json:"branch_id"`
+	CapacitySoftPct     int       `json:"capacity_soft_pct"`
+	PaymentOverdueHours int       `json:"payment_overdue_hours"`
+	MissingDocHours     int       `json:"missing_doc_hours"`
+	LeadNoFollowupHours int       `json:"lead_no_followup_hours"`
+	TargetBehindPct     int       `json:"target_behind_pct"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 func DefaultAlertThresholds(branchID uuid.UUID) AlertThresholds {

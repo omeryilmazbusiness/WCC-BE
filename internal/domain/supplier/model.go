@@ -121,20 +121,20 @@ type Repository interface {
 	Create(ctx context.Context, s *Supplier) error
 	Update(ctx context.Context, s *Supplier) error
 	FindByID(ctx context.Context, id uuid.UUID) (*Supplier, error)
-	List(ctx context.Context, branchID uuid.UUID, activeOnly bool) ([]Supplier, error)
+	List(ctx context.Context, branchID *uuid.UUID, activeOnly bool) ([]Supplier, error)
 
 	CreateLink(ctx context.Context, l *Link) error
 	UpdateLink(ctx context.Context, l *Link) error
 	FindLinkByID(ctx context.Context, id uuid.UUID) (*Link, error)
 	DeleteLink(ctx context.Context, id uuid.UUID) error
 	ListLinksBySupplier(ctx context.Context, supplierID uuid.UUID) ([]Link, error)
-	ListUnconfirmed(ctx context.Context, branchID uuid.UUID, limit int) ([]Link, error)
-	ListOversold(ctx context.Context, branchID uuid.UUID, limit int) ([]Link, error)
+	ListUnconfirmed(ctx context.Context, branchID *uuid.UUID, limit int) ([]Link, error)
+	ListOversold(ctx context.Context, branchID *uuid.UUID, limit int) ([]Link, error)
 
 	CreateInvoice(ctx context.Context, inv *Invoice) error
 	UpdateInvoice(ctx context.Context, inv *Invoice) error
 	FindInvoiceByID(ctx context.Context, id uuid.UUID) (*Invoice, error)
-	ListInvoices(ctx context.Context, branchID uuid.UUID, supplierID *uuid.UUID, status *InvoiceStatus, limit int) ([]Invoice, error)
+	ListInvoices(ctx context.Context, branchID *uuid.UUID, supplierID *uuid.UUID, status *InvoiceStatus, limit int) ([]Invoice, error)
 	ReplaceInvoiceLines(ctx context.Context, invoiceID uuid.UUID, lines []InvoiceLine) error
 	ListInvoiceLines(ctx context.Context, invoiceID uuid.UUID) ([]InvoiceLine, error)
 

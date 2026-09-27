@@ -10,7 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
@@ -22,7 +24,32 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+var (
+	branchScope = pgscope.Columns{Branch: "branch_id"}
+	// Own/team callers see their conversations plus the Unassigned queue.
+	convScope = pgscope.Columns{Branch: "c.branch_id", Owner: "c.owner_id", OwnerOrUnassigned: true}
+)
+
+// ensureConversation requires the conversation to be visible and to belong
+// to branchID before child messages are written.
+func (r *Repository) ensureConversation(ctx context.Context, id, branchID uuid.UUID) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, convScope, []any{id, branchID})
+	if err != nil {
+		return err
+	}
+	var ok bool
+	err = q.QueryRow(ctx, `SELECT TRUE FROM conversations c WHERE c.id=$1 AND c.branch_id=$2`+clause, args...).Scan(&ok)
+	if err == pgx.ErrNoRows {
+		return shared.NewNotFound("conversation")
+	}
+	return err
+}
+
 func (r *Repository) UpsertIdentity(ctx context.Context, id *domain.ChannelIdentity) error {
+	if err := pgscope.EnsureBranch(ctx, id.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	return q.QueryRow(ctx, `
 		INSERT INTO channel_identities (id, branch_id, provider, external_key, display_name, phone, email, customer_id, created_at)
@@ -39,11 +66,14 @@ func (r *Repository) UpsertIdentity(ctx context.Context, id *domain.ChannelIdent
 
 func (r *Repository) FindIdentity(ctx context.Context, branchID uuid.UUID, provider domain.Channel, externalKey string) (*domain.ChannelIdentity, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID, provider, externalKey})
+	if err != nil {
+		return nil, err
+	}
 	var id domain.ChannelIdentity
-	err := q.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT id, branch_id, provider, external_key, display_name, phone, email, customer_id, created_at
-		FROM channel_identities WHERE branch_id=$1 AND provider=$2 AND external_key=$3`,
-		branchID, provider, externalKey,
+		FROM channel_identities WHERE branch_id=$1 AND provider=$2 AND external_key=$3`+clause, args...,
 	).Scan(&id.ID, &id.BranchID, &id.Provider, &id.ExternalKey, &id.DisplayName, &id.Phone, &id.Email, &id.CustomerID, &id.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -56,10 +86,14 @@ func (r *Repository) FindIdentity(ctx context.Context, branchID uuid.UUID, provi
 
 func (r *Repository) GetIdentity(ctx context.Context, id uuid.UUID) (*domain.ChannelIdentity, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{id})
+	if err != nil {
+		return nil, err
+	}
 	var row domain.ChannelIdentity
-	err := q.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT id, branch_id, provider, external_key, display_name, phone, email, customer_id, created_at
-		FROM channel_identities WHERE id=$1`, id,
+		FROM channel_identities WHERE id=$1`+clause, args...,
 	).Scan(&row.ID, &row.BranchID, &row.Provider, &row.ExternalKey, &row.DisplayName, &row.Phone, &row.Email, &row.CustomerID, &row.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -72,11 +106,15 @@ func (r *Repository) GetIdentity(ctx context.Context, id uuid.UUID) (*domain.Cha
 
 func (r *Repository) GetAccount(ctx context.Context, branchID uuid.UUID, provider domain.Channel) (*domain.IntegrationAccount, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID, provider})
+	if err != nil {
+		return nil, err
+	}
 	var a domain.IntegrationAccount
 	var cfg []byte
-	err := q.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT id, branch_id, provider, display_name, status, COALESCE(config_json,'{}'::jsonb), last_ok_at, last_error, updated_at
-		FROM integration_accounts WHERE branch_id=$1 AND provider=$2`, branchID, provider,
+		FROM integration_accounts WHERE branch_id=$1 AND provider=$2`+clause, args...,
 	).Scan(&a.ID, &a.BranchID, &a.Provider, &a.DisplayName, &a.Status, &cfg, &a.LastOKAt, &a.LastError, &a.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -90,9 +128,13 @@ func (r *Repository) GetAccount(ctx context.Context, branchID uuid.UUID, provide
 
 func (r *Repository) ListAccounts(ctx context.Context, branchID uuid.UUID) ([]domain.IntegrationAccount, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT id, branch_id, provider, display_name, status, COALESCE(config_json,'{}'::jsonb), last_ok_at, last_error, updated_at
-		FROM integration_accounts WHERE branch_id=$1 ORDER BY provider`, branchID)
+		FROM integration_accounts WHERE branch_id=$1`+clause+` ORDER BY provider`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +153,9 @@ func (r *Repository) ListAccounts(ctx context.Context, branchID uuid.UUID) ([]do
 }
 
 func (r *Repository) UpsertAccount(ctx context.Context, a *domain.IntegrationAccount) error {
+	if err := pgscope.EnsureBranch(ctx, a.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if a.ID == uuid.Nil {
 		a.ID = uuid.New()
@@ -140,16 +185,24 @@ func (r *Repository) UpdateAccountHealth(ctx context.Context, id uuid.UUID, stat
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if ok {
-		_, err := q.Exec(ctx, `
+		clause, args, err := pgscope.Clause(ctx, branchScope, []any{id, status})
+		if err != nil {
+			return err
+		}
+		_, err = q.Exec(ctx, `
 			UPDATE integration_accounts
 			SET status=$2, last_error='', last_ok_at=NOW(), updated_at=NOW()
-			WHERE id=$1`, id, status)
+			WHERE id=$1`+clause, args...)
 		return err
 	}
-	_, err := q.Exec(ctx, `
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{id, status, lastError})
+	if err != nil {
+		return err
+	}
+	_, err = q.Exec(ctx, `
 		UPDATE integration_accounts
 		SET status=$2, last_error=$3, updated_at=NOW()
-		WHERE id=$1`, id, status, lastError)
+		WHERE id=$1`+clause, args...)
 	return err
 }
 
@@ -178,6 +231,9 @@ func scanConv(row pgx.Row) (*domain.Conversation, error) {
 }
 
 func (r *Repository) CreateConversation(ctx context.Context, c *domain.Conversation) error {
+	if err := pgscope.EnsureBranch(ctx, c.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO conversations (
@@ -200,29 +256,43 @@ func (r *Repository) CreateConversation(ctx context.Context, c *domain.Conversat
 
 func (r *Repository) UpdateConversation(ctx context.Context, c *domain.Conversation) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		UPDATE conversations SET
+	clause, args, err := pgscope.Clause(ctx, convScope, []any{
+		c.ID, c.CustomerID, c.LeadID, c.OwnerID, c.Subject, c.Status,
+		c.SLAStartedAt, c.SLADueAt, c.SLABreachedAt, c.SLAStoppedAt,
+		c.LastInboundAt, c.LastOutboundAt, c.UnansweredSince, c.LastMessagePreview, c.UpdatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `
+		UPDATE conversations c SET
 			customer_id=$2, lead_id=$3, owner_id=$4, subject=$5, status=$6,
 			sla_started_at=$7, sla_due_at=$8, sla_breached_at=$9, sla_stopped_at=$10,
 			last_inbound_at=$11, last_outbound_at=$12, unanswered_since=$13,
 			last_message_preview=$14, updated_at=$15
-		WHERE id=$1`,
-		c.ID, c.CustomerID, c.LeadID, c.OwnerID, c.Subject, c.Status,
-		c.SLAStartedAt, c.SLADueAt, c.SLABreachedAt, c.SLAStoppedAt,
-		c.LastInboundAt, c.LastOutboundAt, c.UnansweredSince, c.LastMessagePreview, c.UpdatedAt,
-	)
-	return err
+		WHERE c.id=$1`+clause, args...)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return shared.NewNotFound("conversation")
+	}
+	return nil
 }
 
 func (r *Repository) GetConversation(ctx context.Context, id uuid.UUID) (*domain.Conversation, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, convScope, []any{id})
+	if err != nil {
+		return nil, err
+	}
 	row := q.QueryRow(ctx, `
 		SELECT `+convSelect+`
 		FROM conversations c
 		LEFT JOIN users u ON u.id = c.owner_id
 		LEFT JOIN customers cu ON cu.id = c.customer_id
 		LEFT JOIN channel_identities ci ON ci.id = c.channel_identity_id
-		WHERE c.id=$1`, id)
+		WHERE c.id=$1`+clause, args...)
 	c, err := scanConv(row)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -232,14 +302,18 @@ func (r *Repository) GetConversation(ctx context.Context, id uuid.UUID) (*domain
 
 func (r *Repository) FindOpenByIdentity(ctx context.Context, identityID uuid.UUID) (*domain.Conversation, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, convScope, []any{identityID})
+	if err != nil {
+		return nil, err
+	}
 	row := q.QueryRow(ctx, `
 		SELECT `+convSelect+`
 		FROM conversations c
 		LEFT JOIN users u ON u.id = c.owner_id
 		LEFT JOIN customers cu ON cu.id = c.customer_id
 		LEFT JOIN channel_identities ci ON ci.id = c.channel_identity_id
-		WHERE c.channel_identity_id=$1 AND c.status='open'
-		ORDER BY c.updated_at DESC LIMIT 1`, identityID)
+		WHERE c.channel_identity_id=$1 AND c.status='open'`+clause+`
+		ORDER BY c.updated_at DESC LIMIT 1`, args...)
 	c, err := scanConv(row)
 	if err == pgx.ErrNoRows {
 		return nil, nil
@@ -289,6 +363,10 @@ func (r *Repository) ListConversations(ctx context.Context, f domain.ListFilter)
 			n, n, n,
 		))
 	}
+	where, args, err := pgscope.Append(ctx, convScope, where, args)
+	if err != nil {
+		return nil, 0, err
+	}
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 50
@@ -333,6 +411,9 @@ func (r *Repository) ListConversations(ctx context.Context, f domain.ListFilter)
 }
 
 func (r *Repository) InsertMessage(ctx context.Context, m *domain.Message) error {
+	if err := r.ensureConversation(ctx, m.ConversationID, m.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	var eventID, msgID *string
 	if m.ProviderEventID != "" {
@@ -355,13 +436,17 @@ func (r *Repository) InsertMessage(ctx context.Context, m *domain.Message) error
 
 func (r *Repository) FindMessageByEvent(ctx context.Context, provider domain.Channel, eventID string) (*domain.Message, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{provider, eventID})
+	if err != nil {
+		return nil, err
+	}
 	var m domain.Message
 	var pMsgID, pEvtID *string
-	err := q.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT id, conversation_id, branch_id, direction, body, content_type, provider,
 			provider_message_id, provider_event_id, status, document_id, author_user_id,
 			error_message, created_at
-		FROM messages WHERE provider=$1 AND provider_event_id=$2`, provider, eventID,
+		FROM messages WHERE provider=$1 AND provider_event_id=$2`+clause, args...,
 	).Scan(&m.ID, &m.ConversationID, &m.BranchID, &m.Direction, &m.Body, &m.ContentType, &m.Provider,
 		&pMsgID, &pEvtID, &m.Status, &m.DocumentID, &m.AuthorUserID, &m.ErrorMessage, &m.CreatedAt)
 	if err == pgx.ErrNoRows {
@@ -381,6 +466,10 @@ func (r *Repository) FindMessageByEvent(ctx context.Context, provider domain.Cha
 
 func (r *Repository) ListMessages(ctx context.Context, conversationID uuid.UUID, limit int) ([]domain.Message, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, convScope, []any{conversationID, limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT m.id, m.conversation_id, m.branch_id, m.direction, m.body, m.content_type, m.provider,
 			m.provider_message_id, m.provider_event_id, m.status, m.document_id, m.author_user_id,
@@ -388,8 +477,9 @@ func (r *Repository) ListMessages(ctx context.Context, conversationID uuid.UUID,
 		FROM messages m
 		LEFT JOIN users u ON u.id = m.author_user_id
 		WHERE m.conversation_id=$1
+		  AND EXISTS (SELECT 1 FROM conversations c WHERE c.id=m.conversation_id`+clause+`)
 		ORDER BY m.created_at ASC
-		LIMIT $2`, conversationID, limit)
+		LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -415,12 +505,16 @@ func (r *Repository) ListMessages(ctx context.Context, conversationID uuid.UUID,
 
 func (r *Repository) FirstResponseSeconds(ctx context.Context, branchID uuid.UUID, channel domain.Channel) (int, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID, channel})
+	if err != nil {
+		return 0, err
+	}
 	var secs int
-	err := q.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT first_response_seconds FROM sla_policies
-		WHERE branch_id=$1 AND (channel=$2 OR channel='*')
+		WHERE branch_id=$1 AND (channel=$2 OR channel='*')`+clause+`
 		ORDER BY CASE WHEN channel=$2 THEN 0 ELSE 1 END
-		LIMIT 1`, branchID, channel).Scan(&secs)
+		LIMIT 1`, args...).Scan(&secs)
 	if err == pgx.ErrNoRows {
 		return int(domain.DefaultFirstResponse.Seconds()), nil
 	}
@@ -429,6 +523,10 @@ func (r *Repository) FirstResponseSeconds(ctx context.Context, branchID uuid.UUI
 
 func (r *Repository) ListDueForSLABreach(ctx context.Context, now time.Time, limit int) ([]domain.Conversation, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, convScope, []any{now, limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT `+convSelect+`
 		FROM conversations c
@@ -436,9 +534,9 @@ func (r *Repository) ListDueForSLABreach(ctx context.Context, now time.Time, lim
 		LEFT JOIN customers cu ON cu.id = c.customer_id
 		LEFT JOIN channel_identities ci ON ci.id = c.channel_identity_id
 		WHERE c.status='open' AND c.sla_stopped_at IS NULL AND c.sla_breached_at IS NULL
-		  AND c.sla_due_at IS NOT NULL AND c.sla_due_at < $1
+		  AND c.sla_due_at IS NOT NULL AND c.sla_due_at < $1`+clause+`
 		ORDER BY c.sla_due_at ASC
-		LIMIT $2`, now, limit)
+		LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -456,8 +554,11 @@ func (r *Repository) ListDueForSLABreach(ctx context.Context, now time.Time, lim
 
 func (r *Repository) MarkSLABreached(ctx context.Context, id uuid.UUID, at time.Time) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		UPDATE conversations SET sla_breached_at=$2, updated_at=$2 WHERE id=$1 AND sla_breached_at IS NULL`,
-		id, at)
+	clause, args, err := pgscope.Clause(ctx, convScope, []any{id, at})
+	if err != nil {
+		return err
+	}
+	_, err = q.Exec(ctx, `
+		UPDATE conversations c SET sla_breached_at=$2, updated_at=$2 WHERE c.id=$1 AND c.sla_breached_at IS NULL`+clause, args...)
 	return err
 }

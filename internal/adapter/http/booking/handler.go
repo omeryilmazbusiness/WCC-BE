@@ -10,9 +10,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/booking"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/booking"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -65,9 +66,13 @@ type checklistRequest struct {
 	Completed bool `json:"completed"`
 }
 
-func mapBooking(b *domain.Booking) map[string]any {
+func mapBooking(b *domain.Booking, fa fieldAccess) map[string]any {
 	if b == nil {
 		return nil
+	}
+	var cost, margin int64
+	if fa.financials {
+		cost, margin = b.CostAmt, b.Margin()
 	}
 	return map[string]any{
 		"id":            b.ID,
@@ -79,8 +84,8 @@ func mapBooking(b *domain.Booking) map[string]any {
 		"pax_count":     b.PaxCount,
 		"total_amount":  b.TotalAmount,
 		"discount_amt":  b.DiscountAmt,
-		"cost_amt":      b.CostAmt,
-		"margin":        b.Margin(),
+		"cost_amt":      cost,
+		"margin":        margin,
 		"collected_amt": b.CollectedAmt,
 		"balance_amt":   b.BalanceAmt,
 		"currency":      b.Currency,
@@ -91,9 +96,13 @@ func mapBooking(b *domain.Booking) map[string]any {
 	}
 }
 
-func mapParticipant(p *domain.Participant) map[string]any {
+func mapParticipant(p *domain.Participant, fa fieldAccess) map[string]any {
 	if p == nil {
 		return nil
+	}
+	passport := p.PassportNo
+	if !fa.pii {
+		passport = shared.MaskPassport(passport)
 	}
 	var dob any
 	if p.DateOfBirth != nil {
@@ -103,27 +112,31 @@ func mapParticipant(p *domain.Participant) map[string]any {
 		"id":            p.ID,
 		"booking_id":    p.BookingID,
 		"full_name":     p.FullName,
-		"passport_no":   p.PassportNo,
+		"passport_no":   passport,
 		"nationality":   p.Nationality,
 		"date_of_birth": dob,
 		"created_at":    p.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }
 
-func mapLine(l domain.LineItem) map[string]any {
+func mapLine(l domain.LineItem, fa fieldAccess) map[string]any {
+	var unitCost, lineCost int64
+	if fa.financials {
+		unitCost, lineCost = l.UnitCost, l.LineCost()
+	}
 	return map[string]any{
-		"id":          l.ID,
-		"booking_id":  l.BookingID,
-		"kind":        l.Kind,
-		"label":       l.Label,
-		"quantity":    l.Quantity,
-		"unit_price":  l.UnitPrice,
-		"unit_cost":   l.UnitCost,
-		"line_total":  l.LineTotal(),
-		"line_cost":   l.LineCost(),
-		"sort_order":  l.SortOrder,
-		"created_at":  l.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updated_at":  l.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		"id":         l.ID,
+		"booking_id": l.BookingID,
+		"kind":       l.Kind,
+		"label":      l.Label,
+		"quantity":   l.Quantity,
+		"unit_price": l.UnitPrice,
+		"unit_cost":  unitCost,
+		"line_total": l.LineTotal(),
+		"line_cost":  lineCost,
+		"sort_order": l.SortOrder,
+		"created_at": l.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"updated_at": l.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }
 
@@ -157,36 +170,31 @@ func parseDOB(raw *string) (*time.Time, error) {
 }
 
 func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
-		return
-	}
 	var req createRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
 	b, err := h.Svc.CreateDraft(r.Context(), appsvc.CreateInput{
-		BranchID: claims.BranchID, CustomerID: req.CustomerID, DepartureID: req.DepartureID,
+		CustomerID: req.CustomerID, DepartureID: req.DepartureID,
 		LeadID: req.LeadID, PaxCount: req.PaxCount, TotalAmount: req.TotalAmount,
-		DiscountAmt: req.DiscountAmt, Currency: req.Currency, Notes: req.Notes, OwnerID: claims.UserID,
+		DiscountAmt: req.DiscountAmt, Currency: req.Currency, Notes: req.Notes,
 	})
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusCreated, mapBooking(b))
+	response.JSON(w, http.StatusCreated, mapBooking(b, fieldAccessFor(r)))
 }
 
 func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	q := r.URL.Query()
-	in := appsvc.ListInput{BranchID: claims.BranchID, Status: domain.Status(q.Get("status")), Query: q.Get("q")}
+	in := appsvc.ListInput{BranchID: branchID, Status: domain.Status(q.Get("status")), Query: q.Get("q")}
 	if v := q.Get("customer_id"); v != "" {
 		id, err := uuid.Parse(v)
 		if err != nil {
@@ -232,9 +240,10 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	fa := fieldAccessFor(r)
 	out := make([]map[string]any, 0, len(items))
 	for i := range items {
-		out = append(out, mapBooking(&items[i]))
+		out = append(out, mapBooking(&items[i], fa))
 	}
 	response.JSONMeta(w, http.StatusOK, out, map[string]any{"total": total})
 }
@@ -250,7 +259,7 @@ func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapBooking(b))
+	response.JSON(w, http.StatusOK, mapBooking(b, fieldAccessFor(r)))
 }
 
 func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
@@ -272,7 +281,7 @@ func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapBooking(b))
+	response.JSON(w, http.StatusOK, mapBooking(b, fieldAccessFor(r)))
 }
 
 func (h Handler) Confirm(w http.ResponseWriter, r *http.Request) {
@@ -286,7 +295,7 @@ func (h Handler) Confirm(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapBooking(b))
+	response.JSON(w, http.StatusOK, mapBooking(b, fieldAccessFor(r)))
 }
 
 func (h Handler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
@@ -305,7 +314,7 @@ func (h Handler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapBooking(b))
+	response.JSON(w, http.StatusOK, mapBooking(b, fieldAccessFor(r)))
 }
 
 func (h Handler) Readiness(w http.ResponseWriter, r *http.Request) {
@@ -371,7 +380,7 @@ func (h Handler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusCreated, mapParticipant(p))
+	response.JSON(w, http.StatusCreated, mapParticipant(p, fieldAccessFor(r)))
 }
 
 func (h Handler) UpdateParticipant(w http.ResponseWriter, r *http.Request) {
@@ -402,7 +411,7 @@ func (h Handler) UpdateParticipant(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapParticipant(p))
+	response.JSON(w, http.StatusOK, mapParticipant(p, fieldAccessFor(r)))
 }
 
 func (h Handler) DeleteParticipant(w http.ResponseWriter, r *http.Request) {
@@ -434,9 +443,10 @@ func (h Handler) ListParticipants(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	fa := fieldAccessFor(r)
 	out := make([]map[string]any, 0, len(items))
 	for i := range items {
-		out = append(out, mapParticipant(&items[i]))
+		out = append(out, mapParticipant(&items[i], fa))
 	}
 	response.JSON(w, http.StatusOK, out)
 }
@@ -463,11 +473,12 @@ func (h Handler) SetLineItems(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	fa := fieldAccessFor(r)
 	mapped := make([]map[string]any, 0, len(lines))
 	for _, l := range lines {
-		mapped = append(mapped, mapLine(l))
+		mapped = append(mapped, mapLine(l, fa))
 	}
-	response.JSONMeta(w, http.StatusOK, mapped, map[string]any{"booking": mapBooking(b)})
+	response.JSONMeta(w, http.StatusOK, mapped, map[string]any{"booking": mapBooking(b, fa)})
 }
 
 func (h Handler) ListLineItems(w http.ResponseWriter, r *http.Request) {
@@ -481,9 +492,10 @@ func (h Handler) ListLineItems(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	fa := fieldAccessFor(r)
 	out := make([]map[string]any, 0, len(items))
 	for _, l := range items {
-		out = append(out, mapLine(l))
+		out = append(out, mapLine(l, fa))
 	}
 	response.JSON(w, http.StatusOK, out)
 }

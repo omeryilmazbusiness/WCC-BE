@@ -10,11 +10,16 @@ import (
 	"github.com/google/uuid"
 
 	appbooking "github.com/wodi-crm/wodi-crm-be/internal/app/booking"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	pkgdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/tourpackage"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
+
+func sysCtx() context.Context {
+	return access.WithScope(context.Background(), access.System())
+}
 
 type memBookingRepo struct {
 	byID      map[uuid.UUID]*domain.Booking
@@ -227,19 +232,19 @@ func TestCreateDraftSeedsChecklistAndLineRecalc(t *testing.T) {
 	}}
 	svc := newSvc(books, deps)
 
-	b, err := svc.CreateDraft(context.Background(), appbooking.CreateInput{
+	b, err := svc.CreateDraft(sysCtx(), appbooking.CreateInput{
 		BranchID: uuid.New(), CustomerID: uuid.New(), DepartureID: depID,
 		PaxCount: 2, TotalAmount: 0, OwnerID: uuid.New(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cl, err := svc.ListChecklist(context.Background(), b.ID)
+	cl, err := svc.ListChecklist(sysCtx(), b.ID)
 	if err != nil || len(cl) < 3 {
 		t.Fatalf("checklist seed failed: %v len=%d", err, len(cl))
 	}
 
-	updated, lines, err := svc.SetLineItems(context.Background(), b.ID, []appbooking.LineItemInput{
+	updated, lines, err := svc.SetLineItems(sysCtx(), b.ID, []appbooking.LineItemInput{
 		{Kind: domain.LinePackage, Label: "Umrah", Quantity: 2, UnitPrice: 1500, UnitCost: 1100},
 		{Kind: domain.LineExtras, Label: "Ziyarah", Quantity: 1, UnitPrice: 200, UnitCost: 80},
 	})
@@ -268,37 +273,37 @@ func TestConfirmBlockedUntilReady(t *testing.T) {
 		},
 	}}
 	svc := newSvc(books, deps)
-	b, err := svc.CreateDraft(context.Background(), appbooking.CreateInput{
+	b, err := svc.CreateDraft(sysCtx(), appbooking.CreateInput{
 		BranchID: uuid.New(), CustomerID: uuid.New(), DepartureID: depID,
 		PaxCount: 1, TotalAmount: 1000, OwnerID: uuid.New(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Confirm(context.Background(), b.ID); err == nil {
+	if _, err := svc.Confirm(sysCtx(), b.ID); err == nil {
 		t.Fatal("confirm must block when participants/checklist incomplete")
 	}
 
-	_, err = svc.AddParticipant(context.Background(), b.ID, appbooking.AddParticipantInput{
+	_, err = svc.AddParticipant(sysCtx(), b.ID, appbooking.AddParticipantInput{
 		FullName: "Ali", PassportNo: "P1", Nationality: "TR",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	items, _ := svc.ListChecklist(context.Background(), b.ID)
+	items, _ := svc.ListChecklist(sysCtx(), b.ID)
 	for _, it := range items {
 		if !it.Required {
 			continue
 		}
-		if _, err := svc.UpdateChecklistItem(context.Background(), b.ID, it.ID, appbooking.ChecklistUpdateInput{Completed: true}); err != nil {
+		if _, err := svc.UpdateChecklistItem(sysCtx(), b.ID, it.ID, appbooking.ChecklistUpdateInput{Completed: true}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	ready, err := svc.Readiness(context.Background(), b.ID)
+	ready, err := svc.Readiness(sysCtx(), b.ID)
 	if err != nil || !ready.CanConfirm {
 		t.Fatalf("expected ready: %#v err=%v", ready, err)
 	}
-	confirmed, err := svc.Confirm(context.Background(), b.ID)
+	confirmed, err := svc.Confirm(sysCtx(), b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,13 +325,13 @@ func TestListFilterByCustomer(t *testing.T) {
 			ReturnDate: time.Now().UTC().Add(30 * 24 * time.Hour)},
 	}}
 	svc := newSvc(books, deps)
-	_, _ = svc.CreateDraft(context.Background(), appbooking.CreateInput{
+	_, _ = svc.CreateDraft(sysCtx(), appbooking.CreateInput{
 		BranchID: uuid.New(), CustomerID: cust, DepartureID: depID, PaxCount: 1, OwnerID: uuid.New(),
 	})
-	_, _ = svc.CreateDraft(context.Background(), appbooking.CreateInput{
+	_, _ = svc.CreateDraft(sysCtx(), appbooking.CreateInput{
 		BranchID: uuid.New(), CustomerID: uuid.New(), DepartureID: depID, PaxCount: 1, OwnerID: uuid.New(),
 	})
-	items, total, err := svc.List(context.Background(), appbooking.ListInput{CustomerID: &cust})
+	items, total, err := svc.List(sysCtx(), appbooking.ListInput{CustomerID: &cust})
 	if err != nil || total != 1 || len(items) != 1 {
 		t.Fatalf("list filter failed total=%d len=%d err=%v", total, len(items), err)
 	}

@@ -96,14 +96,14 @@ func (s *Service) GetSetup(ctx context.Context, branchID uuid.UUID) (map[string]
 	key := domain.ParseAPIKey(st.ConfigJSON)
 	completed := st.SetupCompletedAt != nil
 	return map[string]any{
-		"configured":       key != "" && domain.ValidProvider(st.Provider),
-		"enabled":          st.Enabled && key != "",
-		"provider":         st.Provider,
-		"model":            st.Model,
-		"key_hint":         domain.MaskedKeyHint(key),
-		"setup_completed":  completed,
+		"configured":         key != "" && domain.ValidProvider(st.Provider),
+		"enabled":            st.Enabled && key != "",
+		"provider":           st.Provider,
+		"model":              st.Model,
+		"key_hint":           domain.MaskedKeyHint(key),
+		"setup_completed":    completed,
 		"accepted_providers": []string{"openai", "anthropic", "gemini"},
-		"updated_at":       st.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		"updated_at":         st.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}, nil
 }
 
@@ -238,8 +238,8 @@ func (s *Service) DailySummary(ctx context.Context, branchID, actorID uuid.UUID)
 				formatInt("Unpaid bookings", facts.BookingsUnpaid),
 				formatInt("Missing docs", facts.MissingDocs),
 			},
-			"attention": facts.Attention,
-			"source":    "deterministic",
+			"attention":  facts.Attention,
+			"source":     "deterministic",
 			"ai_enabled": false,
 		}
 		run, _ := s.record(ctx, branchID, &actorID, domain.KindDailySummary, nil, scope, out, hash, "skipped", "ai_not_configured")
@@ -250,7 +250,7 @@ func (s *Service) DailySummary(ctx context.Context, branchID, actorID uuid.UUID)
 	userPrompt := "Summarize this branch operations snapshot for a Hajj/Umrah CRM manager in under 120 words. Use bullet points. Do not invent numbers.\n" + mustJSON(facts)
 	resp, err := s.complete(ctx, st, p, key, domain.CompletionRequest{
 		System: "You are an operations analyst. Money/SLA figures are already computed — explain only. JSON: {\"headline\":\"\",\"bullets\":[],\"focus\":\"\"}",
-		User: userPrompt, JSONMode: true, MaxTokens: 500,
+		User:   userPrompt, JSONMode: true, MaxTokens: 500,
 	})
 	if err != nil {
 		out := map[string]any{
@@ -261,9 +261,9 @@ func (s *Service) DailySummary(ctx context.Context, branchID, actorID uuid.UUID)
 				formatInt("Unpaid bookings", facts.BookingsUnpaid),
 				formatInt("Missing docs", facts.MissingDocs),
 			},
-			"attention":  facts.Attention,
-			"source":     "deterministic",
-			"ai_enabled": true,
+			"attention":      facts.Attention,
+			"source":         "deterministic",
+			"ai_enabled":     true,
 			"provider_error": trimErr(err),
 		}
 		run, _ := s.record(ctx, branchID, &actorID, domain.KindDailySummary, st, scope, out, hash, "error", err.Error())
@@ -294,11 +294,11 @@ func (s *Service) ConversationAssist(ctx context.Context, branchID, actorID, con
 	st, p, key, err := s.resolve(ctx, branchID)
 	if err != nil {
 		out := map[string]any{
-			"summary": "AI not configured — open setup to enable conversation assist.",
-			"next_step": "Configure OpenAI, Claude, or Gemini API key.",
+			"summary":     "AI not configured — open setup to enable conversation assist.",
+			"next_step":   "Configure OpenAI, Claude, or Gemini API key.",
 			"reply_draft": "",
-			"auto_send": false,
-			"source": "deterministic",
+			"auto_send":   false,
+			"source":      "deterministic",
 		}
 		run, _ := s.record(ctx, branchID, &actorID, domain.KindConversationSum, nil, scope, out, hash, "skipped", "ai_not_configured")
 		out["run_id"] = runID(run)
@@ -310,8 +310,8 @@ func (s *Service) ConversationAssist(ctx context.Context, branchID, actorID, con
 		transcript = transcript[len(transcript)-8000:]
 	}
 	resp, err := s.complete(ctx, st, p, key, domain.CompletionRequest{
-		System: "You help travel agency staff. Return JSON {\"summary\":\"\",\"next_step\":\"\",\"reply_draft\":\"\"}. Never claim payment amounts. Draft must be polite bilingual-ready EN. auto_send is always false.",
-		User: "Subject: " + subject + "\n\nTranscript:\n" + transcript,
+		System:   "You help travel agency staff. Return JSON {\"summary\":\"\",\"next_step\":\"\",\"reply_draft\":\"\"}. Never claim payment amounts. Draft must be polite bilingual-ready EN. auto_send is always false.",
+		User:     "Subject: " + subject + "\n\nTranscript:\n" + transcript,
 		JSONMode: true, MaxTokens: 700,
 	})
 	if err != nil {
@@ -355,7 +355,7 @@ func (s *Service) ScoreLead(ctx context.Context, branchID, actorID, leadID uuid.
 	}
 	resp, err := s.complete(ctx, st, p, key, domain.CompletionRequest{
 		System: "Explain lead priority briefly for a sales manager. Do not change the score. JSON {\"explanation\":\"\"}",
-		User: mustJSON(out), JSONMode: true, MaxTokens: 250,
+		User:   mustJSON(out), JSONMode: true, MaxTokens: 250,
 	})
 	if err == nil {
 		parsed := parseJSONObject(resp.Text)
@@ -384,7 +384,7 @@ func (s *Service) TargetInsight(ctx context.Context, branchID, actorID, targetID
 	}
 	resp, err := s.complete(ctx, st, p, key, domain.CompletionRequest{
 		System: "Add a short recovery narrative. Do not invent financial figures — use provided numbers only. JSON {\"narrative\":\"\",\"actions\":[]}",
-		User: mustJSON(out), JSONMode: true, MaxTokens: 400,
+		User:   mustJSON(out), JSONMode: true, MaxTokens: 400,
 	})
 	if err != nil {
 		return out, nil
@@ -414,7 +414,7 @@ func (s *Service) OCRExtract(ctx context.Context, branchID, actorID uuid.UUID, i
 	}
 	resp, err := s.complete(ctx, st, p, key, domain.CompletionRequest{
 		System: "Extract travel document fields. Return JSON {\"fields\":{\"full_name\":\"\",\"passport_no\":\"\",\"nationality\":\"\",\"date_of_birth\":\"\",\"expiry_date\":\"\"},\"confidence\":0-1}. Never claim verification. Human must confirm.",
-		User: hint, ImageB64: imageB64, ImageMIME: mime, JSONMode: true, MaxTokens: 500,
+		User:   hint, ImageB64: imageB64, ImageMIME: mime, JSONMode: true, MaxTokens: 500,
 	})
 	if err != nil {
 		_, _ = s.record(ctx, branchID, &actorID, domain.KindOCRExtract, st, map[string]any{"hint": hint}, nil, domain.HashInput(imageB64[:min(32, len(imageB64))]), "error", err.Error())

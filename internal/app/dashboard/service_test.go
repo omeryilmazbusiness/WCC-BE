@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
@@ -36,7 +37,7 @@ func (s *stubAgg) TeamPerformance(context.Context, *uuid.UUID, time.Time, time.T
 func (s *stubAgg) AttentionFeed(context.Context, *uuid.UUID, int) ([]dashboard.AttentionItem, error) {
 	return nil, nil
 }
-func (s *stubAgg) MyWorkToday(context.Context, uuid.UUID, uuid.UUID, int) ([]dashboard.MyWorkItem, error) {
+func (s *stubAgg) MyWorkToday(context.Context, *uuid.UUID, uuid.UUID, int) ([]dashboard.MyWorkItem, error) {
 	return nil, nil
 }
 func (s *stubAgg) TargetProgress(context.Context, uuid.UUID, *uuid.UUID) (*dashboard.TargetProgress, error) {
@@ -99,7 +100,7 @@ func TestServiceKPIsValidatesThenAggregates(t *testing.T) {
 	// inject clock via Normalize through KPIs with explicit window
 	from := now.AddDate(0, 0, -14)
 	branch := uuid.MustParse("11111111-1111-1111-1111-111111111111")
-	kpi, err := svc.KPIs(context.Background(), &branch, from, now)
+	kpi, err := svc.KPIs(access.WithScope(context.Background(), access.System()), &branch, from, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,11 +123,50 @@ func TestServiceKPIsRejectsInvalidPeriod(t *testing.T) {
 	agg := &stubAgg{kpi: &dashboard.KPI{}}
 	svc := dashboard.NewService(agg)
 	now := time.Now().UTC()
-	_, err := svc.KPIs(context.Background(), nil, now, now.Add(-time.Hour))
+	_, err := svc.KPIs(access.WithScope(context.Background(), access.System()), nil, now, now.Add(-time.Hour))
 	if err == nil {
 		t.Fatal("expected error")
 	}
 	if agg.calls != 0 {
 		t.Fatal("aggregator must not run on invalid period")
+	}
+}
+
+func TestServiceKPIsPinsNonGlobalBranch(t *testing.T) {
+	agg := &stubAgg{kpi: &dashboard.KPI{}}
+	svc := dashboard.NewService(agg)
+	now := time.Now().UTC()
+	home, other := uuid.New(), uuid.New()
+	ctx := access.WithScope(context.Background(), access.Scope{Level: access.LevelBranch, BranchID: home, UserID: uuid.New()})
+
+	if _, err := svc.KPIs(ctx, nil, now.Add(-time.Hour), now); err != nil {
+		t.Fatal(err)
+	}
+	if agg.branch == nil || *agg.branch != home {
+		t.Fatalf("branch = %v, want caller branch", agg.branch)
+	}
+	if _, err := svc.KPIs(ctx, &other, now.Add(-time.Hour), now); !errors.Is(err, access.ErrBranchForbidden) {
+		t.Fatalf("want ErrBranchForbidden, got %v", err)
+	}
+}
+
+func TestServiceKPIsGlobalAllBranches(t *testing.T) {
+	agg := &stubAgg{kpi: &dashboard.KPI{}}
+	svc := dashboard.NewService(agg)
+	now := time.Now().UTC()
+	ctx := access.WithScope(context.Background(), access.Scope{Level: access.LevelGlobal, BranchID: uuid.New(), UserID: uuid.New()})
+	if _, err := svc.KPIs(ctx, nil, now.Add(-time.Hour), now); err != nil {
+		t.Fatal(err)
+	}
+	if agg.branch != nil {
+		t.Fatalf("global caller without branch_id must aggregate all branches, got %v", *agg.branch)
+	}
+}
+
+func TestServiceKPIsRequiresScope(t *testing.T) {
+	svc := dashboard.NewService(&stubAgg{kpi: &dashboard.KPI{}})
+	now := time.Now().UTC()
+	if _, err := svc.KPIs(context.Background(), nil, now.Add(-time.Hour), now); !errors.Is(err, access.ErrNoScope) {
+		t.Fatalf("want ErrNoScope, got %v", err)
 	}
 }

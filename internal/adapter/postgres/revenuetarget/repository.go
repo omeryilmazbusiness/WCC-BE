@@ -3,13 +3,17 @@ package revenuetarget
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/revenuetarget"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
@@ -24,6 +28,52 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 const targetCols = `id, branch_id, owner_id, team_id, label, target_amount, currency,
 	COALESCE(metric,'collected'), COALESCE(scope_type,'branch'), COALESCE(curve_type,'linear'),
 	period_start, period_end, created_by, created_at, COALESCE(updated_at, created_at)`
+
+// targetScope renders visibility for revenue targets aliased t. Branch and
+// global scopes see every target in reach; own scopes see branch-level goals
+// plus targets they own or hold a share in; team scopes (managers) also see
+// their team's targets and targets owned by team members.
+func targetScope(ctx context.Context, args []any) (string, []any, error) {
+	clause, args, err := pgscope.Clause(ctx, pgscope.Columns{Branch: "t.branch_id"}, args)
+	if err != nil {
+		return "", args, err
+	}
+	s := access.From(ctx)
+	switch s.Level {
+	case access.LevelOwn:
+		args = append(args, s.UserID)
+		clause += fmt.Sprintf(` AND (COALESCE(t.scope_type,'branch')='branch' OR t.owner_id=$%[1]d
+			OR EXISTS (SELECT 1 FROM revenue_target_shares sh WHERE sh.target_id=t.id AND sh.user_id=$%[1]d))`, len(args))
+	case access.LevelTeam:
+		args = append(args, s.UserID, s.TeamID)
+		clause += fmt.Sprintf(` AND (COALESCE(t.scope_type,'branch')='branch' OR t.team_id=$%[2]d OR t.owner_id=$%[1]d
+			OR t.owner_id IN (SELECT id FROM users WHERE team_id=$%[2]d))`, len(args)-1, len(args))
+	}
+	return clause, args, nil
+}
+
+// targetVisible renders an EXISTS guard on the parent target of a child row.
+func targetVisible(ctx context.Context, targetCol string, args []any) (string, []any, error) {
+	clause, args, err := targetScope(ctx, args)
+	if err != nil {
+		return "", args, err
+	}
+	return ` AND EXISTS (SELECT 1 FROM revenue_targets t WHERE t.id=` + targetCol + clause + `)`, args, nil
+}
+
+func (r *Repository) ensureTarget(ctx context.Context, targetID uuid.UUID) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	guard, args, err := targetVisible(ctx, "$1", []any{targetID})
+	if err != nil {
+		return err
+	}
+	var ok bool
+	err = q.QueryRow(ctx, `SELECT TRUE WHERE $1::uuid IS NOT NULL`+guard, args...).Scan(&ok)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return shared.NewNotFound("revenue_target")
+	}
+	return err
+}
 
 func scanTarget(scan func(dest ...any) error) (*domain.Target, error) {
 	var t domain.Target
@@ -42,6 +92,9 @@ func scanTarget(scan func(dest ...any) error) (*domain.Target, error) {
 }
 
 func (r *Repository) Create(ctx context.Context, t *domain.Target) error {
+	if err := pgscope.EnsureBranch(ctx, t.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO revenue_targets (
@@ -57,21 +110,35 @@ func (r *Repository) Create(ctx context.Context, t *domain.Target) error {
 
 func (r *Repository) Update(ctx context.Context, t *domain.Target) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		UPDATE revenue_targets SET
-			owner_id=$2, team_id=$3, label=$4, target_amount=$5, currency=$6,
-			metric=$7, scope_type=$8, curve_type=$9, period_start=$10, period_end=$11, updated_at=$12
-		WHERE id=$1`,
+	clause, args, err := targetScope(ctx, []any{
 		t.ID, t.OwnerID, t.TeamID, t.Label, t.TargetAmount, t.Currency,
 		string(t.Metric), string(t.ScopeType), string(t.CurveType),
 		t.PeriodStart, t.PeriodEnd, t.UpdatedAt,
-	)
-	return err
+	})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `
+		UPDATE revenue_targets t SET
+			owner_id=$2, team_id=$3, label=$4, target_amount=$5, currency=$6,
+			metric=$7, scope_type=$8, curve_type=$9, period_start=$10, period_end=$11, updated_at=$12
+		WHERE t.id=$1`+clause, args...)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return shared.NewNotFound("revenue_target")
+	}
+	return nil
 }
 
 func (r *Repository) Get(ctx context.Context, id uuid.UUID) (*domain.Target, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	row := q.QueryRow(ctx, `SELECT `+targetCols+` FROM revenue_targets WHERE id=$1`, id)
+	clause, args, err := targetScope(ctx, []any{id})
+	if err != nil {
+		return nil, err
+	}
+	row := q.QueryRow(ctx, `SELECT `+targetCols+` FROM revenue_targets t WHERE t.id=$1`+clause, args...)
 	t, err := scanTarget(row.Scan)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -79,16 +146,25 @@ func (r *Repository) Get(ctx context.Context, id uuid.UUID) (*domain.Target, err
 	return t, err
 }
 
-func (r *Repository) List(ctx context.Context, branchID uuid.UUID) ([]domain.Target, error) {
-	return r.ListTargetsForBranch(ctx, branchID)
+// List returns visible targets; a nil branch means every branch in scope.
+func (r *Repository) List(ctx context.Context, branchID *uuid.UUID) ([]domain.Target, error) {
+	return r.listTargets(ctx, branchID)
 }
 
 func (r *Repository) ListTargetsForBranch(ctx context.Context, branchID uuid.UUID) ([]domain.Target, error) {
+	return r.listTargets(ctx, &branchID)
+}
+
+func (r *Repository) listTargets(ctx context.Context, branchID *uuid.UUID) ([]domain.Target, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := targetScope(ctx, []any{branchID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT `+targetCols+` FROM revenue_targets
-		WHERE branch_id=$1
-		ORDER BY period_start DESC, label`, branchID)
+		SELECT `+targetCols+` FROM revenue_targets t
+		WHERE ($1::uuid IS NULL OR t.branch_id=$1)`+clause+`
+		ORDER BY t.period_start DESC, t.label`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +181,9 @@ func (r *Repository) ListTargetsForBranch(ctx context.Context, branchID uuid.UUI
 }
 
 func (r *Repository) ReplaceWeights(ctx context.Context, targetID uuid.UUID, weights []domain.Weight) error {
+	if err := r.ensureTarget(ctx, targetID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if _, err := q.Exec(ctx, `DELETE FROM revenue_target_weights WHERE target_id=$1`, targetID); err != nil {
 		return err
@@ -121,9 +200,13 @@ func (r *Repository) ReplaceWeights(ctx context.Context, targetID uuid.UUID, wei
 
 func (r *Repository) ListWeights(ctx context.Context, targetID uuid.UUID) ([]domain.Weight, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	guard, args, err := targetVisible(ctx, "w.target_id", []any{targetID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT bucket, weight_bps FROM revenue_target_weights
-		WHERE target_id=$1 ORDER BY bucket`, targetID)
+		SELECT w.bucket, w.weight_bps FROM revenue_target_weights w
+		WHERE w.target_id=$1`+guard+` ORDER BY w.bucket`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +223,9 @@ func (r *Repository) ListWeights(ctx context.Context, targetID uuid.UUID) ([]dom
 }
 
 func (r *Repository) ReplaceShares(ctx context.Context, targetID uuid.UUID, shares []domain.Share) error {
+	if err := r.ensureTarget(ctx, targetID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if _, err := q.Exec(ctx, `DELETE FROM revenue_target_shares WHERE target_id=$1`, targetID); err != nil {
 		return err
@@ -156,12 +242,16 @@ func (r *Repository) ReplaceShares(ctx context.Context, targetID uuid.UUID, shar
 
 func (r *Repository) ListShares(ctx context.Context, targetID uuid.UUID) ([]domain.Share, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	guard, args, err := targetVisible(ctx, "s.target_id", []any{targetID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT s.user_id, COALESCE(u.full_name,''), s.share_bps
 		FROM revenue_target_shares s
 		LEFT JOIN users u ON u.id = s.user_id
-		WHERE s.target_id=$1
-		ORDER BY s.share_bps DESC, u.full_name`, targetID)
+		WHERE s.target_id=$1`+guard+`
+		ORDER BY s.share_bps DESC, u.full_name`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -201,15 +291,19 @@ func (r *Repository) UpsertSnapshot(ctx context.Context, s *domain.Snapshot) err
 
 func (r *Repository) LatestSnapshot(ctx context.Context, targetID uuid.UUID) (*domain.Snapshot, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	guard, args, err := targetVisible(ctx, "sn.target_id", []any{targetID})
+	if err != nil {
+		return nil, err
+	}
 	row := q.QueryRow(ctx, `
-		SELECT target_id, as_of, actual_amount, expected_to_date, variance,
-			progress_bps, pace_bps, forecast_amount, status, updated_at
-		FROM revenue_target_snapshots
-		WHERE target_id=$1
-		ORDER BY as_of DESC LIMIT 1`, targetID)
+		SELECT sn.target_id, sn.as_of, sn.actual_amount, sn.expected_to_date, sn.variance,
+			sn.progress_bps, sn.pace_bps, sn.forecast_amount, sn.status, sn.updated_at
+		FROM revenue_target_snapshots sn
+		WHERE sn.target_id=$1`+guard+`
+		ORDER BY sn.as_of DESC LIMIT 1`, args...)
 	var s domain.Snapshot
 	var status string
-	err := row.Scan(
+	err = row.Scan(
 		&s.TargetID, &s.AsOf, &s.ActualAmount, &s.ExpectedToDate, &s.Variance,
 		&s.ProgressBps, &s.PaceBps, &s.ForecastAmount, &status, &s.UpdatedAt,
 	)
@@ -244,11 +338,15 @@ func (r *Repository) ListRevisions(ctx context.Context, targetID uuid.UUID, limi
 		limit = 50
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
+	guard, args, err := targetVisible(ctx, "rv.target_id", []any{targetID, limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT id, target_id, actor_id, action, before_json, after_json, created_at
-		FROM revenue_target_revisions
-		WHERE target_id=$1
-		ORDER BY created_at DESC LIMIT $2`, targetID, limit)
+		SELECT rv.id, rv.target_id, rv.actor_id, rv.action, rv.before_json, rv.after_json, rv.created_at
+		FROM revenue_target_revisions rv
+		WHERE rv.target_id=$1`+guard+`
+		ORDER BY rv.created_at DESC LIMIT $2`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -397,10 +495,10 @@ func (r *Repository) ListSources(ctx context.Context, t *domain.Target, from, to
 		limit = 100
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
-	toExclusive := to.UTC().Truncate(24 * time.Hour).AddDate(0, 0, 1)
+	toExclusive := to.UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
 	applyOwner, ownerID := ownerFilter(t)
 
-	const sqlBranch = `
+	sqlBranch := `
 		SELECT kind, id, booking_id, amount, currency, owner_id, owner_name, occurred_at, label FROM (
 			SELECT 'booking'::text AS kind, b.id, b.id AS booking_id, b.total_amount AS amount,
 				b.currency, b.owner_id, COALESCE(u.full_name,'') AS owner_name, b.created_at AS occurred_at,
@@ -420,11 +518,11 @@ func (r *Repository) ListSources(ctx context.Context, t *domain.Target, from, to
 			WHERE b.branch_id=$1
 			  AND p.status IN ('verified','approved')
 			  AND p.created_at >= $2 AND p.created_at < $3
-		) src
+		) src%s
 		ORDER BY occurred_at DESC
 		LIMIT $4`
 
-	const sqlOwner = `
+	sqlOwner := `
 		SELECT kind, id, booking_id, amount, currency, owner_id, owner_name, occurred_at, label FROM (
 			SELECT 'booking'::text AS kind, b.id, b.id AS booking_id, b.total_amount AS amount,
 				b.currency, b.owner_id, COALESCE(u.full_name,'') AS owner_name, b.created_at AS occurred_at,
@@ -444,17 +542,25 @@ func (r *Repository) ListSources(ctx context.Context, t *domain.Target, from, to
 			WHERE b.branch_id=$1 AND b.owner_id=$2
 			  AND p.status IN ('verified','approved')
 			  AND p.created_at >= $3 AND p.created_at < $4
-		) src
+		) src%s
 		ORDER BY occurred_at DESC
 		LIMIT $5`
 
-	var rows pgx.Rows
-	var err error
+	query, args := sqlBranch, []any{t.BranchID, from, toExclusive, limit}
 	if applyOwner {
-		rows, err = q.Query(ctx, sqlOwner, t.BranchID, ownerID, from, toExclusive, limit)
-	} else {
-		rows, err = q.Query(ctx, sqlBranch, t.BranchID, from, toExclusive, limit)
+		query, args = sqlOwner, []any{t.BranchID, ownerID, from, toExclusive, limit}
 	}
+	// Source rows expose individual bookings, so own/team callers only see
+	// rows owned by users inside their scope.
+	set, args, restricted, err := pgscope.Owners(ctx, args)
+	if err != nil {
+		return nil, err
+	}
+	guard := ""
+	if restricted {
+		guard = " WHERE src.owner_id IN (" + set + ")"
+	}
+	rows, err := q.Query(ctx, fmt.Sprintf(query, guard), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -475,6 +581,9 @@ func (r *Repository) ListSources(ctx context.Context, t *domain.Target, from, to
 
 func (r *Repository) ManagerUserIDs(ctx context.Context, branchID uuid.UUID) ([]uuid.UUID, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT id FROM users
 		WHERE branch_id=$1 AND is_active=TRUE AND role IN ('manager','gm')

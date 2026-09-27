@@ -63,16 +63,16 @@ func (s *Service) PutSLA(ctx context.Context, branchID uuid.UUID, items []Upsert
 }
 
 type EscalationRuleDTO struct {
-	Kind                 string        `json:"kind"`
-	Severity             string        `json:"severity"`
-	EscalateAfterSeconds int           `json:"escalate_after_seconds"`
-	EscalateToRoles      []string      `json:"escalate_to_roles"`
-	Groupable            bool          `json:"groupable"`
-	DefaultTitle         string        `json:"default_title"`
-	DefaultHref          string        `json:"default_href"`
-	EntityType           string        `json:"entity_type"`
-	Overridden           bool          `json:"overridden"`
-	Enabled              bool          `json:"enabled"`
+	Kind                 string   `json:"kind"`
+	Severity             string   `json:"severity"`
+	EscalateAfterSeconds int      `json:"escalate_after_seconds"`
+	EscalateToRoles      []string `json:"escalate_to_roles"`
+	Groupable            bool     `json:"groupable"`
+	DefaultTitle         string   `json:"default_title"`
+	DefaultHref          string   `json:"default_href"`
+	EntityType           string   `json:"entity_type"`
+	Overridden           bool     `json:"overridden"`
+	Enabled              bool     `json:"enabled"`
 }
 
 func (s *Service) GetEscalationMatrix(ctx context.Context, branchID uuid.UUID) ([]EscalationRuleDTO, error) {
@@ -91,8 +91,8 @@ func (s *Service) GetEscalationMatrix(ctx context.Context, branchID uuid.UUID) (
 		out = append(out, EscalationRuleDTO{
 			Kind: r.Kind, Severity: string(r.Severity),
 			EscalateAfterSeconds: int(r.EscalateAfter / time.Second),
-			EscalateToRoles: append([]string(nil), r.EscalateToRoles...),
-			Groupable: r.Groupable, DefaultTitle: r.DefaultTitle,
+			EscalateToRoles:      append([]string(nil), r.EscalateToRoles...),
+			Groupable:            r.Groupable, DefaultTitle: r.DefaultTitle,
 			DefaultHref: r.DefaultHref, EntityType: r.EntityType,
 			Overridden: overridden, Enabled: true,
 		})
@@ -105,7 +105,7 @@ func (s *Service) GetEscalationMatrix(ctx context.Context, branchID uuid.UUID) (
 		out = append(out, EscalationRuleDTO{
 			Kind: o.Kind, EscalateAfterSeconds: o.EscalateAfterSeconds,
 			EscalateToRoles: append([]string(nil), o.EscalateToRoles...),
-			Overridden: true, Enabled: false,
+			Overridden:      true, Enabled: false,
 		})
 	}
 	return out, nil
@@ -132,8 +132,8 @@ func (s *Service) UpsertEscalation(ctx context.Context, branchID uuid.UUID, kind
 	o := &domain.EscalationOverride{
 		BranchID: branchID, Kind: kind,
 		EscalateAfterSeconds: in.EscalateAfterSeconds,
-		EscalateToRoles: append([]string(nil), in.EscalateToRoles...),
-		Enabled: enabled, UpdatedAt: s.now(),
+		EscalateToRoles:      append([]string(nil), in.EscalateToRoles...),
+		Enabled:              enabled, UpdatedAt: s.now(),
 	}
 	if err := s.repo.UpsertEscalationOverride(ctx, o); err != nil {
 		return nil, err

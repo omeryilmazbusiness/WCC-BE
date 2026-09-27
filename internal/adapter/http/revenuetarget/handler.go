@@ -8,9 +8,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/revenuetarget"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/revenuetarget"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/revenuetarget"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -66,12 +67,17 @@ func parseDate(s string) (time.Time, error) {
 }
 
 func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	items, err := h.Svc.List(r.Context(), claims.BranchID)
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	items, err := h.Svc.List(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -87,6 +93,11 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	var body struct {
@@ -116,7 +127,7 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
-		BranchID: claims.BranchID, OwnerID: body.OwnerID, TeamID: body.TeamID,
+		BranchID: branchID, OwnerID: body.OwnerID, TeamID: body.TeamID,
 		Label: body.Label, TargetAmount: body.TargetAmount, Currency: body.Currency,
 		Metric: domain.Metric(body.Metric), ScopeType: domain.ScopeType(body.ScopeType),
 		CurveType: domain.CurveType(body.CurveType), PeriodStart: start, PeriodEnd: end,
@@ -416,12 +427,17 @@ func (h Handler) Recompute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) RecomputeBranch(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	items, err := h.Svc.RecomputeBranch(r.Context(), claims.BranchID)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	items, err := h.Svc.RecomputeBranch(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return

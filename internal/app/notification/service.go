@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/notification"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
@@ -48,11 +49,11 @@ type EmitInput struct {
 }
 
 type Service struct {
-	repo   domain.Repository
-	tx     tx.Runner
-	users  UserDirectory
-	ext    ExternalNotifier
-	log    *slog.Logger
+	repo  domain.Repository
+	tx    tx.Runner
+	users UserDirectory
+	ext   ExternalNotifier
+	log   *slog.Logger
 }
 
 func NewService(repo domain.Repository, txm tx.Runner, log *slog.Logger) *Service {
@@ -66,8 +67,27 @@ func (s *Service) SetExternal(n ExternalNotifier) {
 	}
 }
 
+// DeliveryScope is the scope used for fan-out writes. Reads are recipient-only
+// for user-bound scopes, but delivering to (and grouping with) another user's
+// notifications needs a user-less scope; the caller's branch reach is kept.
+func DeliveryScope(s access.Scope) access.Scope {
+	switch s.Level {
+	case access.LevelNone:
+		return s
+	case access.LevelGlobal:
+		return access.System()
+	default:
+		return access.ForBranch(s.BranchID)
+	}
+}
+
+func withDeliveryScope(ctx context.Context) context.Context {
+	return access.WithScope(ctx, DeliveryScope(access.From(ctx)))
+}
+
 // Emit upserts by group_key for groupable kinds (T-173 + T-175).
 func (s *Service) Emit(ctx context.Context, in EmitInput) (*domain.Notification, error) {
+	ctx = withDeliveryScope(ctx)
 	if in.BranchID == uuid.Nil || in.RecipientUserID == uuid.Nil || strings.TrimSpace(in.Kind) == "" {
 		return nil, shared.NewValidation("branch_id, recipient_user_id and kind are required")
 	}
@@ -146,6 +166,7 @@ func (s *Service) EmitToRoles(ctx context.Context, branchID uuid.UUID, roles []s
 	if s.users == nil || len(roles) == 0 {
 		return 0, nil
 	}
+	ctx = withDeliveryScope(ctx)
 	users, err := s.users.ListActiveByRoles(ctx, branchID, roles)
 	if err != nil {
 		return 0, err
@@ -296,6 +317,7 @@ func (s *Service) ProcessEscalations(ctx context.Context, now time.Time) (int, e
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	ctx = withDeliveryScope(ctx)
 	// Look back far enough to catch slowest escalate_after (48h docs).
 	items, err := s.repo.ListOpenOlderThan(ctx, now.Add(-72*time.Hour), 500)
 	if err != nil {

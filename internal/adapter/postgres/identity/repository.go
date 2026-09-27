@@ -10,7 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -23,11 +25,20 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+var (
+	userScope   = pgscope.Columns{Branch: "branch_id"}
+	branchScope = pgscope.Columns{Branch: "id"}
+)
+
+// FindUserByEmail and FindUserByID are unscoped: authentication resolves the
+// caller before any access scope exists. Admin reads enforce visibility in
+// the service layer.
+
 func (r *Repository) FindUserByEmail(ctx context.Context, email string) (*identity.User, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	row := q.QueryRow(ctx, `
 		SELECT id, email, password_hash, full_name, role, branch_id, team_id, is_active,
-		       COALESCE(mfa_enabled, false), created_at, updated_at
+		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version
 		FROM users WHERE email = $1`, email)
 	return scanUser(row)
 }
@@ -36,12 +47,15 @@ func (r *Repository) FindUserByID(ctx context.Context, id uuid.UUID) (*identity.
 	q := tx.QuerierFrom(ctx, r.pool)
 	row := q.QueryRow(ctx, `
 		SELECT id, email, password_hash, full_name, role, branch_id, team_id, is_active,
-		       COALESCE(mfa_enabled, false), created_at, updated_at
+		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version
 		FROM users WHERE id = $1`, id)
 	return scanUser(row)
 }
 
 func (r *Repository) CreateUser(ctx context.Context, user *identity.User) error {
+	if err := pgscope.EnsureBranch(ctx, user.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO users (id, email, password_hash, full_name, role, branch_id, team_id, is_active, mfa_enabled, created_at, updated_at)
@@ -53,16 +67,30 @@ func (r *Repository) CreateUser(ctx context.Context, user *identity.User) error 
 }
 
 func (r *Repository) UpdateUser(ctx context.Context, user *identity.User) error {
+	if err := pgscope.EnsureBranch(ctx, user.BranchID); err != nil {
+		return err
+	}
+	args := []any{
+		user.ID, user.Email, user.PasswordHash, user.FullName, user.Role, user.BranchID, user.TeamID,
+		user.IsActive, user.MFAEnabled, user.UpdatedAt,
+	}
+	clause, args, err := pgscope.Clause(ctx, userScope, args)
+	if err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
+	tag, err := q.Exec(ctx, `
 		UPDATE users SET
 			email=$2, password_hash=$3, full_name=$4, role=$5, branch_id=$6, team_id=$7,
 			is_active=$8, mfa_enabled=$9, updated_at=$10
-		WHERE id=$1`,
-		user.ID, user.Email, user.PasswordHash, user.FullName, user.Role, user.BranchID, user.TeamID,
-		user.IsActive, user.MFAEnabled, user.UpdatedAt,
-	)
-	return err
+		WHERE id=$1`+clause, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("user")
+	}
+	return nil
 }
 
 func (r *Repository) ListUsers(ctx context.Context, f identity.UserFilter) ([]identity.User, int, error) {
@@ -95,6 +123,11 @@ func (r *Repository) ListUsers(ctx context.Context, f identity.UserFilter) ([]id
 		args = append(args, "%"+strings.TrimSpace(f.Query)+"%")
 		i++
 	}
+	where, args, err := pgscope.Append(ctx, userScope, where, args)
+	if err != nil {
+		return nil, 0, err
+	}
+	i = len(args) + 1
 	w := strings.Join(where, " AND ")
 	var total int
 	if err := q.QueryRow(ctx, "SELECT COUNT(*) FROM users WHERE "+w, args...).Scan(&total); err != nil {
@@ -107,7 +140,7 @@ func (r *Repository) ListUsers(ctx context.Context, f identity.UserFilter) ([]id
 	args = append(args, limit, f.Offset)
 	rows, err := q.Query(ctx, `
 		SELECT id, email, password_hash, full_name, role, branch_id, team_id, is_active,
-		       COALESCE(mfa_enabled, false), created_at, updated_at
+		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version
 		FROM users WHERE `+w+`
 		ORDER BY full_name ASC
 		LIMIT $`+fmt.Sprint(i)+` OFFSET $`+fmt.Sprint(i+1), args...)
@@ -127,9 +160,14 @@ func (r *Repository) ListUsers(ctx context.Context, f identity.UserFilter) ([]id
 }
 
 func (r *Repository) ListBranches(ctx context.Context) ([]identity.Branch, error) {
+	clause, args, err := pgscope.Clause(ctx, branchScope, nil)
+	if err != nil {
+		return nil, err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	rows, err := q.Query(ctx, `
-		SELECT id, code, name_en, name_ar, is_active, created_at FROM branches ORDER BY code`)
+		SELECT id, code, name_en, name_ar, is_active, created_at FROM branches
+		WHERE TRUE`+clause+` ORDER BY code`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -146,26 +184,32 @@ func (r *Repository) ListBranches(ctx context.Context) ([]identity.Branch, error
 }
 
 func (r *Repository) UpdateBranch(ctx context.Context, b *identity.Branch) error {
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{b.ID, b.Code, b.NameEN, b.NameAR, b.IsActive})
+	if err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
+	tag, err := q.Exec(ctx, `
 		UPDATE branches SET code=$2, name_en=$3, name_ar=$4, is_active=$5
-		WHERE id=$1`, b.ID, b.Code, b.NameEN, b.NameAR, b.IsActive)
-	return err
+		WHERE id=$1`+clause, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("branch")
+	}
+	return nil
 }
 
 func (r *Repository) ListTeams(ctx context.Context, branchID *uuid.UUID) ([]identity.Team, error) {
-	q := tx.QuerierFrom(ctx, r.pool)
-	var rows pgx.Rows
-	var err error
-	if branchID != nil {
-		rows, err = q.Query(ctx, `
-			SELECT id, branch_id, code, name_en, name_ar, is_active, created_at
-			FROM teams WHERE branch_id=$1 ORDER BY code`, *branchID)
-	} else {
-		rows, err = q.Query(ctx, `
-			SELECT id, branch_id, code, name_en, name_ar, is_active, created_at
-			FROM teams ORDER BY code`)
+	clause, args, err := pgscope.Clause(ctx, userScope, []any{branchID})
+	if err != nil {
+		return nil, err
 	}
+	q := tx.QuerierFrom(ctx, r.pool)
+	rows, err := q.Query(ctx, `
+		SELECT id, branch_id, code, name_en, name_ar, is_active, created_at
+		FROM teams WHERE ($1::uuid IS NULL OR branch_id=$1)`+clause+` ORDER BY code`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -182,10 +226,14 @@ func (r *Repository) ListTeams(ctx context.Context, branchID *uuid.UUID) ([]iden
 }
 
 func (r *Repository) FindTeam(ctx context.Context, id uuid.UUID) (*identity.Team, error) {
+	clause, args, err := pgscope.Clause(ctx, userScope, []any{id})
+	if err != nil {
+		return nil, err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	var t identity.Team
-	err := q.QueryRow(ctx, `
-		SELECT id, branch_id, code, name_en, name_ar, is_active, created_at FROM teams WHERE id=$1`, id).
+	err = q.QueryRow(ctx, `
+		SELECT id, branch_id, code, name_en, name_ar, is_active, created_at FROM teams WHERE id=$1`+clause, args...).
 		Scan(&t.ID, &t.BranchID, &t.Code, &t.NameEN, &t.NameAR, &t.IsActive, &t.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("team: %w", err)
@@ -203,7 +251,7 @@ type scannable interface {
 func scanUser(row scannable) (*identity.User, error) {
 	var u identity.User
 	var role string
-	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.FullName, &role, &u.BranchID, &u.TeamID, &u.IsActive, &u.MFAEnabled, &u.CreatedAt, &u.UpdatedAt)
+	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.FullName, &role, &u.BranchID, &u.TeamID, &u.IsActive, &u.MFAEnabled, &u.CreatedAt, &u.UpdatedAt, &u.TokenVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("user: %w", err)
 	}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -63,7 +64,7 @@ type ChecklistUpdateInput struct {
 }
 
 type ListInput struct {
-	BranchID    uuid.UUID
+	BranchID    *uuid.UUID
 	CustomerID  *uuid.UUID
 	DepartureID *uuid.UUID
 	OwnerID     *uuid.UUID
@@ -97,7 +98,7 @@ func NewService(
 	return &Service{repo: repo, departures: departures, tx: txm, bus: bus}
 }
 
-func (s *Service) SetAuditor(a audit.Recorder) { s.audit = a }
+func (s *Service) SetAuditor(a audit.Recorder)    { s.audit = a }
 func (s *Service) SetDocReadiness(d DocReadiness) { s.docs = d }
 
 func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Booking, error) {
@@ -120,10 +121,22 @@ func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Book
 	if in.DiscountAmt < 0 {
 		return nil, shared.NewValidation("discount_amt must be >= 0")
 	}
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branchID, err := scope.WriteBranch(in.BranchID)
+	if err != nil {
+		return nil, err
+	}
+	ownerID, err := scope.ResolveOwner(in.OwnerID)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	b := &domain.Booking{
 		ID:          uuid.New(),
-		BranchID:    in.BranchID,
+		BranchID:    branchID,
 		CustomerID:  in.CustomerID,
 		DepartureID: in.DepartureID,
 		LeadID:      in.LeadID,
@@ -133,7 +146,7 @@ func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Book
 		DiscountAmt: in.DiscountAmt,
 		Currency:    in.Currency,
 		Notes:       strings.TrimSpace(in.Notes),
-		OwnerID:     in.OwnerID,
+		OwnerID:     ownerID,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -161,14 +174,20 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Booking, error
 	return b, nil
 }
 
+// List pins the branch filter to the caller's scope; the repository also
+// restricts owners, so in.OwnerID can only narrow visibility.
 func (s *Service) List(ctx context.Context, in ListInput) ([]domain.Booking, int, error) {
-	f := domain.ListFilter{
-		CustomerID: in.CustomerID, DepartureID: in.DepartureID, OwnerID: in.OwnerID,
-		LeadID: in.LeadID, Status: in.Status, Query: in.Query, Limit: in.Limit, Offset: in.Offset,
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, 0, err
 	}
-	if in.BranchID != uuid.Nil {
-		bid := in.BranchID
-		f.BranchID = &bid
+	branchID, err := scope.ResolveBranch(in.BranchID)
+	if err != nil {
+		return nil, 0, err
+	}
+	f := domain.ListFilter{
+		BranchID: branchID, CustomerID: in.CustomerID, DepartureID: in.DepartureID, OwnerID: in.OwnerID,
+		LeadID: in.LeadID, Status: in.Status, Query: in.Query, Limit: in.Limit, Offset: in.Offset,
 	}
 	return s.repo.List(ctx, f)
 }

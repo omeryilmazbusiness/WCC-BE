@@ -200,7 +200,7 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Target, error)
 	return t, nil
 }
 
-func (s *Service) List(ctx context.Context, branchID uuid.UUID) ([]domain.Target, error) {
+func (s *Service) List(ctx context.Context, branchID *uuid.UUID) ([]domain.Target, error) {
 	return s.repo.List(ctx, branchID)
 }
 

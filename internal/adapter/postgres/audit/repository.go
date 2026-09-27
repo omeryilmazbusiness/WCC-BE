@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -80,6 +81,11 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Ev
 		args = append(args, *f.To)
 		i++
 	}
+	where, args, err := pgscope.Append(ctx, pgscope.Columns{Branch: "branch_id"}, where, args)
+	if err != nil {
+		return nil, 0, err
+	}
+	i = len(args) + 1
 	w := strings.Join(where, " AND ")
 	var total int64
 	if err := q.QueryRow(ctx, "SELECT COUNT(*) FROM audit_events WHERE "+w, args...).Scan(&total); err != nil {

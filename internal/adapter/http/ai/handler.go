@@ -7,9 +7,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/ai"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/ai"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/ai"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -19,12 +20,17 @@ type Handler struct {
 }
 
 func (h Handler) GetSetup(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	out, err := h.Svc.GetSetup(r.Context(), claims.BranchID)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out, err := h.Svc.GetSetup(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -36,6 +42,11 @@ func (h Handler) CompleteSetup(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	var body struct {
@@ -53,7 +64,7 @@ func (h Handler) CompleteSetup(w http.ResponseWriter, r *http.Request) {
 		enabled = *body.Enabled
 	}
 	out, err := h.Svc.CompleteSetup(r.Context(), appsvc.SetupInput{
-		BranchID: claims.BranchID, ActorID: claims.UserID,
+		BranchID: branchID, ActorID: claims.UserID,
 		Provider: domain.Provider(body.Provider), APIKey: body.APIKey,
 		Model: body.Model, Enabled: enabled,
 	})
@@ -70,7 +81,12 @@ func (h Handler) Disable(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	out, err := h.Svc.Disable(r.Context(), claims.BranchID, claims.UserID)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out, err := h.Svc.Disable(r.Context(), branchID, claims.UserID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -84,7 +100,12 @@ func (h Handler) DailySummary(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	out, err := h.Svc.DailySummary(r.Context(), claims.BranchID, claims.UserID)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out, err := h.Svc.DailySummary(r.Context(), branchID, claims.UserID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -98,12 +119,17 @@ func (h Handler) ConversationAssist(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	out, err := h.Svc.ConversationAssist(r.Context(), claims.BranchID, claims.UserID, id)
+	out, err := h.Svc.ConversationAssist(r.Context(), branchID, claims.UserID, id)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -117,13 +143,18 @@ func (h Handler) ScoreLead(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
 	explain := r.URL.Query().Get("explain") == "1" || r.URL.Query().Get("explain") == "true"
-	out, err := h.Svc.ScoreLead(r.Context(), claims.BranchID, claims.UserID, id, explain)
+	out, err := h.Svc.ScoreLead(r.Context(), branchID, claims.UserID, id, explain)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -137,12 +168,17 @@ func (h Handler) TargetInsight(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	out, err := h.Svc.TargetInsight(r.Context(), claims.BranchID, claims.UserID, id)
+	out, err := h.Svc.TargetInsight(r.Context(), branchID, claims.UserID, id)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -156,6 +192,11 @@ func (h Handler) OCRExtract(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	var body struct {
 		ImageBase64 string `json:"image_base64"`
 		MIME        string `json:"mime"`
@@ -165,7 +206,7 @@ func (h Handler) OCRExtract(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	out, err := h.Svc.OCRExtract(r.Context(), claims.BranchID, claims.UserID, body.ImageBase64, body.MIME, body.Hint)
+	out, err := h.Svc.OCRExtract(r.Context(), branchID, claims.UserID, body.ImageBase64, body.MIME, body.Hint)
 	if err != nil {
 		response.Error(w, err)
 		return

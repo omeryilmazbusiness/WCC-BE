@@ -9,12 +9,14 @@ import (
 type JobName string
 
 const (
-	JobReminderSend       JobName = "reminder.send"
-	JobWebhookRetry       JobName = "integration.webhook_retry"
-	JobImportProcess      JobName = "import.process"
-	JobReportGenerate     JobName = "report.generate"
-	JobAISummaryDaily     JobName = "ai.summary.daily"
-	JobSLASweep           JobName = "inbox.sla_sweep"
+	JobReminderSend   JobName = "reminder.send"
+	JobWebhookRetry   JobName = "integration.webhook_retry"
+	JobImportProcess  JobName = "import.process"
+	JobReportGenerate JobName = "report.generate"
+	JobAISummaryDaily JobName = "ai.summary.daily"
+	JobSLASweep       JobName = "inbox.sla_sweep"
+	// JobSecurityCleanup purges ended sessions, expired challenges and old webhook events.
+	JobSecurityCleanup JobName = "security.cleanup"
 )
 
 // EnqueueOpts controls retry / delay / uniqueness at the port level.
@@ -40,12 +42,12 @@ type QueueInspector interface {
 
 // QueueStats aggregates Asynq-style queues for health / ops.
 type QueueStats struct {
-	Pending   int `json:"pending"`
-	Active    int `json:"active"`
-	Scheduled int `json:"scheduled"`
-	Retry     int `json:"retry"`
-	Archived  int `json:"archived"` // dead-letter after max retry
-	Completed int `json:"completed"`
+	Pending   int    `json:"pending"`
+	Active    int    `json:"active"`
+	Scheduled int    `json:"scheduled"`
+	Retry     int    `json:"retry"`
+	Archived  int    `json:"archived"` // dead-letter after max retry
+	Completed int    `json:"completed"`
 	Mode      string `json:"mode"` // redis | memory
 }
 

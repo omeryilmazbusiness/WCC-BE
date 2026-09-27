@@ -10,9 +10,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/task"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/task"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/task"
 )
@@ -107,11 +108,6 @@ func parseDue(raw *string) (*time.Time, error) {
 }
 
 func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
-		return
-	}
 	q := r.URL.Query()
 	// Related-only shortcut (legacy query shape).
 	if rt := q.Get("related_type"); rt != "" {
@@ -129,10 +125,15 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	in := appsvc.ListInput{
-		BranchID: claims.BranchID, Status: domain.Status(q.Get("status")),
+		BranchID: branchID, Status: domain.Status(q.Get("status")),
 		Kind: domain.Kind(q.Get("kind")), Query: q.Get("q"),
-		OverdueOnly: q.Get("overdue") == "1" || q.Get("overdue") == "true",
+		OverdueOnly:   q.Get("overdue") == "1" || q.Get("overdue") == "true",
 		EscalatedOnly: q.Get("escalated") == "1" || q.Get("escalated") == "true",
 	}
 	if v := q.Get("assignee_id"); v != "" {
@@ -181,17 +182,12 @@ func (h Handler) ListMine(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
-		return
-	}
 	var req createRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	assignee := claims.UserID
+	var assignee uuid.UUID
 	if req.AssigneeID != nil {
 		assignee = *req.AssigneeID
 	}
@@ -201,7 +197,7 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
-		BranchID: claims.BranchID, Title: req.Title, Kind: domain.Kind(req.Kind),
+		Title: req.Title, Kind: domain.Kind(req.Kind),
 		Priority: domain.Priority(req.Priority), AssigneeID: assignee,
 		RelatedType: req.RelatedType, RelatedID: req.RelatedID, DueAt: due,
 	})
@@ -338,12 +334,12 @@ func (h Handler) BulkAssign(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) EscalateOverdue(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
-	n, err := h.Svc.EscalateOverdue(r.Context(), claims.BranchID)
+	n, err := h.Svc.EscalateOverdue(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -397,7 +393,7 @@ func (h Handler) ConfirmNextTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := h.Svc.ConfirmNextTask(r.Context(), appsvc.ConfirmNextTaskInput{
-		ConversationID: id, BranchID: claims.BranchID, ActorID: claims.UserID,
+		ConversationID: id, ActorID: claims.UserID,
 		Outcome: body.Outcome, Title: body.Title, Kind: body.Kind,
 	})
 	if err != nil {

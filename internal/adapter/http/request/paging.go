@@ -9,7 +9,9 @@ import (
 )
 
 // Page parses canonical list query params:
-//   ?limit=&offset=&page=&sort=
+//
+//	?limit=&offset=&page=&sort=
+//
 // Prefer limit/offset; page is converted when offset is absent.
 func Page(r *http.Request) shared.PageQuery {
 	q := r.URL.Query()

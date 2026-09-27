@@ -10,7 +10,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/ai"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
@@ -22,14 +24,26 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+var (
+	settingsScope = pgscope.Columns{Branch: "branch_id"}
+	runScope      = pgscope.Columns{Branch: "branch_id", Owner: "actor_id"}
+	// Lead scores are written after the lead was loaded through the scoped
+	// lead repository; unassigned leads in reach may be scored as well.
+	leadScope = pgscope.Columns{Branch: "branch_id", Owner: "owner_id", OwnerOrUnassigned: true}
+)
+
 func (r *Repository) GetSettings(ctx context.Context, branchID uuid.UUID) (*domain.Settings, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, settingsScope, []any{branchID})
+	if err != nil {
+		return nil, err
+	}
 	var s domain.Settings
 	var cfg []byte
-	err := q.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT branch_id, provider, model, enabled, config_json,
 		       setup_completed_at, updated_by, updated_at, created_at
-		FROM ai_settings WHERE branch_id=$1`, branchID).Scan(
+		FROM ai_settings WHERE branch_id=$1`+clause, args...).Scan(
 		&s.BranchID, &s.Provider, &s.Model, &s.Enabled, &cfg,
 		&s.SetupCompletedAt, &s.UpdatedBy, &s.UpdatedAt, &s.CreatedAt,
 	)
@@ -44,6 +58,9 @@ func (r *Repository) GetSettings(ctx context.Context, branchID uuid.UUID) (*doma
 }
 
 func (r *Repository) UpsertSettings(ctx context.Context, s *domain.Settings) error {
+	if err := pgscope.EnsureBranch(ctx, s.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	cfg := s.ConfigJSON
 	if len(cfg) == 0 {
@@ -69,6 +86,9 @@ func (r *Repository) UpsertSettings(ctx context.Context, s *domain.Settings) err
 }
 
 func (r *Repository) InsertRun(ctx context.Context, run *domain.Run) error {
+	if err := pgscope.EnsureBranch(ctx, run.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	scope := run.ScopeJSON
 	if len(scope) == 0 {
@@ -91,8 +111,18 @@ func (r *Repository) InsertRun(ctx context.Context, run *domain.Run) error {
 
 func (r *Repository) UpdateRunFeedback(ctx context.Context, id uuid.UUID, feedback string) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `UPDATE ai_runs SET feedback=$2 WHERE id=$1`, id, feedback)
-	return err
+	clause, args, err := pgscope.Clause(ctx, runScope, []any{id, feedback})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `UPDATE ai_runs SET feedback=$2 WHERE id=$1`+clause, args...)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return shared.NewNotFound("ai_run")
+	}
+	return nil
 }
 
 func (r *Repository) ListRuns(ctx context.Context, branchID uuid.UUID, kind domain.Kind, limit int) ([]domain.Run, error) {
@@ -100,12 +130,16 @@ func (r *Repository) ListRuns(ctx context.Context, branchID uuid.UUID, kind doma
 		limit = 20
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, runScope, []any{branchID, string(kind), limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT id, branch_id, actor_id, kind, provider, model, scope_json,
 		       input_hash, output_json, feedback, status, error_message, created_at
 		FROM ai_runs
-		WHERE branch_id=$1 AND ($2 = '' OR kind=$2)
-		ORDER BY created_at DESC LIMIT $3`, branchID, string(kind), limit)
+		WHERE branch_id=$1 AND ($2 = '' OR kind=$2)`+clause+`
+		ORDER BY created_at DESC LIMIT $3`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -133,8 +167,18 @@ func (r *Repository) UpdateLeadPriority(ctx context.Context, leadID uuid.UUID, s
 	if len(signals) == 0 {
 		signals = []byte(`[]`)
 	}
-	_, err := q.Exec(ctx, `
+	clause, args, err := pgscope.Clause(ctx, leadScope, []any{leadID, score, string(band), signals, time.Now().UTC()})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `
 		UPDATE leads SET priority_score=$2, priority_band=$3, priority_signals=$4, priority_updated_at=$5
-		WHERE id=$1`, leadID, score, string(band), signals, time.Now().UTC())
-	return err
+		WHERE id=$1`+clause, args...)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return shared.NewNotFound("lead")
+	}
+	return nil
 }

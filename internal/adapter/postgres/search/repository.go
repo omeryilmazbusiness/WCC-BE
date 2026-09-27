@@ -2,11 +2,13 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/search"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -19,7 +21,10 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-func (r *Repository) Search(ctx context.Context, branchID uuid.UUID, q string, limit int) ([]domain.Hit, error) {
+// Search spans customers (branch-shared), leads and bookings (branch + owner)
+// and booking participants (via their booking), each filtered by the
+// caller's scope; branchID nil searches every branch the scope allows.
+func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, limit int) ([]domain.Hit, error) {
 	if limit <= 0 {
 		limit = 20
 	}
@@ -27,8 +32,22 @@ func (r *Repository) Search(ctx context.Context, branchID uuid.UUID, q string, l
 		limit = 50
 	}
 	pat := "%" + strings.ToLower(strings.TrimSpace(q)) + "%"
+	args := []any{branchID, q, pat}
+	var sc [3]string
+	for i, cols := range []pgscope.Columns{
+		{Branch: "c.branch_id"},
+		{Branch: "l.branch_id", Owner: "l.owner_id"},
+		{Branch: "b.branch_id", Owner: "b.owner_id"},
+	} {
+		var err error
+		if sc[i], args, err = pgscope.Clause(ctx, cols, args); err != nil {
+			return nil, err
+		}
+	}
+	csc, lsc, bsc := sc[0], sc[1], sc[2]
+	args = append(args, limit)
 	querier := tx.QuerierFrom(ctx, r.pool)
-	rows, err := querier.Query(ctx, `
+	rows, err := querier.Query(ctx, fmt.Sprintf(`
 		(
 			SELECT 'customer'::text AS kind, c.id,
 				c.full_name AS title,
@@ -41,7 +60,7 @@ func (r *Repository) Search(ctx context.Context, branchID uuid.UUID, q string, l
 					ELSE 70
 				END AS score
 			FROM customers c
-			WHERE c.branch_id=$1
+			WHERE ($1::uuid IS NULL OR c.branch_id=$1)`+csc+`
 			  AND (lower(c.full_name) LIKE $3 OR lower(c.phone) LIKE $3 OR lower(c.email) LIKE $3)
 		)
 		UNION ALL
@@ -51,7 +70,7 @@ func (r *Repository) Search(ctx context.Context, branchID uuid.UUID, q string, l
 				'leads',
 				CASE WHEN lower(l.full_name) = lower($2) THEN 95 ELSE 65 END
 			FROM leads l
-			WHERE l.branch_id=$1
+			WHERE ($1::uuid IS NULL OR l.branch_id=$1)`+lsc+`
 			  AND (lower(l.full_name) LIKE $3 OR lower(l.phone) LIKE $3)
 		)
 		UNION ALL
@@ -63,7 +82,7 @@ func (r *Repository) Search(ctx context.Context, branchID uuid.UUID, q string, l
 				CASE WHEN b.id::text ILIKE $3 THEN 100 ELSE 60 END
 			FROM bookings b
 			JOIN customers c ON c.id = b.customer_id
-			WHERE b.branch_id=$1
+			WHERE ($1::uuid IS NULL OR b.branch_id=$1)`+bsc+`
 			  AND (
 				b.id::text ILIKE $3
 				OR lower(c.full_name) LIKE $3
@@ -79,12 +98,12 @@ func (r *Repository) Search(ctx context.Context, branchID uuid.UUID, q string, l
 				80
 			FROM booking_participants p
 			JOIN bookings b ON b.id = p.booking_id
-			WHERE b.branch_id=$1
+			WHERE ($1::uuid IS NULL OR b.branch_id=$1)`+bsc+`
 			  AND p.passport_no <> ''
 			  AND lower(p.passport_no) LIKE $3
 		)
 		ORDER BY score DESC, title
-		LIMIT $4`, branchID, q, pat, limit)
+		LIMIT $%d`, len(args)), args...)
 	if err != nil {
 		return nil, err
 	}

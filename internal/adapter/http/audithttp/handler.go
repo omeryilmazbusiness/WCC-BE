@@ -12,7 +12,6 @@ import (
 	appaudit "github.com/wodi-crm/wodi-crm-be/internal/app/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
-	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
 
 type Handler struct {
@@ -20,8 +19,7 @@ type Handler struct {
 }
 
 func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
+	if _, ok := middleware.ClaimsFrom(r.Context()); !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
@@ -64,17 +62,12 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		f.To = &t
 	}
-	if bid := request.FilterString(r, "branch_id"); bid != "" {
-		id, err := uuid.Parse(bid)
-		if err != nil {
-			response.Error(w, shared.NewValidation("invalid branch_id"))
-			return
-		}
-		f.BranchID = middleware.ScopeBranch(claims, &id)
-	} else if claims.Role != platformauth.RoleGM && claims.Role != platformauth.RoleAdmin {
-		id := claims.BranchID
-		f.BranchID = &id
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
 	}
+	f.BranchID = branchID
 
 	items, total, err := h.Svc.List(r.Context(), f)
 	if err != nil {

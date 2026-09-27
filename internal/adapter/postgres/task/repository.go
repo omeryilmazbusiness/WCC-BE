@@ -10,9 +10,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/task"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
+
+var scopeTasks = pgscope.Columns{Branch: "branch_id", Owner: "assignee_id"}
 
 type Repository struct {
 	pool *pgxpool.Pool
@@ -26,6 +30,9 @@ const taskCols = `id, branch_id, title, kind, status, priority, outcome, assigne
 	due_at, escalated_at, idempotency_key, created_at, updated_at, completed_at`
 
 func (r *Repository) Create(ctx context.Context, t *domain.Task) error {
+	if err := pgscope.EnsureBranch(ctx, t.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if t.Priority == "" {
 		t.Priority = domain.PriorityNormal
@@ -50,24 +57,41 @@ func nullIfEmpty(s string) any {
 
 func (r *Repository) Update(ctx context.Context, t *domain.Task) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		UPDATE tasks SET title=$2, kind=$3, status=$4, priority=$5, outcome=$6, assignee_id=$7,
-			due_at=$8, escalated_at=$9, updated_at=$10, completed_at=$11
-		WHERE id=$1`,
+	scope, args, err := pgscope.Clause(ctx, scopeTasks, []any{
 		t.ID, t.Title, t.Kind, t.Status, t.Priority, t.Outcome, t.AssigneeID,
 		t.DueAt, t.EscalatedAt, t.UpdatedAt, t.CompletedAt,
-	)
-	return err
+	})
+	if err != nil {
+		return err
+	}
+	tag, err := q.Exec(ctx, `
+		UPDATE tasks SET title=$2, kind=$3, status=$4, priority=$5, outcome=$6, assignee_id=$7,
+			due_at=$8, escalated_at=$9, updated_at=$10, completed_at=$11
+		WHERE id=$1`+scope, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("task")
+	}
+	return nil
 }
 
 func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Task, error) {
+	return r.findOne(ctx, `id=$1`, id)
+}
+
+func (r *Repository) findOne(ctx context.Context, where string, arg any) (*domain.Task, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	return scan(q.QueryRow(ctx, `SELECT `+taskCols+` FROM tasks WHERE id=$1`, id))
+	scope, args, err := pgscope.Clause(ctx, scopeTasks, []any{arg})
+	if err != nil {
+		return nil, err
+	}
+	return scan(q.QueryRow(ctx, `SELECT `+taskCols+` FROM tasks WHERE `+where+scope, args...))
 }
 
 func (r *Repository) FindByIdempotencyKey(ctx context.Context, key string) (*domain.Task, error) {
-	q := tx.QuerierFrom(ctx, r.pool)
-	t, err := scan(q.QueryRow(ctx, `SELECT `+taskCols+` FROM tasks WHERE idempotency_key=$1`, key))
+	t, err := r.findOne(ctx, `idempotency_key=$1`, key)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
 	}
@@ -78,31 +102,25 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Ta
 	q := tx.QuerierFrom(ctx, r.pool)
 	where := []string{"1=1"}
 	args := []any{}
-	i := 1
+	add := func(col string, v any) {
+		args = append(args, v)
+		where = append(where, fmt.Sprintf("%s=$%d", col, len(args)))
+	}
 	if f.BranchID != nil {
-		where = append(where, fmt.Sprintf("branch_id=$%d", i))
-		args = append(args, *f.BranchID)
-		i++
+		add("branch_id", *f.BranchID)
 	}
 	if f.AssigneeID != nil {
-		where = append(where, fmt.Sprintf("assignee_id=$%d", i))
-		args = append(args, *f.AssigneeID)
-		i++
+		add("assignee_id", *f.AssigneeID)
 	}
 	if f.Status != "" {
-		where = append(where, fmt.Sprintf("status=$%d", i))
-		args = append(args, string(f.Status))
-		i++
+		add("status", string(f.Status))
 	}
 	if f.Kind != "" {
-		where = append(where, fmt.Sprintf("kind=$%d", i))
-		args = append(args, string(f.Kind))
-		i++
+		add("kind", string(f.Kind))
 	}
 	if f.RelatedType != "" && f.RelatedID != nil {
-		where = append(where, fmt.Sprintf("related_type=$%d AND related_id=$%d", i, i+1))
-		args = append(args, f.RelatedType, *f.RelatedID)
-		i += 2
+		add("related_type", f.RelatedType)
+		add("related_id", *f.RelatedID)
 	}
 	if f.OverdueOnly {
 		where = append(where, `status IN ('open','in_progress') AND due_at IS NOT NULL AND due_at < NOW()`)
@@ -111,10 +129,14 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Ta
 		where = append(where, `escalated_at IS NOT NULL`)
 	}
 	if qs := strings.TrimSpace(f.Query); qs != "" {
-		where = append(where, fmt.Sprintf(`(title ILIKE $%d OR CAST(id AS TEXT) ILIKE $%d)`, i, i))
 		args = append(args, "%"+qs+"%")
-		i++
+		where = append(where, fmt.Sprintf(`(title ILIKE $%d OR CAST(id AS TEXT) ILIKE $%d)`, len(args), len(args)))
 	}
+	where, args, err := pgscope.Append(ctx, scopeTasks, where, args)
+	if err != nil {
+		return nil, 0, err
+	}
+	i := len(args) + 1
 	clause := strings.Join(where, " AND ")
 	limit, offset := f.Limit, f.Offset
 	if limit <= 0 {
@@ -163,11 +185,15 @@ func (r *Repository) ListByRelated(ctx context.Context, relatedType string, rela
 
 func (r *Repository) CountOverdue(ctx context.Context, branchID *uuid.UUID) (int, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeTasks, []any{branchID})
+	if err != nil {
+		return 0, err
+	}
 	var n int
-	err := q.QueryRow(ctx, `
+	err = q.QueryRow(ctx, `
 		SELECT COUNT(*) FROM tasks
 		WHERE status IN ('open','in_progress') AND due_at < NOW()
-		  AND ($1::uuid IS NULL OR branch_id=$1)`, branchID).Scan(&n)
+		  AND ($1::uuid IS NULL OR branch_id=$1)`+scope, args...).Scan(&n)
 	return n, err
 }
 

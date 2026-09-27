@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -15,14 +16,22 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
-type Service struct {
-	users identity.Repository
-	audit audit.Recorder
-	tx    *tx.Manager
+// SessionInvalidator drops cached access-token checks of a user whose
+// credentials or claims changed; the database bumps token_version and, for
+// password changes and deactivation, revokes the sessions.
+type SessionInvalidator interface {
+	InvalidateUser(userID uuid.UUID)
 }
 
-func NewService(users identity.Repository, auditRec audit.Recorder, txm *tx.Manager) *Service {
-	return &Service{users: users, audit: auditRec, tx: txm}
+type Service struct {
+	users    identity.Repository
+	audit    audit.Recorder
+	tx       *tx.Manager
+	sessions SessionInvalidator
+}
+
+func NewService(users identity.Repository, auditRec audit.Recorder, txm *tx.Manager, sessions SessionInvalidator) *Service {
+	return &Service{users: users, audit: auditRec, tx: txm, sessions: sessions}
 }
 
 type CreateInput struct {
@@ -57,11 +66,28 @@ func (s *Service) List(ctx context.Context, f identity.UserFilter) ([]identity.U
 }
 
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*identity.User, error) {
+	return s.visibleUser(ctx, id)
+}
+
+// visibleUser loads a user through the unscoped identity lookup and hides it
+// unless the caller's scope covers the user's branch.
+func (s *Service) visibleUser(ctx context.Context, id uuid.UUID) (*identity.User, error) {
 	u, err := s.users.FindUserByID(ctx, id)
-	if err != nil {
+	if err != nil || !access.From(ctx).CanAccessBranch(u.BranchID) {
 		return nil, shared.NewNotFound("user")
 	}
 	return u, nil
+}
+
+func (s *Service) checkTeam(ctx context.Context, teamID, branchID uuid.UUID) error {
+	t, err := s.users.FindTeam(ctx, teamID)
+	if err != nil {
+		return shared.NewNotFound("team")
+	}
+	if t.BranchID != branchID {
+		return shared.NewValidation("team belongs to another branch")
+	}
+	return nil
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (*identity.User, error) {
@@ -79,8 +105,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*identity.User, e
 		return nil, shared.NewValidation("branch_id is required")
 	}
 	if in.TeamID != nil {
-		if _, err := s.users.FindTeam(ctx, *in.TeamID); err != nil {
-			return nil, shared.NewNotFound("team")
+		if err := s.checkTeam(ctx, *in.TeamID, in.BranchID); err != nil {
+			return nil, err
 		}
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
@@ -125,9 +151,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*identity.User, e
 }
 
 func (s *Service) Update(ctx context.Context, in UpdateInput) (*identity.User, error) {
-	u, err := s.users.FindUserByID(ctx, in.UserID)
+	u, err := s.visibleUser(ctx, in.UserID)
 	if err != nil {
-		return nil, shared.NewNotFound("user")
+		return nil, err
 	}
 	before := map[string]any{
 		"email": u.Email, "role": u.Role, "branch_id": u.BranchID, "team_id": u.TeamID,
@@ -147,10 +173,10 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*identity.User, e
 	}
 	if in.SetTeam {
 		u.TeamID = in.TeamID
-		if u.TeamID != nil {
-			if _, err := s.users.FindTeam(ctx, *u.TeamID); err != nil {
-				return nil, shared.NewNotFound("team")
-			}
+	}
+	if u.TeamID != nil && (in.SetTeam || in.BranchID != nil) {
+		if err := s.checkTeam(ctx, *u.TeamID, u.BranchID); err != nil {
+			return nil, err
 		}
 	}
 	if in.IsActive != nil {
@@ -189,6 +215,7 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*identity.User, e
 	if err != nil {
 		return nil, err
 	}
+	s.sessions.InvalidateUser(u.ID)
 	return u, nil
 }
 
@@ -241,7 +268,7 @@ func (s *Service) UpdateBranch(ctx context.Context, in UpdateBranchInput) (*iden
 			EntityID: &id, BranchID: &id,
 			Before: before,
 			After:  map[string]any{"code": cur.Code, "name_en": cur.NameEN, "name_ar": cur.NameAR},
-			IP: in.IP, UserAgent: in.UserAgent,
+			IP:     in.IP, UserAgent: in.UserAgent,
 		})
 	})
 	if err != nil {

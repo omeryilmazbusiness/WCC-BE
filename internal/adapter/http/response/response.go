@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
@@ -17,6 +20,8 @@ type envelope struct {
 type errorBody struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// RetryAfter is seconds until retry for 423/429/503 responses.
+	RetryAfter int `json:"retry_after,omitempty"`
 }
 
 func JSON(w http.ResponseWriter, status int, data any) {
@@ -29,7 +34,14 @@ func JSONMeta(w http.ResponseWriter, status int, data any, meta map[string]any) 
 
 func Error(w http.ResponseWriter, err error) {
 	status, code, msg := mapError(err)
-	write(w, status, envelope{Error: &errorBody{Code: code, Message: msg}})
+	body := &errorBody{Code: code, Message: msg}
+	var app *shared.AppError
+	if errors.As(err, &app) && app.RetryAfter > 0 {
+		secs := int((app.RetryAfter + time.Second - 1) / time.Second)
+		body.RetryAfter = secs
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
+	}
+	write(w, status, envelope{Error: body})
 }
 
 func write(w http.ResponseWriter, status int, body envelope) {
@@ -56,9 +68,17 @@ func mapError(err error) (status int, code, msg string) {
 			return http.StatusConflict, code, msg
 		case errors.Is(app.Err, shared.ErrInvalidState):
 			return http.StatusUnprocessableEntity, code, msg
+		case errors.Is(app.Err, shared.ErrLocked):
+			return http.StatusLocked, code, msg
+		case errors.Is(app.Err, shared.ErrRateLimited):
+			return http.StatusTooManyRequests, code, msg
+		case errors.Is(app.Err, shared.ErrUnavailable):
+			return http.StatusServiceUnavailable, code, msg
 		}
 	}
 	switch {
+	case errors.Is(err, access.ErrNoScope), errors.Is(err, access.ErrBranchForbidden):
+		return http.StatusForbidden, "forbidden", "outside access scope"
 	case errors.Is(err, shared.ErrNotFound):
 		return http.StatusNotFound, "not_found", err.Error()
 	case errors.Is(err, shared.ErrUnauthorized):

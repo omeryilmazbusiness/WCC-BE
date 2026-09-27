@@ -2,14 +2,36 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	"github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
+
+var (
+	dashLeads    = pgscope.Columns{Branch: "l.branch_id", Owner: "l.owner_id"}
+	dashTasks    = pgscope.Columns{Branch: "t.branch_id", Owner: "t.assignee_id"}
+	dashBookings = pgscope.Columns{Branch: "b.branch_id", Owner: "b.owner_id"}
+	dashPackages = pgscope.Columns{Branch: "p.branch_id"}
+)
+
+// dashScopes renders one scope clause per column set, all bound into args,
+// so aggregate queries count only records visible to the caller.
+func dashScopes(ctx context.Context, args []any, cols ...pgscope.Columns) ([]string, []any, error) {
+	out := make([]string, len(cols))
+	for i, c := range cols {
+		var err error
+		if out[i], args, err = pgscope.Clause(ctx, c, args); err != nil {
+			return nil, args, err
+		}
+	}
+	return out, args, nil
+}
 
 type DashboardAggregator struct {
 	pool *pgxpool.Pool
@@ -22,43 +44,48 @@ func NewDashboardAggregator(pool *pgxpool.Pool) *DashboardAggregator {
 func (a *DashboardAggregator) Compute(ctx context.Context, branchID *uuid.UUID, from, to time.Time) (*dashboard.KPI, error) {
 	q := tx.QuerierFrom(ctx, a.pool)
 	kpi := &dashboard.KPI{PeriodFrom: from, PeriodTo: to}
+	sc, args, err := dashScopes(ctx, []any{from, to, branchID}, dashLeads, dashTasks, dashBookings)
+	if err != nil {
+		return nil, err
+	}
+	lsc, tsc, bsc := sc[0], sc[1], sc[2]
 
 	if err := q.QueryRow(ctx, `
-		SELECT COUNT(*) FROM leads
-		WHERE stage NOT IN ('won','lost')
-		  AND created_at >= $1 AND created_at < $2
-		  AND ($3::uuid IS NULL OR branch_id = $3)`, from, to, branchID).Scan(&kpi.LeadsOpen); err != nil {
+		SELECT COUNT(*) FROM leads l
+		WHERE l.stage NOT IN ('won','lost')
+		  AND l.created_at >= $1 AND l.created_at < $2
+		  AND ($3::uuid IS NULL OR l.branch_id = $3)`+lsc, args...).Scan(&kpi.LeadsOpen); err != nil {
 		return nil, err
 	}
 	if err := q.QueryRow(ctx, `
-		SELECT COUNT(*) FROM tasks
-		WHERE status IN ('open','in_progress')
-		  AND due_at IS NOT NULL AND due_at < NOW()
-		  AND due_at >= $1 AND due_at < $2
-		  AND ($3::uuid IS NULL OR branch_id = $3)`, from, to, branchID).Scan(&kpi.TasksOverdue); err != nil {
+		SELECT COUNT(*) FROM tasks t
+		WHERE t.status IN ('open','in_progress')
+		  AND t.due_at IS NOT NULL AND t.due_at < NOW()
+		  AND t.due_at >= $1 AND t.due_at < $2
+		  AND ($3::uuid IS NULL OR t.branch_id = $3)`+tsc, args...).Scan(&kpi.TasksOverdue); err != nil {
 		return nil, err
 	}
 	if err := q.QueryRow(ctx, `
-		SELECT COUNT(*) FROM bookings
-		WHERE balance_amt > 0 AND status = 'confirmed'
-		  AND created_at >= $1 AND created_at < $2
-		  AND ($3::uuid IS NULL OR branch_id = $3)`, from, to, branchID).Scan(&kpi.BookingsUnpaid); err != nil {
+		SELECT COUNT(*) FROM bookings b
+		WHERE b.balance_amt > 0 AND b.status = 'confirmed'
+		  AND b.created_at >= $1 AND b.created_at < $2
+		  AND ($3::uuid IS NULL OR b.branch_id = $3)`+bsc, args...).Scan(&kpi.BookingsUnpaid); err != nil {
 		return nil, err
 	}
 	if err := q.QueryRow(ctx, `
-		SELECT COUNT(*) FROM tasks
-		WHERE kind = 'document' AND status IN ('open','in_progress')
-		  AND created_at >= $1 AND created_at < $2
-		  AND ($3::uuid IS NULL OR branch_id = $3)`, from, to, branchID).Scan(&kpi.MissingDocs); err != nil {
+		SELECT COUNT(*) FROM tasks t
+		WHERE t.kind = 'document' AND t.status IN ('open','in_progress')
+		  AND t.created_at >= $1 AND t.created_at < $2
+		  AND ($3::uuid IS NULL OR t.branch_id = $3)`+tsc, args...).Scan(&kpi.MissingDocs); err != nil {
 		return nil, err
 	}
 	if err := q.QueryRow(ctx, `
-		SELECT COALESCE(SUM(total_amount),0), COALESCE(SUM(collected_amt),0),
-			COALESCE(SUM(total_amount - COALESCE(cost_amt,0)),0)
-		FROM bookings
-		WHERE status IN ('confirmed','completed')
-		  AND created_at >= $1 AND created_at < $2
-		  AND ($3::uuid IS NULL OR branch_id = $3)`, from, to, branchID).
+		SELECT COALESCE(SUM(b.total_amount),0), COALESCE(SUM(b.collected_amt),0),
+			COALESCE(SUM(b.total_amount - COALESCE(b.cost_amt,0)),0)
+		FROM bookings b
+		WHERE b.status IN ('confirmed','completed')
+		  AND b.created_at >= $1 AND b.created_at < $2
+		  AND ($3::uuid IS NULL OR b.branch_id = $3)`+bsc, args...).
 		Scan(&kpi.BookedAmt, &kpi.CollectedAmt, &kpi.MarginAmt); err != nil {
 		return nil, err
 	}
@@ -67,27 +94,32 @@ func (a *DashboardAggregator) Compute(ctx context.Context, branchID *uuid.UUID, 
 
 func (a *DashboardAggregator) TeamPerformance(ctx context.Context, branchID *uuid.UUID, from, to time.Time) ([]dashboard.TeamMember, error) {
 	q := tx.QuerierFrom(ctx, a.pool)
+	sc, args, err := dashScopes(ctx, []any{from, to, branchID}, dashLeads, dashTasks, dashBookings)
+	if err != nil {
+		return nil, err
+	}
+	lsc, tsc, bsc := sc[0], sc[1], sc[2]
 	rows, err := q.Query(ctx, `
 		WITH owners AS (
-			SELECT DISTINCT owner_id AS id FROM leads
-			WHERE created_at >= $1 AND created_at < $2 AND ($3::uuid IS NULL OR branch_id=$3)
+			SELECT DISTINCT l.owner_id AS id FROM leads l
+			WHERE l.created_at >= $1 AND l.created_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`
 			UNION
-			SELECT DISTINCT assignee_id FROM tasks
-			WHERE created_at >= $1 AND created_at < $2 AND ($3::uuid IS NULL OR branch_id=$3)
+			SELECT DISTINCT t.assignee_id FROM tasks t
+			WHERE t.created_at >= $1 AND t.created_at < $2 AND ($3::uuid IS NULL OR t.branch_id=$3)`+tsc+`
 			UNION
-			SELECT DISTINCT owner_id FROM bookings
-			WHERE created_at >= $1 AND created_at < $2 AND ($3::uuid IS NULL OR branch_id=$3)
+			SELECT DISTINCT b.owner_id FROM bookings b
+			WHERE b.created_at >= $1 AND b.created_at < $2 AND ($3::uuid IS NULL OR b.branch_id=$3)`+bsc+`
 		)
 		SELECT o.id,
 			COALESCE(u.full_name, ''),
-			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.created_at >= $1 AND l.created_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)),
-			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.stage='won' AND l.updated_at >= $1 AND l.updated_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)),
-			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND ($3::uuid IS NULL OR t.branch_id=$3)),
-			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND t.due_at < NOW() AND ($3::uuid IS NULL OR t.branch_id=$3)),
-			(SELECT COALESCE(SUM(b.collected_amt),0) FROM bookings b WHERE b.owner_id=o.id AND b.created_at >= $1 AND b.created_at < $2 AND ($3::uuid IS NULL OR b.branch_id=$3))
+			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.created_at >= $1 AND l.created_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`),
+			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.stage='won' AND l.updated_at >= $1 AND l.updated_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`),
+			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND ($3::uuid IS NULL OR t.branch_id=$3)`+tsc+`),
+			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND t.due_at < NOW() AND ($3::uuid IS NULL OR t.branch_id=$3)`+tsc+`),
+			(SELECT COALESCE(SUM(b.collected_amt),0) FROM bookings b WHERE b.owner_id=o.id AND b.created_at >= $1 AND b.created_at < $2 AND ($3::uuid IS NULL OR b.branch_id=$3)`+bsc+`)
 		FROM owners o
 		LEFT JOIN users u ON u.id = o.id
-		ORDER BY 3 DESC, 7 DESC`, from, to, branchID)
+		ORDER BY 3 DESC, 7 DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +137,13 @@ func (a *DashboardAggregator) TeamPerformance(ctx context.Context, branchID *uui
 
 func (a *DashboardAggregator) AttentionFeed(ctx context.Context, branchID *uuid.UUID, limit int) ([]dashboard.AttentionItem, error) {
 	q := tx.QuerierFrom(ctx, a.pool)
-	rows, err := q.Query(ctx, `
+	sc, args, err := dashScopes(ctx, []any{branchID}, dashTasks, dashBookings, dashPackages)
+	if err != nil {
+		return nil, err
+	}
+	tsc, bsc, psc := sc[0], sc[1], sc[2]
+	args = append(args, limit)
+	rows, err := q.Query(ctx, fmt.Sprintf(`
 		SELECT id, kind, severity, title, related_type, related_id, age_hours, href_hint FROM (
 			(
 				SELECT t.id, 'overdue_task'::text AS kind,
@@ -115,7 +153,7 @@ func (a *DashboardAggregator) AttentionFeed(ctx context.Context, branchID *uuid.
 					'tasks'::text AS href_hint
 				FROM tasks t
 				WHERE t.status IN ('open','in_progress') AND t.due_at IS NOT NULL AND t.due_at < NOW()
-				  AND ($1::uuid IS NULL OR t.branch_id=$1)
+				  AND ($1::uuid IS NULL OR t.branch_id=$1)`+tsc+`
 			)
 			UNION ALL
 			(
@@ -127,7 +165,7 @@ func (a *DashboardAggregator) AttentionFeed(ctx context.Context, branchID *uuid.
 					'bookings'
 				FROM bookings b
 				WHERE b.status='confirmed' AND b.balance_amt > 0
-				  AND ($1::uuid IS NULL OR b.branch_id=$1)
+				  AND ($1::uuid IS NULL OR b.branch_id=$1)`+bsc+`
 			)
 			UNION ALL
 			(
@@ -137,7 +175,7 @@ func (a *DashboardAggregator) AttentionFeed(ctx context.Context, branchID *uuid.
 					'tasks'
 				FROM tasks t
 				WHERE t.kind='document' AND t.status IN ('open','in_progress')
-				  AND ($1::uuid IS NULL OR t.branch_id=$1)
+				  AND ($1::uuid IS NULL OR t.branch_id=$1)`+tsc+`
 			)
 			UNION ALL
 			(
@@ -156,13 +194,13 @@ func (a *DashboardAggregator) AttentionFeed(ctx context.Context, branchID *uuid.
 					OR (d.capacity_total > 0 AND d.soft_threshold_pct > 0
 						AND (d.capacity_sold::float / d.capacity_total * 100) >= d.soft_threshold_pct)
 				)
-				  AND ($1::uuid IS NULL OR p.branch_id=$1)
+				  AND ($1::uuid IS NULL OR p.branch_id=$1)`+psc+`
 			)
 		) feed
 		ORDER BY
 			CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
 			age_hours DESC
-		LIMIT $2`, branchID, limit)
+		LIMIT $%d`, len(args)), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -178,9 +216,15 @@ func (a *DashboardAggregator) AttentionFeed(ctx context.Context, branchID *uuid.
 	return out, rows.Err()
 }
 
-func (a *DashboardAggregator) MyWorkToday(ctx context.Context, branchID, ownerID uuid.UUID, limit int) ([]dashboard.MyWorkItem, error) {
+func (a *DashboardAggregator) MyWorkToday(ctx context.Context, branchID *uuid.UUID, ownerID uuid.UUID, limit int) ([]dashboard.MyWorkItem, error) {
 	q := tx.QuerierFrom(ctx, a.pool)
-	rows, err := q.Query(ctx, `
+	sc, args, err := dashScopes(ctx, []any{branchID, ownerID}, dashTasks, dashLeads)
+	if err != nil {
+		return nil, err
+	}
+	tsc, lsc := sc[0], sc[1]
+	args = append(args, limit)
+	rows, err := q.Query(ctx, fmt.Sprintf(`
 		(
 			SELECT t.id, 'task'::text, t.title, t.kind::text,
 				CASE
@@ -194,17 +238,17 @@ func (a *DashboardAggregator) MyWorkToday(ctx context.Context, branchID, ownerID
 				(t.due_at IS NOT NULL AND t.due_at < NOW()),
 				(t.escalated_at IS NOT NULL)
 			FROM tasks t
-			WHERE t.assignee_id=$2 AND t.branch_id=$1
+			WHERE t.assignee_id=$2 AND ($1::uuid IS NULL OR t.branch_id=$1)
 			  AND t.status IN ('open','in_progress')
-			  AND (t.due_at IS NULL OR t.due_at < NOW() + INTERVAL '1 day')
+			  AND (t.due_at IS NULL OR t.due_at < NOW() + INTERVAL '1 day')`+tsc+`
 		)
 		UNION ALL
 		(
 			SELECT l.id, 'lead', 'Follow up '||l.full_name, 'followup',
 				5, NULL, 'lead', l.id, false, false
 			FROM leads l
-			WHERE l.owner_id=$2 AND l.branch_id=$1
-			  AND l.stage NOT IN ('won','lost') AND l.no_follow_up=false
+			WHERE l.owner_id=$2 AND ($1::uuid IS NULL OR l.branch_id=$1)
+			  AND l.stage NOT IN ('won','lost') AND l.no_follow_up=false`+lsc+`
 			  AND NOT EXISTS (
 				SELECT 1 FROM tasks t
 				WHERE t.related_type='lead' AND t.related_id=l.id
@@ -212,7 +256,7 @@ func (a *DashboardAggregator) MyWorkToday(ctx context.Context, branchID, ownerID
 			  )
 		)
 		ORDER BY 5, 6 NULLS LAST
-		LIMIT $3`, branchID, ownerID, limit)
+		LIMIT $%d`, len(args)), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -267,12 +311,16 @@ func (a *DashboardAggregator) TargetProgress(ctx context.Context, branchID uuid.
 	if periodEnd.IsZero() {
 		periodEnd = time.Now().UTC()
 	}
+	bsc, args, err := pgscope.Clause(ctx, dashBookings, []any{branchID, ownerID, periodStart, periodEnd})
+	if err != nil {
+		return nil, err
+	}
 	_ = q.QueryRow(ctx, `
-		SELECT COALESCE(SUM(collected_amt),0) FROM bookings
-		WHERE branch_id=$1
-		  AND ($2::uuid IS NULL OR owner_id=$2)
-		  AND created_at >= $3 AND created_at < ($4::date + INTERVAL '1 day')`,
-		branchID, ownerID, periodStart, periodEnd).Scan(&out.ActualAmount)
+		SELECT COALESCE(SUM(b.collected_amt),0) FROM bookings b
+		WHERE b.branch_id=$1
+		  AND ($2::uuid IS NULL OR b.owner_id=$2)
+		  AND b.created_at >= $3 AND b.created_at < ($4::date + INTERVAL '1 day')`+bsc,
+		args...).Scan(&out.ActualAmount)
 
 	elapsed := time.Since(periodStart).Hours()
 	total := periodEnd.Sub(periodStart).Hours()

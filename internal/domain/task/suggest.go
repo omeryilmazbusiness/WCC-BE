@@ -9,13 +9,13 @@ import (
 type CallOutcome string
 
 const (
-	OutcomeFollowUp     CallOutcome = "follow_up"
-	OutcomeSendQuote    CallOutcome = "send_quote"
-	OutcomeDocsPending  CallOutcome = "docs_pending"
-	OutcomePaymentDue   CallOutcome = "payment_due"
-	OutcomeNoAnswer     CallOutcome = "no_answer"
-	OutcomeClosedWon    CallOutcome = "closed_won"
-	OutcomeClosedLost   CallOutcome = "closed_lost"
+	OutcomeFollowUp    CallOutcome = "follow_up"
+	OutcomeSendQuote   CallOutcome = "send_quote"
+	OutcomeDocsPending CallOutcome = "docs_pending"
+	OutcomePaymentDue  CallOutcome = "payment_due"
+	OutcomeNoAnswer    CallOutcome = "no_answer"
+	OutcomeClosedWon   CallOutcome = "closed_won"
+	OutcomeClosedLost  CallOutcome = "closed_lost"
 )
 
 // NextTaskSuggestion is a proposed task — never auto-created without confirm (T-231/T-232).

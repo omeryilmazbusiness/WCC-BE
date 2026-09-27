@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/extint"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -21,14 +22,20 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+var branchScope = pgscope.Columns{Branch: "branch_id"}
+
 func (r *Repository) List(ctx context.Context, branchID uuid.UUID) ([]domain.Integration, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT id, branch_id, kind, provider_key, display_name, status, health,
 			config_json, last_checked_at, last_error, created_at, updated_at
 		FROM external_integrations
-		WHERE branch_id=$1
-		ORDER BY kind, provider_key`, branchID)
+		WHERE branch_id=$1`+clause+`
+		ORDER BY kind, provider_key`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -46,11 +53,15 @@ func (r *Repository) List(ctx context.Context, branchID uuid.UUID) ([]domain.Int
 
 func (r *Repository) Get(ctx context.Context, branchID, id uuid.UUID) (*domain.Integration, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID, id})
+	if err != nil {
+		return nil, err
+	}
 	row := q.QueryRow(ctx, `
 		SELECT id, branch_id, kind, provider_key, display_name, status, health,
 			config_json, last_checked_at, last_error, created_at, updated_at
 		FROM external_integrations
-		WHERE branch_id=$1 AND id=$2`, branchID, id)
+		WHERE branch_id=$1 AND id=$2`+clause, args...)
 	i, err := scanIntegrationRow(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
@@ -59,6 +70,9 @@ func (r *Repository) Get(ctx context.Context, branchID, id uuid.UUID) (*domain.I
 }
 
 func (r *Repository) Upsert(ctx context.Context, i *domain.Integration) error {
+	if err := pgscope.EnsureBranch(ctx, i.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	cfg := i.ConfigJSON
 	if len(cfg) == 0 {
@@ -91,14 +105,18 @@ func (r *Repository) Update(ctx context.Context, i *domain.Integration) error {
 	if len(cfg) == 0 {
 		cfg = []byte(`{}`)
 	}
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{
+		i.BranchID, i.ID, i.DisplayName, string(i.Status), string(i.Health),
+		cfg, i.LastCheckedAt, i.LastError, i.UpdatedAt,
+	})
+	if err != nil {
+		return err
+	}
 	ct, err := q.Exec(ctx, `
 		UPDATE external_integrations SET
 			display_name=$3, status=$4, health=$5, config_json=$6,
 			last_checked_at=$7, last_error=$8, updated_at=$9
-		WHERE branch_id=$1 AND id=$2`,
-		i.BranchID, i.ID, i.DisplayName, string(i.Status), string(i.Health),
-		cfg, i.LastCheckedAt, i.LastError, i.UpdatedAt,
-	)
+		WHERE branch_id=$1 AND id=$2`+clause, args...)
 	if err != nil {
 		return err
 	}
@@ -110,7 +128,11 @@ func (r *Repository) Update(ctx context.Context, i *domain.Integration) error {
 
 func (r *Repository) Delete(ctx context.Context, branchID, id uuid.UUID) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	ct, err := q.Exec(ctx, `DELETE FROM external_integrations WHERE branch_id=$1 AND id=$2`, branchID, id)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID, id})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `DELETE FROM external_integrations WHERE branch_id=$1 AND id=$2`+clause, args...)
 	if err != nil {
 		return err
 	}

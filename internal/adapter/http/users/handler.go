@@ -41,8 +41,7 @@ type updateRequest struct {
 }
 
 func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
+	if _, ok := middleware.ClaimsFrom(r.Context()); !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
@@ -56,16 +55,12 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		rr := platformauth.Role(role)
 		f.Role = &rr
 	}
-	if bid := request.FilterString(r, "branch_id"); bid != "" {
-		id, err := uuid.Parse(bid)
-		if err != nil {
-			response.Error(w, shared.NewValidation("invalid branch_id"))
-			return
-		}
-		f.BranchID = middleware.ScopeBranch(claims, &id)
-	} else {
-		f.BranchID = middleware.ScopeBranch(claims, nil)
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
 	}
+	f.BranchID = branchID
 	items, total, err := h.Svc.List(r.Context(), f)
 	if err != nil {
 		response.Error(w, err)
@@ -239,14 +234,10 @@ func (h Handler) UpdateBranch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
-	var branchID *uuid.UUID
-	if bid := request.FilterString(r, "branch_id"); bid != "" {
-		id, err := uuid.Parse(bid)
-		if err != nil {
-			response.Error(w, shared.NewValidation("invalid branch_id"))
-			return
-		}
-		branchID = &id
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
 	}
 	items, err := h.Svc.ListTeams(r.Context(), branchID)
 	if err != nil {

@@ -9,9 +9,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/notification"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -190,10 +191,10 @@ func (h Handler) Rules(w http.ResponseWriter, r *http.Request) {
 			"kind": rule.Kind, "severity": rule.Severity,
 			"escalate_after_seconds": int(rule.EscalateAfter.Seconds()),
 			"escalate_to_roles":      rule.EscalateToRoles,
-			"groupable":             rule.Groupable,
-			"default_title":         rule.DefaultTitle,
-			"default_href":          rule.DefaultHref,
-			"entity_type":           rule.EntityType,
+			"groupable":              rule.Groupable,
+			"default_title":          rule.DefaultTitle,
+			"default_href":           rule.DefaultHref,
+			"entity_type":            rule.EntityType,
 		})
 	}
 	response.JSON(w, http.StatusOK, out)
@@ -215,6 +216,11 @@ func (h Handler) Emit(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	var body struct {
 		RecipientUserID *uuid.UUID `json:"recipient_user_id"`
 		Kind            string     `json:"kind"`
@@ -234,7 +240,7 @@ func (h Handler) Emit(w http.ResponseWriter, r *http.Request) {
 		recipient = *body.RecipientUserID
 	}
 	n, err := h.Svc.Emit(r.Context(), appsvc.EmitInput{
-		BranchID: claims.BranchID, RecipientUserID: recipient,
+		BranchID: branchID, RecipientUserID: recipient,
 		Kind: body.Kind, Title: body.Title, Body: body.Body,
 		EntityType: body.EntityType, EntityID: body.EntityID, HrefHint: body.HrefHint,
 		Severity: domain.Severity(body.Severity),

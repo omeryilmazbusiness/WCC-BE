@@ -8,9 +8,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/rooming"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/rooming"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/rooming"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -52,9 +53,14 @@ func (h Handler) ListRooms(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) CreateRoom(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	depID, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -67,7 +73,7 @@ func (h Handler) CreateRoom(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	body.BranchID = claims.BranchID
+	body.BranchID = branchID
 	room, err := h.Svc.CreateRoom(r.Context(), depID, body)
 	if err != nil {
 		response.Error(w, err)

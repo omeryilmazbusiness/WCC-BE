@@ -10,9 +10,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appinbox "github.com/wodi-crm/wodi-crm-be/internal/app/inbox"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appinbox "github.com/wodi-crm/wodi-crm-be/internal/app/inbox"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -104,9 +105,14 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	q := r.URL.Query()
 	f := domain.ListFilter{
-		BranchID: &claims.BranchID,
+		BranchID: branchID,
 		Channel:  domain.Channel(q.Get("channel")),
 		Status:   domain.Status(q.Get("status")),
 		Query:    q.Get("q"),
@@ -285,12 +291,17 @@ func (h Handler) SetStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Health(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	accounts, live, err := h.Svc.IntegrationHealth(r.Context(), claims.BranchID)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	accounts, live, err := h.Svc.IntegrationHealth(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -311,7 +322,7 @@ func (h Handler) Health(w http.ResponseWriter, r *http.Request) {
 			"display_name": a.DisplayName, "status": a.Status,
 			"connected": a.Connected, "public_meta": a.PublicMeta,
 			"webhook_path": path,
-			"webhook_url":  path + "?branch_id=" + claims.BranchID.String(),
+			"webhook_url":  path,
 			"last_ok_at":   lastOK, "last_error": a.LastError,
 			"updated_at": a.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		})
@@ -332,12 +343,17 @@ func (h Handler) Health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	items, err := h.Svc.ListAccounts(r.Context(), claims.BranchID)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	items, err := h.Svc.ListAccounts(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -346,9 +362,14 @@ func (h Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Connect(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	provider := domain.Channel(chi.URLParam(r, "provider"))
@@ -371,7 +392,7 @@ func (h Handler) Connect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.Svc.Connect(r.Context(), appinbox.ConnectInput{
-		BranchID: claims.BranchID, Provider: provider, DisplayName: body.DisplayName,
+		BranchID: branchID, Provider: provider, DisplayName: body.DisplayName,
 		AccessToken: body.AccessToken, PhoneNumberID: body.PhoneNumberID, WABAID: body.WABAID,
 		DisplayPhone: body.DisplayPhone, PageID: body.PageID, IGUserID: body.IGUserID,
 		ClientID: body.ClientID, ClientSecret: body.ClientSecret, RefreshToken: body.RefreshToken,
@@ -390,13 +411,18 @@ func (h Handler) Connect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	provider := domain.Channel(chi.URLParam(r, "provider"))
-	a, err := h.Svc.Disconnect(r.Context(), claims.BranchID, provider)
+	a, err := h.Svc.Disconnect(r.Context(), branchID, provider)
 	if err != nil {
 		response.Error(w, err)
 		return

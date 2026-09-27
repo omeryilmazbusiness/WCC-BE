@@ -25,12 +25,12 @@ type InboundEvent struct {
 
 // OutboundRequest is what adapters send on reply — T-105.
 type OutboundRequest struct {
-	Provider          Channel
-	ToExternalKey     string
-	Body              string
-	ContentType       string
-	ConversationID    string
-	IdempotencyKey    string
+	Provider       Channel
+	ToExternalKey  string
+	Body           string
+	ContentType    string
+	ConversationID string
+	IdempotencyKey string
 }
 
 // OutboundResult is returned by ChannelProvider.Send.

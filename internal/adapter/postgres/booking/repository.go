@@ -11,9 +11,44 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
+
+var (
+	scopeBookings = pgscope.Columns{Branch: "branch_id", Owner: "owner_id"}
+	scopeParent   = pgscope.Columns{Branch: "b.branch_id", Owner: "b.owner_id"}
+)
+
+// parentVisible renders an EXISTS predicate restricting child rows whose
+// booking_id column is childCol to bookings visible in the caller's scope.
+func parentVisible(ctx context.Context, childCol string, args []any) (string, []any, error) {
+	scope, args, err := pgscope.Clause(ctx, scopeParent, args)
+	if err != nil {
+		return "", args, err
+	}
+	return " AND EXISTS (SELECT 1 FROM bookings b WHERE b.id = " + childCol + scope + ")", args, nil
+}
+
+// requireVisible fails with NotFound unless the booking is in the caller's scope.
+func (r *Repository) requireVisible(ctx context.Context, bookingID uuid.UUID) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeParent, []any{bookingID})
+	if err != nil {
+		return err
+	}
+	var ok bool
+	err = q.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM bookings b WHERE b.id=$1`+scope+`)`, args...).Scan(&ok)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return shared.NewNotFound("booking")
+	}
+	return nil
+}
 
 type Repository struct {
 	pool *pgxpool.Pool
@@ -42,6 +77,9 @@ func scanBooking(row pgx.Row) (*domain.Booking, error) {
 }
 
 func (r *Repository) Create(ctx context.Context, b *domain.Booking) error {
+	if err := pgscope.EnsureBranch(ctx, b.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO bookings (
@@ -57,19 +95,33 @@ func (r *Repository) Create(ctx context.Context, b *domain.Booking) error {
 
 func (r *Repository) Update(ctx context.Context, b *domain.Booking) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		UPDATE bookings SET status=$2, pax_count=$3, total_amount=$4, discount_amt=$5, cost_amt=$6,
-			collected_amt=$7, balance_amt=$8, currency=$9, notes=$10, owner_id=$11, updated_at=$12
-		WHERE id=$1`,
+	scope, args, err := pgscope.Clause(ctx, scopeBookings, []any{
 		b.ID, b.Status, b.PaxCount, b.TotalAmount, b.DiscountAmt, b.CostAmt,
 		b.CollectedAmt, b.BalanceAmt, b.Currency, b.Notes, b.OwnerID, b.UpdatedAt,
-	)
-	return err
+	})
+	if err != nil {
+		return err
+	}
+	tag, err := q.Exec(ctx, `
+		UPDATE bookings SET status=$2, pax_count=$3, total_amount=$4, discount_amt=$5, cost_amt=$6,
+			collected_amt=$7, balance_amt=$8, currency=$9, notes=$10, owner_id=$11, updated_at=$12
+		WHERE id=$1`+scope, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("booking")
+	}
+	return nil
 }
 
 func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	b, err := scanBooking(q.QueryRow(ctx, `SELECT `+bookingCols+` FROM bookings WHERE id=$1`, id))
+	scope, args, err := pgscope.Clause(ctx, scopeBookings, []any{id})
+	if err != nil {
+		return nil, err
+	}
+	b, err := scanBooking(q.QueryRow(ctx, `SELECT `+bookingCols+` FROM bookings WHERE id=$1`+scope, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
 	}
@@ -80,42 +132,37 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Bo
 	q := tx.QuerierFrom(ctx, r.pool)
 	where := []string{"1=1"}
 	args := []any{}
-	i := 1
+	add := func(col string, v any) {
+		args = append(args, v)
+		where = append(where, fmt.Sprintf("%s=$%d", col, len(args)))
+	}
 	if f.BranchID != nil {
-		where = append(where, fmt.Sprintf("branch_id=$%d", i))
-		args = append(args, *f.BranchID)
-		i++
+		add("branch_id", *f.BranchID)
 	}
 	if f.CustomerID != nil {
-		where = append(where, fmt.Sprintf("customer_id=$%d", i))
-		args = append(args, *f.CustomerID)
-		i++
+		add("customer_id", *f.CustomerID)
 	}
 	if f.DepartureID != nil {
-		where = append(where, fmt.Sprintf("departure_id=$%d", i))
-		args = append(args, *f.DepartureID)
-		i++
+		add("departure_id", *f.DepartureID)
 	}
 	if f.OwnerID != nil {
-		where = append(where, fmt.Sprintf("owner_id=$%d", i))
-		args = append(args, *f.OwnerID)
-		i++
+		add("owner_id", *f.OwnerID)
 	}
 	if f.LeadID != nil {
-		where = append(where, fmt.Sprintf("lead_id=$%d", i))
-		args = append(args, *f.LeadID)
-		i++
+		add("lead_id", *f.LeadID)
 	}
 	if f.Status != "" {
-		where = append(where, fmt.Sprintf("status=$%d", i))
-		args = append(args, string(f.Status))
-		i++
+		add("status", string(f.Status))
 	}
 	if qs := strings.TrimSpace(f.Query); qs != "" {
-		where = append(where, fmt.Sprintf(`(notes ILIKE $%d OR CAST(id AS TEXT) ILIKE $%d)`, i, i))
 		args = append(args, "%"+qs+"%")
-		i++
+		where = append(where, fmt.Sprintf(`(notes ILIKE $%d OR CAST(id AS TEXT) ILIKE $%d)`, len(args), len(args)))
 	}
+	where, args, err := pgscope.Append(ctx, scopeBookings, where, args)
+	if err != nil {
+		return nil, 0, err
+	}
+	i := len(args) + 1
 	clause := strings.Join(where, " AND ")
 	limit, offset := f.Limit, f.Offset
 	if limit <= 0 {
@@ -145,6 +192,9 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Bo
 }
 
 func (r *Repository) AddParticipant(ctx context.Context, p *domain.Participant) error {
+	if err := r.requireVisible(ctx, p.BookingID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO booking_participants (id, booking_id, full_name, passport_no, nationality, date_of_birth, created_at)
@@ -156,25 +206,49 @@ func (r *Repository) AddParticipant(ctx context.Context, p *domain.Participant) 
 
 func (r *Repository) UpdateParticipant(ctx context.Context, p *domain.Participant) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		UPDATE booking_participants SET full_name=$3, passport_no=$4, nationality=$5, date_of_birth=$6
-		WHERE id=$1 AND booking_id=$2`,
+	scope, args, err := parentVisible(ctx, "booking_participants.booking_id", []any{
 		p.ID, p.BookingID, p.FullName, p.PassportNo, p.Nationality, p.DateOfBirth,
-	)
-	return err
+	})
+	if err != nil {
+		return err
+	}
+	tag, err := q.Exec(ctx, `
+		UPDATE booking_participants SET full_name=$3, passport_no=$4, nationality=$5, date_of_birth=$6
+		WHERE id=$1 AND booking_id=$2`+scope, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("participant")
+	}
+	return nil
 }
 
 func (r *Repository) DeleteParticipant(ctx context.Context, bookingID, participantID uuid.UUID) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `DELETE FROM booking_participants WHERE id=$1 AND booking_id=$2`, participantID, bookingID)
-	return err
+	scope, args, err := parentVisible(ctx, "booking_participants.booking_id", []any{participantID, bookingID})
+	if err != nil {
+		return err
+	}
+	tag, err := q.Exec(ctx, `DELETE FROM booking_participants WHERE id=$1 AND booking_id=$2`+scope, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("participant")
+	}
+	return nil
 }
 
 func (r *Repository) ListParticipants(ctx context.Context, bookingID uuid.UUID) ([]domain.Participant, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := parentVisible(ctx, "p.booking_id", []any{bookingID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT id, booking_id, full_name, passport_no, nationality, date_of_birth, created_at
-		FROM booking_participants WHERE booking_id=$1 ORDER BY created_at`, bookingID)
+		SELECT p.id, p.booking_id, p.full_name, p.passport_no, p.nationality, p.date_of_birth, p.created_at
+		FROM booking_participants p WHERE p.booking_id=$1`+scope+` ORDER BY p.created_at`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -190,6 +264,9 @@ func (r *Repository) ListParticipants(ctx context.Context, bookingID uuid.UUID) 
 	return out, rows.Err()
 }
 
+// CountConfirmedPaxByDeparture is deliberately unscoped: departure capacity
+// is shared across branches and owners, so the confirm gate must see every
+// confirmed seat. It exposes only an aggregate.
 func (r *Repository) CountConfirmedPaxByDeparture(ctx context.Context, departureID uuid.UUID) (int, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	var n int
@@ -201,7 +278,11 @@ func (r *Repository) CountConfirmedPaxByDeparture(ctx context.Context, departure
 
 func (r *Repository) ListByDeparture(ctx context.Context, departureID uuid.UUID) ([]domain.Booking, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	rows, err := q.Query(ctx, `SELECT `+bookingCols+` FROM bookings WHERE departure_id=$1 ORDER BY created_at DESC`, departureID)
+	scope, args, err := pgscope.Clause(ctx, scopeBookings, []any{departureID})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Query(ctx, `SELECT `+bookingCols+` FROM bookings WHERE departure_id=$1`+scope+` ORDER BY created_at DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -218,6 +299,9 @@ func (r *Repository) ListByDeparture(ctx context.Context, departureID uuid.UUID)
 }
 
 func (r *Repository) ReplaceLineItems(ctx context.Context, bookingID uuid.UUID, items []domain.LineItem) error {
+	if err := r.requireVisible(ctx, bookingID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if _, err := q.Exec(ctx, `DELETE FROM booking_line_items WHERE booking_id=$1`, bookingID); err != nil {
 		return err
@@ -242,9 +326,14 @@ func (r *Repository) ReplaceLineItems(ctx context.Context, bookingID uuid.UUID, 
 
 func (r *Repository) ListLineItems(ctx context.Context, bookingID uuid.UUID) ([]domain.LineItem, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := parentVisible(ctx, "li.booking_id", []any{bookingID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT id, booking_id, kind, label, quantity, unit_price, unit_cost, sort_order, created_at, updated_at
-		FROM booking_line_items WHERE booking_id=$1 ORDER BY sort_order`, bookingID)
+		SELECT li.id, li.booking_id, li.kind, li.label, li.quantity, li.unit_price, li.unit_cost, li.sort_order,
+			li.created_at, li.updated_at
+		FROM booking_line_items li WHERE li.booking_id=$1`+scope+` ORDER BY li.sort_order`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +351,16 @@ func (r *Repository) ListLineItems(ctx context.Context, bookingID uuid.UUID) ([]
 }
 
 func (r *Repository) SeedChecklist(ctx context.Context, items []domain.ChecklistItem) error {
+	checked := map[uuid.UUID]struct{}{}
+	for _, it := range items {
+		if _, ok := checked[it.BookingID]; ok {
+			continue
+		}
+		if err := r.requireVisible(ctx, it.BookingID); err != nil {
+			return err
+		}
+		checked[it.BookingID] = struct{}{}
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	for _, it := range items {
 		if _, err := q.Exec(ctx, `
@@ -279,9 +378,13 @@ func (r *Repository) SeedChecklist(ctx context.Context, items []domain.Checklist
 
 func (r *Repository) ListChecklist(ctx context.Context, bookingID uuid.UUID) ([]domain.ChecklistItem, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := parentVisible(ctx, "c.booking_id", []any{bookingID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT id, booking_id, code, label, required, completed, completed_at, sort_order, created_at
-		FROM booking_checklist_items WHERE booking_id=$1 ORDER BY sort_order`, bookingID)
+		SELECT c.id, c.booking_id, c.code, c.label, c.required, c.completed, c.completed_at, c.sort_order, c.created_at
+		FROM booking_checklist_items c WHERE c.booking_id=$1`+scope+` ORDER BY c.sort_order`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -300,15 +403,28 @@ func (r *Repository) ListChecklist(ctx context.Context, bookingID uuid.UUID) ([]
 
 func (r *Repository) UpdateChecklistItem(ctx context.Context, item *domain.ChecklistItem) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		UPDATE booking_checklist_items SET completed=$3, completed_at=$4, label=$5
-		WHERE id=$1 AND booking_id=$2`,
+	scope, args, err := parentVisible(ctx, "booking_checklist_items.booking_id", []any{
 		item.ID, item.BookingID, item.Completed, item.CompletedAt, item.Label,
-	)
-	return err
+	})
+	if err != nil {
+		return err
+	}
+	tag, err := q.Exec(ctx, `
+		UPDATE booking_checklist_items SET completed=$3, completed_at=$4, label=$5
+		WHERE id=$1 AND booking_id=$2`+scope, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("checklist item")
+	}
+	return nil
 }
 
 func (r *Repository) UpsertReadinessOverride(ctx context.Context, o *domain.ReadinessOverride) error {
+	if err := r.requireVisible(ctx, o.BookingID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO booking_readiness_overrides (id, booking_id, reason, actor_id, created_at)
@@ -325,11 +441,15 @@ func (r *Repository) UpsertReadinessOverride(ctx context.Context, o *domain.Read
 
 func (r *Repository) FindReadinessOverride(ctx context.Context, bookingID uuid.UUID) (*domain.ReadinessOverride, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := parentVisible(ctx, "o.booking_id", []any{bookingID})
+	if err != nil {
+		return nil, err
+	}
 	row := q.QueryRow(ctx, `
-		SELECT id, booking_id, reason, actor_id, created_at
-		FROM booking_readiness_overrides WHERE booking_id=$1`, bookingID)
+		SELECT o.id, o.booking_id, o.reason, o.actor_id, o.created_at
+		FROM booking_readiness_overrides o WHERE o.booking_id=$1`+scope, args...)
 	var o domain.ReadinessOverride
-	err := row.Scan(&o.ID, &o.BookingID, &o.Reason, &o.ActorID, &o.CreatedAt)
+	err = row.Scan(&o.ID, &o.BookingID, &o.Reason, &o.ActorID, &o.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

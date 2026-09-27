@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 )
 
 // Event is a domain occurrence published after a successful unit of work.
@@ -43,8 +45,11 @@ func (b *Bus) Publish(ctx context.Context, event Event) {
 	hs := append([]Handler(nil), b.handlers[event.Name]...)
 	b.mu.RUnlock()
 
+	// Reactors are trusted system work: they act on behalf of the platform,
+	// not the caller, so they run with system scope.
+	hctx := access.WithScope(ctx, access.System())
 	for _, h := range hs {
-		if err := h(ctx, event); err != nil {
+		if err := h(hctx, event); err != nil {
 			b.log.Error("domain event handler failed",
 				"event", event.Name,
 				"error", err,
@@ -55,19 +60,19 @@ func (b *Bus) Publish(ctx context.Context, event Event) {
 
 // Common MVP event names (see plan §7).
 const (
-	LeadCreated           = "lead.created"
-	LeadConverted         = "lead.converted"
-	BookingDrafted        = "booking.draft"
-	BookingConfirmed      = "booking.confirmed"
-	BookingCancelled      = "booking.cancelled"
-	PaymentRecorded       = "payment.recorded"
-	TaskCreated           = "task.created"
-	MessageReceived       = "inbox.message_received"
-	MessageSent           = "inbox.message_sent"
-	ConversationAssigned  = "inbox.conversation_assigned"
-	ConversationResolved  = "inbox.conversation_resolved"
-	SLABreached           = "inbox.sla_breached"
-	TaskEscalated         = "task.escalated"
+	LeadCreated          = "lead.created"
+	LeadConverted        = "lead.converted"
+	BookingDrafted       = "booking.draft"
+	BookingConfirmed     = "booking.confirmed"
+	BookingCancelled     = "booking.cancelled"
+	PaymentRecorded      = "payment.recorded"
+	TaskCreated          = "task.created"
+	MessageReceived      = "inbox.message_received"
+	MessageSent          = "inbox.message_sent"
+	ConversationAssigned = "inbox.conversation_assigned"
+	ConversationResolved = "inbox.conversation_resolved"
+	SLABreached          = "inbox.sla_breached"
+	TaskEscalated        = "task.escalated"
 )
 
 // CatalogEntry describes a domain event for admin/docs (T-234).

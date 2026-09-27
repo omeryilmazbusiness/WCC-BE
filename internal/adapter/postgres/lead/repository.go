@@ -10,8 +10,15 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/lead"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
+)
+
+var (
+	scopeAliased = pgscope.Columns{Branch: "l.branch_id", Owner: "l.owner_id"}
+	scopeBare    = pgscope.Columns{Branch: "branch_id", Owner: "owner_id"}
 )
 
 type Repository struct {
@@ -42,6 +49,9 @@ func scanLead(row pgx.Row) (*domain.Lead, error) {
 }
 
 func (r *Repository) Create(ctx context.Context, l *domain.Lead) error {
+	if err := pgscope.EnsureBranch(ctx, l.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO leads (
@@ -56,23 +66,38 @@ func (r *Repository) Create(ctx context.Context, l *domain.Lead) error {
 
 func (r *Repository) Update(ctx context.Context, l *domain.Lead) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		UPDATE leads SET customer_id=$2, full_name=$3, phone=$4, source=$5, stage=$6, owner_id=$7,
-			lost_reason_code=$8, lost_reason=$9, notes=$10, no_follow_up=$11, converted_booking_id=$12, updated_at=$13
-		WHERE id=$1`,
+	args := []any{
 		l.ID, l.CustomerID, l.FullName, l.Phone, l.Source, l.Stage, l.OwnerID,
 		l.LostReasonCode, l.LostReason, l.Notes, l.NoFollowUp, l.ConvertedBookingID, l.UpdatedAt,
-	)
-	return err
+	}
+	scope, args, err := pgscope.Clause(ctx, scopeBare, args)
+	if err != nil {
+		return err
+	}
+	tag, err := q.Exec(ctx, `
+		UPDATE leads SET customer_id=$2, full_name=$3, phone=$4, source=$5, stage=$6, owner_id=$7,
+			lost_reason_code=$8, lost_reason=$9, notes=$10, no_follow_up=$11, converted_booking_id=$12, updated_at=$13
+		WHERE id=$1`+scope, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("lead")
+	}
+	return nil
 }
 
 func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Lead, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeAliased, []any{id})
+	if err != nil {
+		return nil, err
+	}
 	row := q.QueryRow(ctx, `
 		SELECT `+leadCols+`
 		FROM leads l
 		LEFT JOIN users u ON u.id = l.owner_id
-		WHERE l.id=$1`, id)
+		WHERE l.id=$1`+scope, args...)
 	l, err := scanLead(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
@@ -84,35 +109,35 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Le
 	q := tx.QuerierFrom(ctx, r.pool)
 	where := []string{"1=1"}
 	args := []any{}
-	i := 1
 	if f.BranchID != nil {
-		where = append(where, fmt.Sprintf("l.branch_id=$%d", i))
 		args = append(args, *f.BranchID)
-		i++
+		where = append(where, fmt.Sprintf("l.branch_id=$%d", len(args)))
 	}
 	if f.OwnerID != nil {
-		where = append(where, fmt.Sprintf("l.owner_id=$%d", i))
 		args = append(args, *f.OwnerID)
-		i++
+		where = append(where, fmt.Sprintf("l.owner_id=$%d", len(args)))
 	}
 	if f.Stage != "" {
-		where = append(where, fmt.Sprintf("l.stage=$%d", i))
 		args = append(args, string(f.Stage))
-		i++
+		where = append(where, fmt.Sprintf("l.stage=$%d", len(args)))
 	}
 	if f.NoFollowUp != nil {
-		where = append(where, fmt.Sprintf("l.no_follow_up=$%d", i))
 		args = append(args, *f.NoFollowUp)
-		i++
+		where = append(where, fmt.Sprintf("l.no_follow_up=$%d", len(args)))
 	}
 	if qstr := strings.TrimSpace(f.Query); qstr != "" {
+		args = append(args, "%"+qstr+"%")
+		i := len(args)
 		where = append(where, fmt.Sprintf(
 			`(l.full_name ILIKE $%d OR l.phone ILIKE $%d OR l.source ILIKE $%d OR COALESCE(u.full_name,'') ILIKE $%d)`,
 			i, i, i, i,
 		))
-		args = append(args, "%"+qstr+"%")
-		i++
 	}
+	where, args, err := pgscope.Append(ctx, scopeAliased, where, args)
+	if err != nil {
+		return nil, 0, err
+	}
+	i := len(args) + 1
 	clause := strings.Join(where, " AND ")
 	limit, offset := f.Limit, f.Offset
 	if limit <= 0 {
@@ -160,9 +185,15 @@ func (r *Repository) AppendStageHistory(ctx context.Context, h *domain.StageHist
 
 func (r *Repository) ListStageHistory(ctx context.Context, leadID uuid.UUID) ([]domain.StageHistory, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeAliased, []any{leadID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT id, lead_id, from_stage, to_stage, changed_by, note, created_at
-		FROM lead_stage_history WHERE lead_id=$1 ORDER BY created_at ASC`, leadID)
+		SELECT h.id, h.lead_id, h.from_stage, h.to_stage, h.changed_by, h.note, h.created_at
+		FROM lead_stage_history h
+		WHERE h.lead_id=$1 AND EXISTS (SELECT 1 FROM leads l WHERE l.id = h.lead_id`+scope+`)
+		ORDER BY h.created_at ASC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -185,9 +216,20 @@ func (r *Repository) ListStageHistory(ctx context.Context, leadID uuid.UUID) ([]
 	return out, rows.Err()
 }
 
-func (r *Repository) Analytics(ctx context.Context, branchID uuid.UUID) (*domain.Analytics, error) {
+func (r *Repository) Analytics(ctx context.Context, branchID *uuid.UUID) (*domain.Analytics, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	a := &domain.Analytics{}
+	where := []string{"1=1"}
+	var args []any
+	if branchID != nil {
+		args = append(args, *branchID)
+		where = append(where, fmt.Sprintf("l.branch_id=$%d", len(args)))
+	}
+	where, args, err := pgscope.Append(ctx, scopeAliased, where, args)
+	if err != nil {
+		return nil, err
+	}
+	clause := strings.Join(where, " AND ")
 
 	if err := q.QueryRow(ctx, `
 		SELECT
@@ -196,7 +238,7 @@ func (r *Repository) Analytics(ctx context.Context, branchID uuid.UUID) (*domain
 			COUNT(*) FILTER (WHERE stage = 'won'),
 			COUNT(*) FILTER (WHERE stage = 'lost'),
 			COUNT(*) FILTER (WHERE no_follow_up AND stage NOT IN ('won','lost'))
-		FROM leads WHERE branch_id=$1`, branchID).Scan(
+		FROM leads l WHERE `+clause, args...).Scan(
 		&a.Total, &a.Open, &a.Won, &a.Lost, &a.NoFollowUp,
 	); err != nil {
 		return nil, err
@@ -207,7 +249,7 @@ func (r *Repository) Analytics(ctx context.Context, branchID uuid.UUID) (*domain
 	}
 
 	stageRows, err := q.Query(ctx, `
-		SELECT stage, COUNT(*) FROM leads WHERE branch_id=$1 GROUP BY stage ORDER BY stage`, branchID)
+		SELECT l.stage, COUNT(*) FROM leads l WHERE `+clause+` GROUP BY l.stage ORDER BY l.stage`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +265,7 @@ func (r *Repository) Analytics(ctx context.Context, branchID uuid.UUID) (*domain
 	srcRows, err := q.Query(ctx, `
 		SELECT COALESCE(NULLIF(source,''),'(unknown)'), COUNT(*),
 			COUNT(*) FILTER (WHERE stage='won')
-		FROM leads WHERE branch_id=$1 GROUP BY 1 ORDER BY 2 DESC`, branchID)
+		FROM leads l WHERE `+clause+` GROUP BY 1 ORDER BY 2 DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -242,9 +284,9 @@ func (r *Repository) Analytics(ctx context.Context, branchID uuid.UUID) (*domain
 			COUNT(*) FILTER (WHERE l.stage='lost')
 		FROM leads l
 		LEFT JOIN users u ON u.id = l.owner_id
-		WHERE l.branch_id=$1
+		WHERE `+clause+`
 		GROUP BY l.owner_id, u.full_name
-		ORDER BY COUNT(*) DESC`, branchID)
+		ORDER BY COUNT(*) DESC`, args...)
 	if err != nil {
 		return nil, err
 	}

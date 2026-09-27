@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
@@ -38,7 +39,7 @@ type TeamMember struct {
 // AttentionItem is an exception feed row — T-087.
 type AttentionItem struct {
 	ID          uuid.UUID `json:"id"`
-	Kind        string    `json:"kind"` // overdue_task|unpaid_booking|missing_doc|capacity|escalated_task
+	Kind        string    `json:"kind"`     // overdue_task|unpaid_booking|missing_doc|capacity|escalated_task
 	Severity    string    `json:"severity"` // low|medium|high
 	Title       string    `json:"title"`
 	RelatedType string    `json:"related_type"`
@@ -86,7 +87,7 @@ type Aggregator interface {
 	Compute(ctx context.Context, branchID *uuid.UUID, from, to time.Time) (*KPI, error)
 	TeamPerformance(ctx context.Context, branchID *uuid.UUID, from, to time.Time) ([]TeamMember, error)
 	AttentionFeed(ctx context.Context, branchID *uuid.UUID, limit int) ([]AttentionItem, error)
-	MyWorkToday(ctx context.Context, branchID, ownerID uuid.UUID, limit int) ([]MyWorkItem, error)
+	MyWorkToday(ctx context.Context, branchID *uuid.UUID, ownerID uuid.UUID, limit int) ([]MyWorkItem, error)
 	TargetProgress(ctx context.Context, branchID uuid.UUID, ownerID *uuid.UUID) (*TargetProgress, error)
 }
 
@@ -99,9 +100,23 @@ func NewService(agg Aggregator) *Service {
 	return &Service{agg: agg, now: func() time.Time { return time.Now().UTC() }}
 }
 
+// resolveBranch pins requested to the caller's scope: global callers may
+// pick any branch (nil = all), everyone else gets their own branch. The
+// aggregator further restricts owners for team/own scopes.
+func resolveBranch(ctx context.Context, requested *uuid.UUID) (*uuid.UUID, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return scope.ResolveBranch(requested)
+}
+
 func (s *Service) KPIs(ctx context.Context, branchID *uuid.UUID, from, to time.Time) (*KPI, error) {
 	from, to, err := NormalizePeriod(from, to, s.now())
 	if err != nil {
+		return nil, err
+	}
+	if branchID, err = resolveBranch(ctx, branchID); err != nil {
 		return nil, err
 	}
 	kpi, err := s.agg.Compute(ctx, branchID, from, to)
@@ -118,6 +133,9 @@ func (s *Service) Team(ctx context.Context, branchID *uuid.UUID, from, to time.T
 	if err != nil {
 		return nil, err
 	}
+	if branchID, err = resolveBranch(ctx, branchID); err != nil {
+		return nil, err
+	}
 	return s.agg.TeamPerformance(ctx, branchID, from, to)
 }
 
@@ -125,22 +143,46 @@ func (s *Service) Attention(ctx context.Context, branchID *uuid.UUID, limit int)
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
+	branchID, err := resolveBranch(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
 	return s.agg.AttentionFeed(ctx, branchID, limit)
 }
 
-func (s *Service) MyWork(ctx context.Context, branchID, ownerID uuid.UUID, limit int) ([]MyWorkItem, error) {
-	if ownerID == uuid.Nil {
+// MyWork is the caller's own queue across the branches their scope covers.
+func (s *Service) MyWork(ctx context.Context, limit int) ([]MyWorkItem, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if scope.UserID == uuid.Nil {
 		return nil, shared.NewValidation("owner_id is required")
+	}
+	branchID, err := scope.ResolveBranch(nil)
+	if err != nil {
+		return nil, err
 	}
 	if limit <= 0 || limit > 50 {
 		limit = 20
 	}
-	return s.agg.MyWorkToday(ctx, branchID, ownerID, limit)
+	return s.agg.MyWorkToday(ctx, branchID, scope.UserID, limit)
 }
 
+// MyTarget reports target progress for branchID (the caller's branch when
+// zero). A nil ownerID asks for the branch-level target, which only elevated
+// scopes may see; own-level callers always get their personal target.
 func (s *Service) MyTarget(ctx context.Context, branchID uuid.UUID, ownerID *uuid.UUID) (*TargetProgress, error) {
-	if branchID == uuid.Nil {
-		return nil, shared.NewValidation("branch_id is required")
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if branchID, err = scope.WriteBranch(branchID); err != nil {
+		return nil, err
+	}
+	if !scope.IsElevated() && (ownerID == nil || *ownerID != scope.UserID) {
+		me := scope.UserID
+		ownerID = &me
 	}
 	return s.agg.TargetProgress(ctx, branchID, ownerID)
 }

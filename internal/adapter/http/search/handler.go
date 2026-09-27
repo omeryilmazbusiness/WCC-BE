@@ -4,10 +4,13 @@ import (
 	"net/http"
 	"strconv"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/search"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/search"
+	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/search"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
 
 type Handler struct {
@@ -20,11 +23,28 @@ func (h Handler) Search(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	hits, err := h.Svc.Search(r.Context(), claims.BranchID, r.URL.Query().Get("q"), limit)
+	branchID, err := request.OptionalUUID(r, "branch_id")
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	hits, err := h.Svc.Search(r.Context(), branchID, r.URL.Query().Get("q"), limit)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	if !platformauth.HasPermission(claims.Role, platformauth.PermPIIRead) {
+		maskPassports(hits)
+	}
 	response.JSON(w, http.StatusOK, hits)
+}
+
+// maskPassports redacts passport numbers carried in passport-hit subtitles (T-243).
+func maskPassports(hits []domain.Hit) {
+	for i := range hits {
+		if hits[i].Kind == domain.KindPassport {
+			hits[i].Subtitle = shared.MaskPassport(hits[i].Subtitle)
+		}
+	}
 }

@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
-	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/supplier"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/supplier"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
@@ -34,14 +34,14 @@ type UpdateInput struct {
 }
 
 type LinkInput struct {
-	SupplierID uuid.UUID      `json:"-"`
+	SupplierID uuid.UUID       `json:"-"`
 	LinkType   domain.LinkType `json:"link_type"`
-	LinkID     uuid.UUID      `json:"link_id"`
-	Allotment  int            `json:"allotment"`
-	Sold       int            `json:"sold"`
-	UnitCost   int64          `json:"unit_cost"`
-	Currency   string         `json:"currency"`
-	Notes      string         `json:"notes"`
+	LinkID     uuid.UUID       `json:"link_id"`
+	Allotment  int             `json:"allotment"`
+	Sold       int             `json:"sold"`
+	UnitCost   int64           `json:"unit_cost"`
+	Currency   string          `json:"currency"`
+	Notes      string          `json:"notes"`
 }
 
 type Service struct {
@@ -120,7 +120,7 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Supplier, erro
 	return sup, nil
 }
 
-func (s *Service) List(ctx context.Context, branchID uuid.UUID, activeOnly bool) ([]domain.Supplier, error) {
+func (s *Service) List(ctx context.Context, branchID *uuid.UUID, activeOnly bool) ([]domain.Supplier, error) {
 	return s.repo.List(ctx, branchID, activeOnly)
 }
 
@@ -176,21 +176,21 @@ func (s *Service) ListLinks(ctx context.Context, supplierID uuid.UUID) ([]domain
 	return s.repo.ListLinksBySupplier(ctx, supplierID)
 }
 
-func (s *Service) ListUnconfirmed(ctx context.Context, branchID uuid.UUID, limit int) ([]domain.Link, error) {
+func (s *Service) ListUnconfirmed(ctx context.Context, branchID *uuid.UUID, limit int) ([]domain.Link, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	return s.repo.ListUnconfirmed(ctx, branchID, limit)
 }
 
-func (s *Service) ListOversold(ctx context.Context, branchID uuid.UUID, limit int) ([]domain.Link, error) {
+func (s *Service) ListOversold(ctx context.Context, branchID *uuid.UUID, limit int) ([]domain.Link, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	return s.repo.ListOversold(ctx, branchID, limit)
 }
 
-func (s *Service) ProcessUnconfirmedReminders(ctx context.Context, branchID uuid.UUID, limit int) (int, error) {
+func (s *Service) ProcessUnconfirmedReminders(ctx context.Context, branchID *uuid.UUID, limit int) (int, error) {
 	items, err := s.ListUnconfirmed(ctx, branchID, limit)
 	if err != nil {
 		return 0, err
@@ -210,15 +210,14 @@ func (s *Service) ProcessUnconfirmedReminders(ctx context.Context, branchID uuid
 // --- Epic 16 supplier invoices ---
 
 type CreateInvoiceInput struct {
-	BranchID      uuid.UUID `json:"-"`
-	ActorID       uuid.UUID `json:"-"`
-	SupplierID    uuid.UUID `json:"supplier_id"`
-	InvoiceNumber string    `json:"invoice_number"`
-	Currency      string    `json:"currency"`
-	TaxTotal      int64     `json:"tax_total"`
+	ActorID       uuid.UUID  `json:"-"`
+	SupplierID    uuid.UUID  `json:"supplier_id"`
+	InvoiceNumber string     `json:"invoice_number"`
+	Currency      string     `json:"currency"`
+	TaxTotal      int64      `json:"tax_total"`
 	IssuedOn      *time.Time `json:"issued_on"`
 	DueOn         *time.Time `json:"due_on"`
-	Notes         string    `json:"notes"`
+	Notes         string     `json:"notes"`
 }
 
 type SetInvoiceLinesInput struct {
@@ -233,20 +232,14 @@ type UpdateInvoiceStatusInput struct {
 }
 
 func (s *Service) CreateInvoice(ctx context.Context, in CreateInvoiceInput) (*domain.Invoice, error) {
-	if in.BranchID == uuid.Nil {
-		return nil, shared.NewValidation("branch_id is required")
-	}
 	sup, err := s.repo.FindByID(ctx, in.SupplierID)
 	if err != nil {
 		return nil, shared.NewNotFound("supplier")
 	}
-	if sup.BranchID != in.BranchID {
-		return nil, shared.NewForbidden("supplier branch mismatch")
-	}
 	now := time.Now().UTC()
 	actor := in.ActorID
 	inv := &domain.Invoice{
-		ID: uuid.New(), BranchID: in.BranchID, SupplierID: in.SupplierID,
+		ID: uuid.New(), BranchID: sup.BranchID, SupplierID: in.SupplierID,
 		InvoiceNumber: in.InvoiceNumber, Status: domain.InvoiceDraft,
 		Currency: in.Currency, TaxTotal: in.TaxTotal,
 		IssuedOn: in.IssuedOn, DueOn: in.DueOn, Notes: in.Notes,
@@ -262,13 +255,10 @@ func (s *Service) CreateInvoice(ctx context.Context, in CreateInvoiceInput) (*do
 	return inv, nil
 }
 
-func (s *Service) GetInvoice(ctx context.Context, branchID, id uuid.UUID) (*domain.Invoice, error) {
+func (s *Service) GetInvoice(ctx context.Context, id uuid.UUID) (*domain.Invoice, error) {
 	inv, err := s.repo.FindInvoiceByID(ctx, id)
 	if err != nil {
 		return nil, shared.NewNotFound("supplier_invoice")
-	}
-	if inv.BranchID != branchID {
-		return nil, shared.NewForbidden("invoice branch mismatch")
 	}
 	lines, err := s.repo.ListInvoiceLines(ctx, id)
 	if err != nil {
@@ -278,17 +268,14 @@ func (s *Service) GetInvoice(ctx context.Context, branchID, id uuid.UUID) (*doma
 	return inv, nil
 }
 
-func (s *Service) ListInvoices(ctx context.Context, branchID uuid.UUID, supplierID *uuid.UUID, status *domain.InvoiceStatus, limit int) ([]domain.Invoice, error) {
+func (s *Service) ListInvoices(ctx context.Context, branchID *uuid.UUID, supplierID *uuid.UUID, status *domain.InvoiceStatus, limit int) ([]domain.Invoice, error) {
 	return s.repo.ListInvoices(ctx, branchID, supplierID, status, limit)
 }
 
-func (s *Service) UpdateInvoiceStatus(ctx context.Context, branchID, id uuid.UUID, to domain.InvoiceStatus) (*domain.Invoice, error) {
+func (s *Service) UpdateInvoiceStatus(ctx context.Context, id uuid.UUID, to domain.InvoiceStatus) (*domain.Invoice, error) {
 	inv, err := s.repo.FindInvoiceByID(ctx, id)
 	if err != nil {
 		return nil, shared.NewNotFound("supplier_invoice")
-	}
-	if inv.BranchID != branchID {
-		return nil, shared.NewForbidden("invoice branch mismatch")
 	}
 	if !domain.ValidInvoiceStatus(to) {
 		return nil, shared.NewValidation("invalid status")
@@ -310,13 +297,10 @@ func (s *Service) UpdateInvoiceStatus(ctx context.Context, branchID, id uuid.UUI
 	return inv, nil
 }
 
-func (s *Service) SetInvoiceLines(ctx context.Context, branchID, id uuid.UUID, inputs []SetInvoiceLinesInput) (*domain.Invoice, error) {
+func (s *Service) SetInvoiceLines(ctx context.Context, id uuid.UUID, inputs []SetInvoiceLinesInput) (*domain.Invoice, error) {
 	inv, err := s.repo.FindInvoiceByID(ctx, id)
 	if err != nil {
 		return nil, shared.NewNotFound("supplier_invoice")
-	}
-	if inv.BranchID != branchID {
-		return nil, shared.NewForbidden("invoice branch mismatch")
 	}
 	if inv.Status != domain.InvoiceDraft && inv.Status != domain.InvoiceSubmitted {
 		return nil, shared.NewInvalidState("lines can only be edited in draft or submitted")
@@ -331,7 +315,7 @@ func (s *Service) SetInvoiceLines(ctx context.Context, branchID, id uuid.UUID, i
 		lines = append(lines, domain.InvoiceLine{
 			ID: uuid.New(), InvoiceID: id, LinkID: in.LinkID,
 			Description: strings.TrimSpace(in.Description),
-			Quantity: q, UnitCost: in.UnitCost, SortOrder: i, CreatedAt: now,
+			Quantity:    q, UnitCost: in.UnitCost, SortOrder: i, CreatedAt: now,
 		})
 	}
 	inv.Lines = lines
@@ -353,22 +337,18 @@ func (s *Service) SetInvoiceLines(ctx context.Context, branchID, id uuid.UUID, i
 // --- Epic 18 supplier issue history (T-235) ---
 
 type AddIssueInput struct {
-	BranchID   uuid.UUID           `json:"-"`
-	ActorID    uuid.UUID           `json:"-"`
-	SupplierID uuid.UUID           `json:"-"`
-	LinkID     *uuid.UUID          `json:"link_id"`
-	Kind       domain.IssueKind    `json:"kind"`
+	ActorID    uuid.UUID            `json:"-"`
+	SupplierID uuid.UUID            `json:"-"`
+	LinkID     *uuid.UUID           `json:"link_id"`
+	Kind       domain.IssueKind     `json:"kind"`
 	Severity   domain.IssueSeverity `json:"severity"`
-	Note       string              `json:"note"`
+	Note       string               `json:"note"`
 }
 
 func (s *Service) AddIssue(ctx context.Context, in AddIssueInput) (*domain.IssueEvent, error) {
 	sup, err := s.repo.FindByID(ctx, in.SupplierID)
 	if err != nil {
 		return nil, shared.NewNotFound("supplier")
-	}
-	if in.BranchID != uuid.Nil && sup.BranchID != in.BranchID {
-		return nil, shared.NewForbidden("supplier branch mismatch")
 	}
 	actor := in.ActorID
 	e := &domain.IssueEvent{
@@ -388,13 +368,9 @@ func (s *Service) AddIssue(ctx context.Context, in AddIssueInput) (*domain.Issue
 	return e, nil
 }
 
-func (s *Service) ListIssues(ctx context.Context, branchID, supplierID uuid.UUID, limit int) ([]domain.IssueEvent, error) {
-	sup, err := s.repo.FindByID(ctx, supplierID)
-	if err != nil {
+func (s *Service) ListIssues(ctx context.Context, supplierID uuid.UUID, limit int) ([]domain.IssueEvent, error) {
+	if _, err := s.repo.FindByID(ctx, supplierID); err != nil {
 		return nil, shared.NewNotFound("supplier")
-	}
-	if branchID != uuid.Nil && sup.BranchID != branchID {
-		return nil, shared.NewForbidden("supplier branch mismatch")
 	}
 	return s.repo.ListIssues(ctx, supplierID, limit)
 }

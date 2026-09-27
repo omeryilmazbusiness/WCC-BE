@@ -32,10 +32,10 @@ func ValidKind(k Kind) bool {
 type Status string
 
 const (
-	StatusStub        Status = "stub"
-	StatusConfigured  Status = "configured"
-	StatusDisabled    Status = "disabled"
-	StatusError       Status = "error"
+	StatusStub       Status = "stub"
+	StatusConfigured Status = "configured"
+	StatusDisabled   Status = "disabled"
+	StatusError      Status = "error"
 )
 
 type Health string

@@ -17,26 +17,26 @@ type ProviderRegistry interface {
 }
 
 type CreateInput struct {
-	BranchID       uuid.UUID            `json:"-"`
-	ActorID        uuid.UUID            `json:"-"`
-	Provider       domain.Provider      `json:"provider"`
-	DisplayName    string               `json:"display_name"`
-	RemotePath     string               `json:"remote_path"`
-	EntityType     string               `json:"entity_type"`
-	SourceOfTruth  domain.SourceOfTruth `json:"source_of_truth"`
+	BranchID       uuid.UUID             `json:"-"`
+	ActorID        uuid.UUID             `json:"-"`
+	Provider       domain.Provider       `json:"provider"`
+	DisplayName    string                `json:"display_name"`
+	RemotePath     string                `json:"remote_path"`
+	EntityType     string                `json:"entity_type"`
+	SourceOfTruth  domain.SourceOfTruth  `json:"source_of_truth"`
 	ConflictPolicy domain.ConflictPolicy `json:"conflict_policy"`
-	Enabled        *bool                `json:"enabled"`
-	ConfigJSON     json.RawMessage      `json:"config_json"`
+	Enabled        *bool                 `json:"enabled"`
+	ConfigJSON     json.RawMessage       `json:"config_json"`
 }
 
 type UpdateInput struct {
-	DisplayName    *string               `json:"display_name"`
-	RemotePath     *string               `json:"remote_path"`
-	EntityType     *string               `json:"entity_type"`
-	SourceOfTruth  *domain.SourceOfTruth `json:"source_of_truth"`
+	DisplayName    *string                `json:"display_name"`
+	RemotePath     *string                `json:"remote_path"`
+	EntityType     *string                `json:"entity_type"`
+	SourceOfTruth  *domain.SourceOfTruth  `json:"source_of_truth"`
 	ConflictPolicy *domain.ConflictPolicy `json:"conflict_policy"`
-	Enabled        *bool                 `json:"enabled"`
-	ConfigJSON     json.RawMessage       `json:"config_json"`
+	Enabled        *bool                  `json:"enabled"`
+	ConfigJSON     json.RawMessage        `json:"config_json"`
 }
 
 type Service struct {
@@ -230,11 +230,11 @@ func (s *Service) SyncNow(ctx context.Context, branchID, id, actorID uuid.UUID) 
 		run.Status = domain.RunOK
 	}
 	summary, _ := json.Marshal(map[string]any{
-		"message":            "Platform DB remains authoritative; file values applied only per conflict_policy.",
-		"source_of_truth":    c.SourceOfTruth,
-		"conflict_policy":    c.ConflictPolicy,
+		"message":                "Platform DB remains authoritative; file values applied only per conflict_policy.",
+		"source_of_truth":        c.SourceOfTruth,
+		"conflict_policy":        c.ConflictPolicy,
 		"platform_authoritative": c.SourceOfTruth == domain.TruthPlatform || c.ConflictPolicy == domain.ConflictPreferPlatform,
-		"resolutions":        details,
+		"resolutions":            details,
 	})
 	run.SummaryJSON = summary
 

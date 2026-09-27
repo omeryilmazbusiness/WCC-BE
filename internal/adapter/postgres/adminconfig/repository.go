@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/adminconfig"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -23,6 +24,9 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 }
 
 func (r *Repository) ListSLA(ctx context.Context, branchID uuid.UUID) ([]domain.SLAPolicy, error) {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return nil, err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	rows, err := q.Query(ctx, `
 		SELECT id, branch_id, channel, first_response_seconds
@@ -44,6 +48,9 @@ func (r *Repository) ListSLA(ctx context.Context, branchID uuid.UUID) ([]domain.
 }
 
 func (r *Repository) UpsertSLA(ctx context.Context, p *domain.SLAPolicy) error {
+	if err := pgscope.EnsureBranch(ctx, p.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if p.ID == uuid.Nil {
 		p.ID = uuid.New()
@@ -59,6 +66,9 @@ func (r *Repository) UpsertSLA(ctx context.Context, p *domain.SLAPolicy) error {
 }
 
 func (r *Repository) ListEscalationOverrides(ctx context.Context, branchID uuid.UUID) ([]domain.EscalationOverride, error) {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return nil, err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	rows, err := q.Query(ctx, `
 		SELECT branch_id, kind, escalate_after_seconds, escalate_to_roles, enabled, updated_at
@@ -80,6 +90,9 @@ func (r *Repository) ListEscalationOverrides(ctx context.Context, branchID uuid.
 }
 
 func (r *Repository) UpsertEscalationOverride(ctx context.Context, o *domain.EscalationOverride) error {
+	if err := pgscope.EnsureBranch(ctx, o.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO escalation_rule_overrides (
@@ -96,6 +109,9 @@ func (r *Repository) UpsertEscalationOverride(ctx context.Context, o *domain.Esc
 }
 
 func (r *Repository) DeleteEscalationOverride(ctx context.Context, branchID uuid.UUID, kind string) error {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	ct, err := q.Exec(ctx, `
 		DELETE FROM escalation_rule_overrides WHERE branch_id=$1 AND kind=$2`, branchID, kind)
@@ -109,6 +125,9 @@ func (r *Repository) DeleteEscalationOverride(ctx context.Context, branchID uuid
 }
 
 func (r *Repository) ListLostReasons(ctx context.Context, branchID uuid.UUID, activeOnly bool) ([]domain.LostReason, error) {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return nil, err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	query := `
 		SELECT id, branch_id, code, label_en, label_ar, sort_order, is_active, requires_note, created_at
@@ -137,6 +156,9 @@ func (r *Repository) ListLostReasons(ctx context.Context, branchID uuid.UUID, ac
 }
 
 func (r *Repository) UpsertLostReason(ctx context.Context, lr *domain.LostReason) error {
+	if err := pgscope.EnsureBranch(ctx, lr.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if lr.ID == uuid.Nil {
 		lr.ID = uuid.New()
@@ -158,6 +180,9 @@ func (r *Repository) UpsertLostReason(ctx context.Context, lr *domain.LostReason
 }
 
 func (r *Repository) DeleteLostReason(ctx context.Context, branchID, id uuid.UUID) error {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	ct, err := q.Exec(ctx, `
 		DELETE FROM lost_reason_codes WHERE branch_id=$1 AND id=$2`, branchID, id)
@@ -171,6 +196,9 @@ func (r *Repository) DeleteLostReason(ctx context.Context, branchID, id uuid.UUI
 }
 
 func (r *Repository) ListTemplates(ctx context.Context, branchID uuid.UUID, channel string) ([]domain.MessageTemplate, error) {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return nil, err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	rows, err := q.Query(ctx, `
 		SELECT id, branch_id, channel, name, body, variables_json, is_active, created_by, created_at, updated_at
@@ -185,6 +213,9 @@ func (r *Repository) ListTemplates(ctx context.Context, branchID uuid.UUID, chan
 }
 
 func (r *Repository) GetTemplate(ctx context.Context, branchID, id uuid.UUID) (*domain.MessageTemplate, error) {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return nil, err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	t, err := scanTemplate(q.QueryRow(ctx, `
 		SELECT id, branch_id, channel, name, body, variables_json, is_active, created_by, created_at, updated_at
@@ -196,6 +227,9 @@ func (r *Repository) GetTemplate(ctx context.Context, branchID, id uuid.UUID) (*
 }
 
 func (r *Repository) InsertTemplate(ctx context.Context, t *domain.MessageTemplate) error {
+	if err := pgscope.EnsureBranch(ctx, t.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	vars := t.VariablesJSON
 	if len(vars) == 0 {
@@ -211,6 +245,9 @@ func (r *Repository) InsertTemplate(ctx context.Context, t *domain.MessageTempla
 }
 
 func (r *Repository) UpdateTemplate(ctx context.Context, t *domain.MessageTemplate) error {
+	if err := pgscope.EnsureBranch(ctx, t.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	vars := t.VariablesJSON
 	if len(vars) == 0 {
@@ -232,6 +269,9 @@ func (r *Repository) UpdateTemplate(ctx context.Context, t *domain.MessageTempla
 }
 
 func (r *Repository) DeleteTemplate(ctx context.Context, branchID, id uuid.UUID) error {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	ct, err := q.Exec(ctx, `
 		DELETE FROM message_templates WHERE branch_id=$1 AND id=$2`, branchID, id)
@@ -245,6 +285,9 @@ func (r *Repository) DeleteTemplate(ctx context.Context, branchID, id uuid.UUID)
 }
 
 func (r *Repository) ListFieldConfigs(ctx context.Context, branchID uuid.UUID, entity string) ([]domain.FieldConfig, error) {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return nil, err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	rows, err := q.Query(ctx, `
 		SELECT branch_id, entity, field_key, visible, required, sort_order, label_override, updated_at
@@ -270,6 +313,9 @@ func (r *Repository) ListFieldConfigs(ctx context.Context, branchID uuid.UUID, e
 }
 
 func (r *Repository) ReplaceFieldConfigs(ctx context.Context, branchID uuid.UUID, entity string, rows []domain.FieldConfig) error {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if _, err := q.Exec(ctx, `
 		DELETE FROM entity_field_configs WHERE branch_id=$1 AND entity=$2`, branchID, entity); err != nil {
@@ -292,6 +338,9 @@ func (r *Repository) ReplaceFieldConfigs(ctx context.Context, branchID uuid.UUID
 }
 
 func (r *Repository) GetAlertThresholds(ctx context.Context, branchID uuid.UUID) (*domain.AlertThresholds, error) {
+	if err := pgscope.EnsureBranch(ctx, branchID); err != nil {
+		return nil, err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	var a domain.AlertThresholds
 	err := q.QueryRow(ctx, `
@@ -311,6 +360,9 @@ func (r *Repository) GetAlertThresholds(ctx context.Context, branchID uuid.UUID)
 }
 
 func (r *Repository) UpsertAlertThresholds(ctx context.Context, a *domain.AlertThresholds) error {
+	if err := pgscope.EnsureBranch(ctx, a.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO alert_threshold_settings (

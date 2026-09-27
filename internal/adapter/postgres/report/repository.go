@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/report"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -21,17 +22,47 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+// owners is the own/team restriction of a report; unrestricted for branch and
+// global scopes.
+type owners struct {
+	set        string
+	restricted bool
+}
+
+func (o owners) in(col string) string { return col + " IN (" + o.set + ")" }
+
+func (o owners) and(col string) string {
+	if !o.restricted {
+		return ""
+	}
+	return " AND " + o.in(col)
+}
+
+// ownerCond checks the filter branch against the scope and renders the owner
+// set, continuing the placeholder numbering of args.
+func ownerCond(ctx context.Context, f domain.Filter, args []any) (owners, []any, error) {
+	if err := pgscope.EnsureBranch(ctx, f.BranchID); err != nil {
+		return owners{}, args, err
+	}
+	set, args, restricted, err := pgscope.Owners(ctx, args)
+	return owners{set: set, restricted: restricted}, args, err
+}
+
 func (r *Repository) SalesRows(ctx context.Context, f domain.Filter) ([]domain.Row, map[string]any, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	owned, args, err := ownerCond(ctx, f, []any{f.From, f.To, f.BranchID, f.OwnerID, f.Limit})
+	if err != nil {
+		return nil, nil, err
+	}
 	rows, err := q.Query(ctx, `
 		WITH owners AS (
 			SELECT DISTINCT owner_id AS id FROM leads
 			WHERE created_at >= $1 AND created_at < $2 AND branch_id=$3
-			  AND ($4::uuid IS NULL OR owner_id=$4)
+			  AND ($4::uuid IS NULL OR owner_id=$4)`+owned.and("owner_id")+`
 			UNION
 			SELECT DISTINCT owner_id FROM bookings
 			WHERE created_at >= $1 AND created_at < $2 AND branch_id=$3
-			  AND ($4::uuid IS NULL OR owner_id=$4)
+			  AND ($4::uuid IS NULL OR owner_id=$4)`+owned.and("owner_id")+`
 		)
 		SELECT o.id::text,
 			COALESCE(u.full_name, o.id::text),
@@ -43,7 +74,7 @@ func (r *Repository) SalesRows(ctx context.Context, f domain.Filter) ([]domain.R
 		FROM owners o
 		LEFT JOIN users u ON u.id = o.id
 		ORDER BY 7 DESC, 3 DESC
-		LIMIT $5`, f.From, f.To, f.BranchID, f.OwnerID, f.Limit)
+		LIMIT $5`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -93,6 +124,15 @@ func (r *Repository) SalesRows(ctx context.Context, f domain.Filter) ([]domain.R
 
 func (r *Repository) TargetRows(ctx context.Context, f domain.Filter) ([]domain.Row, map[string]any, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	owned, args, err := ownerCond(ctx, f, []any{f.BranchID, f.From, f.To, f.OwnerID, f.Limit})
+	if err != nil {
+		return nil, nil, err
+	}
+	visible := ""
+	if owned.restricted {
+		visible = ` AND (COALESCE(t.scope_type,'branch')='branch' OR ` + owned.in("t.owner_id") + `
+			OR EXISTS (SELECT 1 FROM revenue_target_shares sh WHERE sh.target_id=t.id AND ` + owned.in("sh.user_id") + `))`
+	}
 	rows, err := q.Query(ctx, `
 		SELECT t.id::text, t.label, COALESCE(t.metric,'collected'), t.target_amount, t.currency,
 		       COALESCE(s.actual_amount,0), COALESCE(s.expected_to_date,0),
@@ -111,9 +151,9 @@ func (r *Repository) TargetRows(ctx context.Context, f domain.Filter) ([]domain.
 		  AND t.period_end >= ($2::timestamptz)::date
 		  AND ($4::uuid IS NULL OR t.owner_id = $4 OR EXISTS (
 		        SELECT 1 FROM revenue_target_shares sh WHERE sh.target_id=t.id AND sh.user_id=$4
-		      ))
+		      ))`+visible+`
 		ORDER BY t.period_start DESC
-		LIMIT $5`, f.BranchID, f.From, f.To, f.OwnerID, f.Limit)
+		LIMIT $5`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -158,6 +198,10 @@ func (r *Repository) TargetRows(ctx context.Context, f domain.Filter) ([]domain.
 
 func (r *Repository) ReadinessRows(ctx context.Context, f domain.Filter) ([]domain.Row, map[string]any, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	owned, args, err := ownerCond(ctx, f, []any{f.BranchID, f.DepartureID, f.From, f.To, f.Limit})
+	if err != nil {
+		return nil, nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT b.id::text,
 			COALESCE(c.full_name, b.id::text),
@@ -171,9 +215,9 @@ func (r *Repository) ReadinessRows(ctx context.Context, f domain.Filter) ([]doma
 		WHERE b.branch_id=$1
 		  AND b.status IN ('draft','confirmed')
 		  AND ($2::uuid IS NULL OR b.departure_id=$2)
-		  AND b.created_at >= $3 AND b.created_at < $4
+		  AND b.created_at >= $3 AND b.created_at < $4`+owned.and("b.owner_id")+`
 		ORDER BY b.balance_amt DESC, b.updated_at DESC
-		LIMIT $5`, f.BranchID, f.DepartureID, f.From, f.To, f.Limit)
+		LIMIT $5`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -229,6 +273,14 @@ func (r *Repository) ReadinessRows(ctx context.Context, f domain.Filter) ([]doma
 
 func (r *Repository) SLARows(ctx context.Context, f domain.Filter) ([]domain.Row, map[string]any, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	owned, args, err := ownerCond(ctx, f, []any{f.BranchID, f.From, f.To, f.Channel, f.Limit})
+	if err != nil {
+		return nil, nil, err
+	}
+	visible := ""
+	if owned.restricted {
+		visible = ` AND (owner_id IS NULL OR ` + owned.in("owner_id") + `)`
+	}
 	rows, err := q.Query(ctx, `
 		SELECT channel,
 			COUNT(*)::int,
@@ -239,10 +291,10 @@ func (r *Repository) SLARows(ctx context.Context, f domain.Filter) ([]domain.Row
 		FROM conversations
 		WHERE branch_id=$1
 		  AND created_at >= $2 AND created_at < $3
-		  AND ($4 = '' OR channel = $4)
+		  AND ($4 = '' OR channel = $4)`+visible+`
 		GROUP BY channel
 		ORDER BY 3 DESC, 2 DESC
-		LIMIT $5`, f.BranchID, f.From, f.To, f.Channel, f.Limit)
+		LIMIT $5`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -295,6 +347,10 @@ func (r *Repository) FinanceRows(ctx context.Context, f domain.Filter) ([]domain
 		booked, collected, balance int64
 		payments, overdue          int
 	}
+	owned, args, err := ownerCond(ctx, f, []any{f.BranchID, f.From, f.To})
+	if err != nil {
+		return nil, nil, err
+	}
 	aggRows, err := q.Query(ctx, `
 		SELECT COALESCE(currency,'SAR'),
 			COALESCE(SUM(total_amount),0),
@@ -302,9 +358,9 @@ func (r *Repository) FinanceRows(ctx context.Context, f domain.Filter) ([]domain
 			COALESCE(SUM(balance_amt),0),
 			COUNT(*) FILTER (WHERE balance_amt > 0 AND status='confirmed')
 		FROM bookings
-		WHERE branch_id=$1 AND created_at >= $2 AND created_at < $3
+		WHERE branch_id=$1 AND created_at >= $2 AND created_at < $3`+owned.and("owner_id")+`
 		GROUP BY COALESCE(currency,'SAR')
-		ORDER BY 3 DESC`, f.BranchID, f.From, f.To)
+		ORDER BY 3 DESC`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -324,8 +380,9 @@ func (r *Repository) FinanceRows(ctx context.Context, f domain.Filter) ([]domain
 		_ = q.QueryRow(ctx, `
 			SELECT COUNT(*) FROM payments p
 			JOIN bookings b ON b.id = p.booking_id
-			WHERE b.branch_id=$1 AND p.created_at >= $2 AND p.created_at < $3 AND p.currency=$4`,
-			f.BranchID, f.From, f.To, aggs[i].currency).Scan(&aggs[i].payments)
+			WHERE b.branch_id=$1 AND p.created_at >= $2 AND p.created_at < $3
+			  AND p.currency=$`+strconv.Itoa(len(args)+1)+owned.and("b.owner_id"),
+			append(args, aggs[i].currency)...).Scan(&aggs[i].payments)
 	}
 
 	var out []domain.Row
@@ -357,9 +414,9 @@ func (r *Repository) FinanceRows(ctx context.Context, f domain.Filter) ([]domain
 		FROM bookings b
 		LEFT JOIN customers c ON c.id=b.customer_id
 		WHERE b.branch_id=$1 AND b.status='confirmed' AND b.balance_amt > 0
-		  AND b.created_at >= $2 AND b.created_at < $3
+		  AND b.created_at >= $2 AND b.created_at < $3`+owned.and("b.owner_id")+`
 		ORDER BY b.balance_amt DESC
-		LIMIT 25`, f.BranchID, f.From, f.To)
+		LIMIT 25`, args...)
 	if err == nil {
 		defer bRows.Close()
 		for bRows.Next() {
@@ -390,6 +447,9 @@ func (r *Repository) FinanceRows(ctx context.Context, f domain.Filter) ([]domain
 }
 
 func (r *Repository) ListIntegrationLogs(ctx context.Context, f domain.Filter) ([]domain.IntegrationLog, int, error) {
+	if err := pgscope.EnsureBranch(ctx, f.BranchID); err != nil {
+		return nil, 0, err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	where := `branch_id=$1 AND created_at >= $2 AND created_at < $3`
 	args := []any{f.BranchID, f.From, f.To}
@@ -467,6 +527,9 @@ func (r *Repository) ListIntegrationLogs(ctx context.Context, f domain.Filter) (
 }
 
 func (r *Repository) InsertIntegrationLog(ctx context.Context, l *domain.IntegrationLog) error {
+	if err := pgscope.EnsureBranch(ctx, l.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO integration_logs (
@@ -480,6 +543,9 @@ func (r *Repository) InsertIntegrationLog(ctx context.Context, l *domain.Integra
 }
 
 func (r *Repository) InsertExportAudit(ctx context.Context, a *domain.ExportAudit) error {
+	if err := pgscope.EnsureBranch(ctx, a.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	raw, _ := json.Marshal(a.Filters)
 	if len(raw) == 0 {

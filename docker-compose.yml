@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: wodi
       POSTGRES_DB: wodi_crm
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - wodi_pg:/var/lib/postgresql/data
     healthcheck:

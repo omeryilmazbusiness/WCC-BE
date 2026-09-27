@@ -7,9 +7,10 @@ import (
 
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
@@ -46,16 +47,6 @@ func (h Handler) parsePeriod(r *http.Request) (from, to time.Time, err error) {
 	return from, to, nil
 }
 
-func (h Handler) resolveBranch(claims *platformauth.Claims, r *http.Request) *uuid.UUID {
-	requested := &claims.BranchID
-	if v := r.URL.Query().Get("branch_id"); v != "" {
-		if id, err := uuid.Parse(v); err == nil {
-			requested = &id
-		}
-	}
-	return middleware.ScopeBranch(claims, requested)
-}
-
 func (h Handler) KPIs(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
@@ -71,7 +62,11 @@ func (h Handler) KPIs(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	branchID := h.resolveBranch(claims, r)
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	kpi, err := h.Svc.KPIs(r.Context(), branchID, from, to)
 	if err != nil {
 		response.Error(w, err)
@@ -95,7 +90,11 @@ func (h Handler) Team(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	branchID := h.resolveBranch(claims, r)
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	items, err := h.Svc.Team(r.Context(), branchID, from, to)
 	if err != nil {
 		response.Error(w, err)
@@ -115,7 +114,11 @@ func (h Handler) Attention(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	branchID := h.resolveBranch(claims, r)
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	items, err := h.Svc.Attention(r.Context(), branchID, limit)
 	if err != nil {
 		response.Error(w, err)
@@ -125,13 +128,8 @@ func (h Handler) Attention(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) MyWork(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
-		return
-	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	items, err := h.Svc.MyWork(r.Context(), claims.BranchID, claims.UserID, limit)
+	items, err := h.Svc.MyWork(r.Context(), limit)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -151,7 +149,14 @@ func (h Handler) MyTarget(w http.ResponseWriter, r *http.Request) {
 		(claims.Role == platformauth.RoleGM || claims.Role == platformauth.RoleManager) {
 		ownerID = nil
 	}
-	prog, err := h.Svc.MyTarget(r.Context(), claims.BranchID, ownerID)
+	var branchID uuid.UUID
+	if requested, err := request.OptionalUUID(r, "branch_id"); err != nil {
+		response.Error(w, err)
+		return
+	} else if requested != nil {
+		branchID = *requested
+	}
+	prog, err := h.Svc.MyTarget(r.Context(), branchID, ownerID)
 	if err != nil {
 		response.Error(w, err)
 		return

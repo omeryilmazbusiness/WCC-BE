@@ -8,8 +8,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
 	pgimportexport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/importexport"
+	"github.com/wodi-crm/wodi-crm-be/internal/app"
 	appimportexport "github.com/wodi-crm/wodi-crm-be/internal/app/importexport"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
@@ -46,6 +49,11 @@ func main() {
 		os.Exit(1)
 	}
 	srv.SetImportProcessor(importSvc.ProcessByStringID)
+	cleanup := app.NewSecurityRetention(pool)
+	srv.SetSecurityCleanup(func(ctx context.Context) error {
+		_, err := cleanup.Run(ctx, uuid.Nil)
+		return err
+	})
 
 	go func() {
 		stop := make(chan os.Signal, 1)

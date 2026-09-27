@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/tourpackage"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -22,7 +24,45 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+var packageScope = pgscope.Columns{Branch: "branch_id"}
+
+// packageVisible renders an EXISTS guard on the parent package of a child row.
+func packageVisible(ctx context.Context, packageCol string, args []any) (string, []any, error) {
+	clause, args, err := pgscope.Clause(ctx, pgscope.Columns{Branch: "pk.branch_id"}, args)
+	if err != nil {
+		return "", args, err
+	}
+	return ` AND EXISTS (SELECT 1 FROM packages pk WHERE pk.id=` + packageCol + clause + `)`, args, nil
+}
+
+// departureVisible renders an EXISTS guard on a departure through its package.
+func departureVisible(ctx context.Context, departureCol string, args []any) (string, []any, error) {
+	clause, args, err := pgscope.Clause(ctx, pgscope.Columns{Branch: "pk.branch_id"}, args)
+	if err != nil {
+		return "", args, err
+	}
+	return ` AND EXISTS (SELECT 1 FROM departures dp JOIN packages pk ON pk.id=dp.package_id
+		WHERE dp.id=` + departureCol + clause + `)`, args, nil
+}
+
+func (r *Repository) ensureVisible(ctx context.Context, guard func(context.Context, string, []any) (string, []any, error), id uuid.UUID, entity string) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	g, args, err := guard(ctx, "$1", []any{id})
+	if err != nil {
+		return err
+	}
+	var ok bool
+	err = q.QueryRow(ctx, `SELECT TRUE WHERE $1::uuid IS NOT NULL`+g, args...).Scan(&ok)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return shared.NewNotFound(entity)
+	}
+	return err
+}
+
 func (r *Repository) CreatePackage(ctx context.Context, p *domain.Package) error {
+	if err := pgscope.EnsureBranch(ctx, p.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO packages (id, branch_id, code, name_en, name_ar, description, is_active, created_at, updated_at)
@@ -34,21 +74,35 @@ func (r *Repository) CreatePackage(ctx context.Context, p *domain.Package) error
 
 func (r *Repository) UpdatePackage(ctx context.Context, p *domain.Package) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		UPDATE packages SET code=$2, name_en=$3, name_ar=$4, description=$5, is_active=$6, updated_at=$7
-		WHERE id=$1`,
+	clause, args, err := pgscope.Clause(ctx, packageScope, []any{
 		p.ID, p.Code, p.NameEN, p.NameAR, p.Description, p.IsActive, p.UpdatedAt,
-	)
-	return err
+	})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `
+		UPDATE packages SET code=$2, name_en=$3, name_ar=$4, description=$5, is_active=$6, updated_at=$7
+		WHERE id=$1`+clause, args...)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("%w", pgx.ErrNoRows)
+	}
+	return nil
 }
 
 func (r *Repository) FindPackage(ctx context.Context, id uuid.UUID) (*domain.Package, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, packageScope, []any{id})
+	if err != nil {
+		return nil, err
+	}
 	row := q.QueryRow(ctx, `
 		SELECT id, branch_id, code, name_en, name_ar, description, is_active, created_at, updated_at
-		FROM packages WHERE id=$1`, id)
+		FROM packages WHERE id=$1`+clause, args...)
 	var p domain.Package
-	err := row.Scan(&p.ID, &p.BranchID, &p.Code, &p.NameEN, &p.NameAR, &p.Description, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
+	err = row.Scan(&p.ID, &p.BranchID, &p.Code, &p.NameEN, &p.NameAR, &p.Description, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
 	}
@@ -57,11 +111,15 @@ func (r *Repository) FindPackage(ctx context.Context, id uuid.UUID) (*domain.Pac
 
 func (r *Repository) ListPackages(ctx context.Context, branchID uuid.UUID, activeOnly bool) ([]domain.Package, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, packageScope, []any{branchID, activeOnly})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT id, branch_id, code, name_en, name_ar, description, is_active, created_at, updated_at
 		FROM packages
-		WHERE branch_id=$1 AND ($2::bool = FALSE OR is_active = TRUE)
-		ORDER BY code`, branchID, activeOnly)
+		WHERE branch_id=$1 AND ($2::bool = FALSE OR is_active = TRUE)`+clause+`
+		ORDER BY code`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -78,6 +136,9 @@ func (r *Repository) ListPackages(ctx context.Context, branchID uuid.UUID, activ
 }
 
 func (r *Repository) CreateDeparture(ctx context.Context, d *domain.Departure) error {
+	if err := r.ensureVisible(ctx, packageVisible, d.PackageID, "package"); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO departures (
@@ -94,16 +155,26 @@ func (r *Repository) CreateDeparture(ctx context.Context, d *domain.Departure) e
 
 func (r *Repository) UpdateDeparture(ctx context.Context, d *domain.Departure) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		UPDATE departures SET code=$2, depart_date=$3, return_date=$4, capacity_total=$5,
-			base_price=$6, currency=$7, is_active=$8, sales_closed=$9, soft_threshold_pct=$10,
-			allow_oversell=$11, updated_at=$12
-		WHERE id=$1`,
+	guard, args, err := packageVisible(ctx, "d.package_id", []any{
 		d.ID, d.Code, d.DepartDate, d.ReturnDate, d.CapacityTotal,
 		d.BasePrice, d.Currency, d.IsActive, d.SalesClosed, d.SoftThresholdPct,
 		d.AllowOversell, d.UpdatedAt,
-	)
-	return err
+	})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `
+		UPDATE departures d SET code=$2, depart_date=$3, return_date=$4, capacity_total=$5,
+			base_price=$6, currency=$7, is_active=$8, sales_closed=$9, soft_threshold_pct=$10,
+			allow_oversell=$11, updated_at=$12
+		WHERE d.id=$1`+guard, args...)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return fmt.Errorf("%w", pgx.ErrNoRows)
+	}
+	return nil
 }
 
 func scanDeparture(row pgx.Row) (*domain.Departure, error) {
@@ -119,12 +190,16 @@ func scanDeparture(row pgx.Row) (*domain.Departure, error) {
 	return &d, nil
 }
 
-const depCols = `id, package_id, code, depart_date, return_date, capacity_total, capacity_sold,
-	base_price, currency, is_active, sales_closed, soft_threshold_pct, allow_oversell, created_at, updated_at`
+const depCols = `d.id, d.package_id, d.code, d.depart_date, d.return_date, d.capacity_total, d.capacity_sold,
+	d.base_price, d.currency, d.is_active, d.sales_closed, d.soft_threshold_pct, d.allow_oversell, d.created_at, d.updated_at`
 
 func (r *Repository) FindDeparture(ctx context.Context, id uuid.UUID) (*domain.Departure, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	d, err := scanDeparture(q.QueryRow(ctx, `SELECT `+depCols+` FROM departures WHERE id=$1`, id))
+	guard, args, err := packageVisible(ctx, "d.package_id", []any{id})
+	if err != nil {
+		return nil, err
+	}
+	d, err := scanDeparture(q.QueryRow(ctx, `SELECT `+depCols+` FROM departures d WHERE d.id=$1`+guard, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
 	}
@@ -133,13 +208,21 @@ func (r *Repository) FindDeparture(ctx context.Context, id uuid.UUID) (*domain.D
 
 func (r *Repository) UpdateDepartureCapacitySold(ctx context.Context, id uuid.UUID, sold int) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `UPDATE departures SET capacity_sold=$2, updated_at=NOW() WHERE id=$1`, id, sold)
+	guard, args, err := packageVisible(ctx, "d.package_id", []any{id, sold})
+	if err != nil {
+		return err
+	}
+	_, err = q.Exec(ctx, `UPDATE departures d SET capacity_sold=$2, updated_at=NOW() WHERE d.id=$1`+guard, args...)
 	return err
 }
 
 func (r *Repository) ListDepartures(ctx context.Context, packageID uuid.UUID) ([]domain.Departure, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	rows, err := q.Query(ctx, `SELECT `+depCols+` FROM departures WHERE package_id=$1 ORDER BY depart_date`, packageID)
+	guard, args, err := packageVisible(ctx, "d.package_id", []any{packageID})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Query(ctx, `SELECT `+depCols+` FROM departures d WHERE d.package_id=$1`+guard+` ORDER BY d.depart_date`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -156,6 +239,9 @@ func (r *Repository) ListDepartures(ctx context.Context, packageID uuid.UUID) ([
 }
 
 func (r *Repository) ReplacePackageTiers(ctx context.Context, packageID uuid.UUID, tiers []domain.PricingTier) error {
+	if err := r.ensureVisible(ctx, packageVisible, packageID, "package"); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if _, err := q.Exec(ctx, `DELETE FROM package_pricing_tiers WHERE package_id=$1`, packageID); err != nil {
 		return err
@@ -180,9 +266,13 @@ func (r *Repository) ReplacePackageTiers(ctx context.Context, packageID uuid.UUI
 
 func (r *Repository) ListPackageTiers(ctx context.Context, packageID uuid.UUID) ([]domain.PricingTier, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	guard, args, err := packageVisible(ctx, "t.package_id", []any{packageID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT id, package_id, code, label, kind, amount, currency, sort_order, is_active, created_at, updated_at
-		FROM package_pricing_tiers WHERE package_id=$1 ORDER BY sort_order, code`, packageID)
+		SELECT t.id, t.package_id, t.code, t.label, t.kind, t.amount, t.currency, t.sort_order, t.is_active, t.created_at, t.updated_at
+		FROM package_pricing_tiers t WHERE t.package_id=$1`+guard+` ORDER BY t.sort_order, t.code`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +298,9 @@ func (r *Repository) SnapshotTiersToDeparture(ctx context.Context, packageID, de
 }
 
 func (r *Repository) ReplaceDepartureTiers(ctx context.Context, departureID uuid.UUID, tiers []domain.PricingTier) error {
+	if err := r.ensureVisible(ctx, departureVisible, departureID, "departure"); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if _, err := q.Exec(ctx, `DELETE FROM departure_pricing_tiers WHERE departure_id=$1`, departureID); err != nil {
 		return err
@@ -230,9 +323,13 @@ func (r *Repository) ReplaceDepartureTiers(ctx context.Context, departureID uuid
 
 func (r *Repository) ListDepartureTiers(ctx context.Context, departureID uuid.UUID) ([]domain.PricingTier, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	guard, args, err := departureVisible(ctx, "t.departure_id", []any{departureID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT id, departure_id, code, label, kind, amount, currency, sort_order, created_at
-		FROM departure_pricing_tiers WHERE departure_id=$1 ORDER BY sort_order, code`, departureID)
+		SELECT t.id, t.departure_id, t.code, t.label, t.kind, t.amount, t.currency, t.sort_order, t.created_at
+		FROM departure_pricing_tiers t WHERE t.departure_id=$1`+guard+` ORDER BY t.sort_order, t.code`, args...)
 	if err != nil {
 		return nil, err
 	}

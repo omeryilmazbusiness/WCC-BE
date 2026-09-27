@@ -30,11 +30,11 @@ func (p PageQuery) Normalize() PageQuery {
 
 // PageMeta is returned in API envelope meta for list endpoints.
 type PageMeta struct {
-	Total      int64 `json:"total"`
-	Limit      int   `json:"limit"`
-	Offset     int   `json:"offset"`
-	Page       int   `json:"page"`
-	TotalPages int   `json:"total_pages"`
+	Total      int64  `json:"total"`
+	Limit      int    `json:"limit"`
+	Offset     int    `json:"offset"`
+	Page       int    `json:"page"`
+	TotalPages int    `json:"total_pages"`
 	Sort       string `json:"sort,omitempty"`
 }
 

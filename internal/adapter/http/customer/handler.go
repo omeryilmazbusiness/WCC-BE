@@ -10,12 +10,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/customer"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/customer"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/customer"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
 
 type Handler struct {
@@ -76,7 +77,7 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
-		BranchID: claims.BranchID, FullName: req.FullName, FullNameAR: req.FullNameAR,
+		FullName: req.FullName, FullNameAR: req.FullNameAR,
 		Phone: req.Phone, Email: req.Email, Nationality: req.Nationality,
 		PassportNo: req.PassportNo, DateOfBirth: dob, Preferences: req.Preferences,
 		SpecialRequirements: req.SpecialRequirements, Notes: req.Notes, CreatedBy: claims.UserID,
@@ -93,7 +94,7 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 			meta["duplicate_of"] = res.Duplicates[0].Customer.ID
 		}
 	}
-	response.JSONMeta(w, http.StatusCreated, mapCustomer(res.Customer, false), meta)
+	response.JSONMeta(w, http.StatusCreated, mapCustomer(res.Customer, !canReadPII(r)), meta)
 }
 
 func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
@@ -128,7 +129,7 @@ func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapCustomer(c, false))
+	response.JSON(w, http.StatusOK, mapCustomer(c, !canReadPII(r)))
 }
 
 func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -142,18 +143,18 @@ func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapCustomer(c, false))
+	response.JSON(w, http.StatusOK, mapCustomer(c, !canReadPII(r)))
 }
 
 func (h Handler) Search(w http.ResponseWriter, r *http.Request) {
-	claims, _ := middleware.ClaimsFrom(r.Context())
 	page := request.Page(r)
-	f := domain.SearchFilter{
-		Query: request.FilterString(r, "q"), Limit: page.Limit, Offset: page.Offset,
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
+		return
 	}
-	if claims != nil {
-		bid := claims.BranchID
-		f.BranchID = middleware.ScopeBranch(claims, &bid)
+	f := domain.SearchFilter{
+		Query: request.FilterString(r, "q"), BranchID: branchID, Limit: page.Limit, Offset: page.Offset,
 	}
 	items, total, err := h.Svc.Search(r.Context(), f)
 	if err != nil {
@@ -172,16 +173,11 @@ func (h Handler) Search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) CheckDuplicates(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
-		return
-	}
 	name := request.FilterString(r, "full_name")
 	phone := request.FilterString(r, "phone")
 	email := request.FilterString(r, "email")
 	passport := request.FilterString(r, "passport_no")
-	dups, err := h.Svc.FindDuplicates(r.Context(), claims.BranchID, name, phone, email, passport)
+	dups, err := h.Svc.FindDuplicates(r.Context(), uuid.Nil, name, phone, email, passport)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -218,7 +214,7 @@ func (h Handler) Merge(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapCustomer(c, false))
+	response.JSON(w, http.StatusOK, mapCustomer(c, !canReadPII(r)))
 }
 
 func (h Handler) Timeline(w http.ResponseWriter, r *http.Request) {
@@ -246,6 +242,15 @@ func (h Handler) ListCompanions(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.Error(w, err)
 		return
+	}
+	if !canReadPII(r) {
+		for i := range items {
+			if c := items[i].Companion; c != nil {
+				masked := *c
+				masked.PassportNo = shared.MaskPassport(masked.PassportNo)
+				items[i].Companion = &masked
+			}
+		}
 	}
 	response.JSON(w, http.StatusOK, items)
 }
@@ -297,6 +302,12 @@ func (h Handler) UnlinkCompanion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// canReadPII reports whether full passport numbers may be returned (T-243).
+func canReadPII(r *http.Request) bool {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	return ok && platformauth.HasPermission(claims.Role, platformauth.PermPIIRead)
 }
 
 func mapCustomer(c *domain.Customer, maskPassport bool) map[string]any {

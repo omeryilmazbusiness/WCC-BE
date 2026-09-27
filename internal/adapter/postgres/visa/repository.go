@@ -10,6 +10,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/visa"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -22,9 +24,34 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+// caseScope: visa cases inherit visibility from their booking (branch, and
+// the booking owner for own/team scopes).
+var caseScope = pgscope.Columns{
+	Branch: "v.branch_id",
+	Owner:  "(SELECT b.owner_id FROM bookings b WHERE b.id=v.booking_id)",
+}
+
+const caseCols = `v.id, v.branch_id, v.booking_id, v.participant_id, v.customer_id, v.status, v.external_ref, v.notes,
+	v.submitted_at, v.decided_at, v.expires_at, v.created_by, v.created_at, v.updated_at`
+
+// Create pins the case to its booking's branch and requires the booking to
+// be visible to the caller.
 func (r *Repository) Create(ctx context.Context, v *domain.VisaCase) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
+	clause, args, err := pgscope.Clause(ctx, pgscope.Columns{Branch: "b.branch_id", Owner: "b.owner_id"}, []any{v.BookingID})
+	if err != nil {
+		return err
+	}
+	var branchID uuid.UUID
+	err = q.QueryRow(ctx, `SELECT b.branch_id FROM bookings b WHERE b.id=$1`+clause, args...).Scan(&branchID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return shared.NewNotFound("booking")
+	}
+	if err != nil {
+		return err
+	}
+	v.BranchID = branchID
+	_, err = q.Exec(ctx, `
 		INSERT INTO visa_cases (
 			id, branch_id, booking_id, participant_id, customer_id, status, external_ref, notes,
 			submitted_at, decided_at, expires_at, created_by, created_at, updated_at
@@ -37,14 +64,18 @@ func (r *Repository) Create(ctx context.Context, v *domain.VisaCase) error {
 
 func (r *Repository) Update(ctx context.Context, v *domain.VisaCase) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	ct, err := q.Exec(ctx, `
-		UPDATE visa_cases SET
-			participant_id=$2, customer_id=$3, status=$4, external_ref=$5, notes=$6,
-			submitted_at=$7, decided_at=$8, expires_at=$9, updated_at=$10
-		WHERE id=$1`,
+	clause, args, err := pgscope.Clause(ctx, caseScope, []any{
 		v.ID, v.ParticipantID, v.CustomerID, string(v.Status), v.ExternalRef, v.Notes,
 		v.SubmittedAt, v.DecidedAt, v.ExpiresAt, v.UpdatedAt,
-	)
+	})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `
+		UPDATE visa_cases v SET
+			participant_id=$2, customer_id=$3, status=$4, external_ref=$5, notes=$6,
+			submitted_at=$7, decided_at=$8, expires_at=$9, updated_at=$10
+		WHERE v.id=$1`+clause, args...)
 	if err != nil {
 		return err
 	}
@@ -75,18 +106,21 @@ func scanCase(row pgx.Row) (*domain.VisaCase, error) {
 
 func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.VisaCase, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	return scanCase(q.QueryRow(ctx, `
-		SELECT id, branch_id, booking_id, participant_id, customer_id, status, external_ref, notes,
-			submitted_at, decided_at, expires_at, created_by, created_at, updated_at
-		FROM visa_cases WHERE id=$1`, id))
+	clause, args, err := pgscope.Clause(ctx, caseScope, []any{id})
+	if err != nil {
+		return nil, err
+	}
+	return scanCase(q.QueryRow(ctx, `SELECT `+caseCols+` FROM visa_cases v WHERE v.id=$1`+clause, args...))
 }
 
 func (r *Repository) ListByBooking(ctx context.Context, bookingID uuid.UUID) ([]domain.VisaCase, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	rows, err := q.Query(ctx, `
-		SELECT id, branch_id, booking_id, participant_id, customer_id, status, external_ref, notes,
-			submitted_at, decided_at, expires_at, created_by, created_at, updated_at
-		FROM visa_cases WHERE booking_id=$1 ORDER BY created_at DESC`, bookingID)
+	clause, args, err := pgscope.Clause(ctx, caseScope, []any{bookingID})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Query(ctx, `SELECT `+caseCols+` FROM visa_cases v
+		WHERE v.booking_id=$1`+clause+` ORDER BY v.created_at DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -121,9 +155,16 @@ func (r *Repository) AppendEvent(ctx context.Context, e *domain.Event) error {
 
 func (r *Repository) ListEvents(ctx context.Context, visaCaseID uuid.UUID) ([]domain.Event, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, caseScope, []any{visaCaseID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
-		SELECT id, visa_case_id, from_status, to_status, actor_id, note, created_at
-		FROM visa_events WHERE visa_case_id=$1 ORDER BY created_at ASC`, visaCaseID)
+		SELECT e.id, e.visa_case_id, e.from_status, e.to_status, e.actor_id, e.note, e.created_at
+		FROM visa_events e
+		WHERE e.visa_case_id=$1
+		  AND EXISTS (SELECT 1 FROM visa_cases v WHERE v.id=e.visa_case_id`+clause+`)
+		ORDER BY e.created_at ASC`, args...)
 	if err != nil {
 		return nil, err
 	}

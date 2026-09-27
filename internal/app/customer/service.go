@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/customer"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -90,7 +91,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 	email := shared.NormalizeEmail(in.Email)
 	passport := shared.NormalizePassport(in.PassportNo)
 
-	dups, err := s.FindDuplicates(ctx, in.BranchID, name, phone, email, passport)
+	branchID, err := writeBranch(ctx, in.BranchID)
+	if err != nil {
+		return nil, err
+	}
+	dups, err := s.FindDuplicates(ctx, branchID, name, phone, email, passport)
 	if err != nil {
 		return nil, err
 	}
@@ -101,12 +106,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 	}
 	now := time.Now().UTC()
 	c := &domain.Customer{
-		ID: uuid.New(), BranchID: in.BranchID, FullName: name,
+		ID: uuid.New(), BranchID: branchID, FullName: name,
 		FullNameAR: strings.TrimSpace(in.FullNameAR), Phone: phone, Email: email,
 		Nationality: strings.TrimSpace(in.Nationality), PassportNo: passport,
 		DateOfBirth: in.DateOfBirth, Preferences: prefs,
 		SpecialRequirements: strings.TrimSpace(in.SpecialRequirements),
-		Notes: in.Notes, IsActive: true, CreatedBy: in.CreatedBy,
+		Notes:               in.Notes, IsActive: true, CreatedBy: in.CreatedBy,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
@@ -118,8 +123,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 }
 
 func (s *Service) Update(ctx context.Context, in UpdateInput) (*domain.Customer, error) {
-	c, err := s.repo.FindByID(ctx, in.ID)
-	if err != nil || c.MergedIntoID != nil {
+	c, err := s.find(ctx, in.ID, "customer")
+	if err != nil {
+		return nil, err
+	}
+	if c.MergedIntoID != nil {
 		return nil, shared.NewNotFound("customer")
 	}
 	before := snapshot(c)
@@ -181,14 +189,36 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*domain.Customer,
 }
 
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Customer, error) {
+	return s.find(ctx, id, "customer")
+}
+
+// find loads a customer visible to the caller; out-of-scope and missing ids
+// are indistinguishable.
+func (s *Service) find(ctx context.Context, id uuid.UUID, entity string) (*domain.Customer, error) {
 	c, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return nil, shared.NewNotFound("customer")
+	if err != nil || c == nil {
+		return nil, shared.NewNotFound(entity)
 	}
 	return c, nil
 }
 
+// writeBranch resolves the branch a customer write or dedupe check targets.
+func writeBranch(ctx context.Context, requested uuid.UUID) (uuid.UUID, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return scope.WriteBranch(requested)
+}
+
 func (s *Service) Search(ctx context.Context, f domain.SearchFilter) ([]domain.Customer, int, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	if f.BranchID, err = scope.ResolveBranch(f.BranchID); err != nil {
+		return nil, 0, err
+	}
 	if f.Limit <= 0 || f.Limit > 100 {
 		f.Limit = 20
 	}
@@ -202,7 +232,13 @@ func (s *Service) Search(ctx context.Context, f domain.SearchFilter) ([]domain.C
 	return items, total, nil
 }
 
+// FindDuplicates checks branchID (the caller's branch when zero) for likely
+// duplicates of the given identity.
 func (s *Service) FindDuplicates(ctx context.Context, branchID uuid.UUID, name, phone, email, passport string) ([]domain.DuplicateMatch, error) {
+	branchID, err := writeBranch(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
 	seen := map[uuid.UUID]*domain.DuplicateMatch{}
 	add := func(c *domain.Customer, reason string, score int) {
 		if c == nil {
@@ -263,12 +299,15 @@ func (s *Service) Merge(ctx context.Context, in MergeInput) (*domain.Customer, e
 	if in.SourceID == in.TargetID {
 		return nil, shared.NewValidation("source and target must differ")
 	}
-	source, err := s.repo.FindByID(ctx, in.SourceID)
+	source, err := s.find(ctx, in.SourceID, "source customer")
 	if err != nil {
-		return nil, shared.NewNotFound("source customer")
+		return nil, err
 	}
-	target, err := s.repo.FindByID(ctx, in.TargetID)
-	if err != nil || target.MergedIntoID != nil {
+	target, err := s.find(ctx, in.TargetID, "target customer")
+	if err != nil {
+		return nil, err
+	}
+	if target.MergedIntoID != nil {
 		return nil, shared.NewNotFound("target customer")
 	}
 	if source.BranchID != target.BranchID {
@@ -300,7 +339,7 @@ func (s *Service) Merge(ctx context.Context, in MergeInput) (*domain.Customer, e
 				EntityID: &id, BranchID: &branch,
 				Before: map[string]any{"source_id": in.SourceID},
 				After:  map[string]any{"target_id": in.TargetID},
-				IP: in.IP, UserAgent: in.UserAgent,
+				IP:     in.IP, UserAgent: in.UserAgent,
 			})
 		}
 		return nil
@@ -312,8 +351,8 @@ func (s *Service) Merge(ctx context.Context, in MergeInput) (*domain.Customer, e
 }
 
 func (s *Service) ListCompanions(ctx context.Context, customerID uuid.UUID) ([]domain.CompanionLink, error) {
-	if _, err := s.repo.FindByID(ctx, customerID); err != nil {
-		return nil, shared.NewNotFound("customer")
+	if _, err := s.find(ctx, customerID, "customer"); err != nil {
+		return nil, err
 	}
 	return s.repo.ListCompanions(ctx, customerID)
 }
@@ -322,11 +361,11 @@ func (s *Service) LinkCompanion(ctx context.Context, in LinkCompanionInput) (*do
 	if in.CustomerID == in.CompanionID {
 		return nil, shared.NewValidation("cannot link customer to self")
 	}
-	if _, err := s.repo.FindByID(ctx, in.CustomerID); err != nil {
-		return nil, shared.NewNotFound("customer")
+	if _, err := s.find(ctx, in.CustomerID, "customer"); err != nil {
+		return nil, err
 	}
-	if _, err := s.repo.FindByID(ctx, in.CompanionID); err != nil {
-		return nil, shared.NewNotFound("companion")
+	if _, err := s.find(ctx, in.CompanionID, "companion"); err != nil {
+		return nil, err
 	}
 	rel := strings.TrimSpace(in.Relation)
 	if rel == "" {
@@ -362,8 +401,8 @@ func (s *Service) UnlinkCompanion(ctx context.Context, customerID, companionID u
 }
 
 func (s *Service) Timeline(ctx context.Context, customerID uuid.UUID, limit int) ([]domain.TimelineItem, error) {
-	if _, err := s.repo.FindByID(ctx, customerID); err != nil {
-		return nil, shared.NewNotFound("customer")
+	if _, err := s.find(ctx, customerID, "customer"); err != nil {
+		return nil, err
 	}
 	return s.repo.ListTimeline(ctx, customerID, limit)
 }

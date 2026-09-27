@@ -9,9 +9,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/importexport"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/importexport"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/importexport"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -51,6 +52,11 @@ func (h Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		response.Error(w, shared.NewValidation("multipart form required"))
 		return
@@ -73,7 +79,7 @@ func (h Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		ct = "application/octet-stream"
 	}
 	job, err := h.Svc.Upload(r.Context(), appsvc.UploadInput{
-		BranchID: claims.BranchID, ActorID: claims.UserID,
+		BranchID: branchID, ActorID: claims.UserID,
 		EntityType: entity, Mode: mode,
 		FileName: hdr.Filename, ContentType: ct, FileBytes: data,
 	})
@@ -85,12 +91,17 @@ func (h Handler) Upload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	items, err := h.Svc.List(r.Context(), claims.BranchID, 50)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	items, err := h.Svc.List(r.Context(), branchID, 50)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -103,9 +114,14 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -113,7 +129,7 @@ func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	job, err := h.Svc.Get(r.Context(), id, claims.BranchID)
+	job, err := h.Svc.Get(r.Context(), id, branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -122,9 +138,14 @@ func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) SetMapping(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -141,7 +162,7 @@ func (h Handler) SetMapping(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	job, err := h.Svc.SetMapping(r.Context(), appsvc.MappingInput{
-		JobID: id, BranchID: claims.BranchID, Mapping: body.Mapping, Mode: domain.ImportMode(body.Mode),
+		JobID: id, BranchID: branchID, Mapping: body.Mapping, Mode: domain.ImportMode(body.Mode),
 	})
 	if err != nil {
 		response.Error(w, err)
@@ -151,9 +172,14 @@ func (h Handler) SetMapping(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Validate(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -161,7 +187,7 @@ func (h Handler) Validate(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	job, err := h.Svc.Validate(r.Context(), id, claims.BranchID)
+	job, err := h.Svc.Validate(r.Context(), id, branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -170,9 +196,14 @@ func (h Handler) Validate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Confirm(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -180,7 +211,7 @@ func (h Handler) Confirm(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	job, err := h.Svc.Confirm(r.Context(), id, claims.BranchID)
+	job, err := h.Svc.Confirm(r.Context(), id, branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -189,9 +220,14 @@ func (h Handler) Confirm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Errors(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -199,7 +235,7 @@ func (h Handler) Errors(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	csv, err := h.Svc.ErrorsCSV(r.Context(), id, claims.BranchID)
+	csv, err := h.Svc.ErrorsCSV(r.Context(), id, branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -211,13 +247,18 @@ func (h Handler) Errors(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) ListTemplates(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	entity := domain.EntityType(r.URL.Query().Get("entity_type"))
-	items, err := h.Svc.ListTemplates(r.Context(), claims.BranchID, entity)
+	items, err := h.Svc.ListTemplates(r.Context(), branchID, entity)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -235,6 +276,11 @@ func (h Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	var body struct {
 		Name       string            `json:"name"`
 		EntityType string            `json:"entity_type"`
@@ -245,7 +291,7 @@ func (h Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := h.Svc.CreateTemplate(r.Context(), appsvc.TemplateInput{
-		BranchID: claims.BranchID, ActorID: claims.UserID,
+		BranchID: branchID, ActorID: claims.UserID,
 		Name: body.Name, EntityType: domain.EntityType(body.EntityType), Mapping: body.Mapping,
 	})
 	if err != nil {
@@ -256,9 +302,14 @@ func (h Handler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -266,7 +317,7 @@ func (h Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	if err := h.Svc.DeleteTemplate(r.Context(), id, claims.BranchID); err != nil {
+	if err := h.Svc.DeleteTemplate(r.Context(), id, branchID); err != nil {
 		response.Error(w, err)
 		return
 	}
@@ -274,9 +325,14 @@ func (h Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Export(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	var body struct {
@@ -292,7 +348,7 @@ func (h Handler) Export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	csv, filename, err := h.Svc.ExportCSV(r.Context(), appsvc.ExportInput{
-		BranchID: claims.BranchID, EntityType: domain.EntityType(body.EntityType),
+		BranchID: branchID, EntityType: domain.EntityType(body.EntityType),
 	})
 	if err != nil {
 		response.Error(w, err)

@@ -40,12 +40,12 @@ type CompanionLink struct {
 }
 
 type TimelineItem struct {
-	Kind      string          `json:"kind"` // lead|booking|payment|document|task|note|activity
-	ID        uuid.UUID       `json:"id"`
-	Title     string          `json:"title"`
-	Status    string          `json:"status,omitempty"`
-	OccurredAt time.Time      `json:"occurred_at"`
-	Meta      json.RawMessage `json:"meta,omitempty"`
+	Kind       string          `json:"kind"` // lead|booking|payment|document|task|note|activity
+	ID         uuid.UUID       `json:"id"`
+	Title      string          `json:"title"`
+	Status     string          `json:"status,omitempty"`
+	OccurredAt time.Time       `json:"occurred_at"`
+	Meta       json.RawMessage `json:"meta,omitempty"`
 }
 
 type SearchFilter struct {

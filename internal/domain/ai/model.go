@@ -17,10 +17,10 @@ import (
 type Provider string
 
 const (
-	ProviderNone       Provider = ""
-	ProviderOpenAI     Provider = "openai"
-	ProviderAnthropic  Provider = "anthropic"
-	ProviderGemini     Provider = "gemini"
+	ProviderNone      Provider = ""
+	ProviderOpenAI    Provider = "openai"
+	ProviderAnthropic Provider = "anthropic"
+	ProviderGemini    Provider = "gemini"
 )
 
 func ValidProvider(p Provider) bool {
@@ -49,25 +49,25 @@ func DefaultModel(p Provider) string {
 type Kind string
 
 const (
-	KindDailySummary      Kind = "manager.daily_summary"
-	KindConversationSum   Kind = "conversation.summary"
-	KindReplyDraft        Kind = "conversation.reply_draft"
-	KindLeadExplain       Kind = "lead.priority_explain"
-	KindTargetInsight     Kind = "target.recovery_insight"
-	KindOCRExtract        Kind = "document.ocr_extract"
+	KindDailySummary    Kind = "manager.daily_summary"
+	KindConversationSum Kind = "conversation.summary"
+	KindReplyDraft      Kind = "conversation.reply_draft"
+	KindLeadExplain     Kind = "lead.priority_explain"
+	KindTargetInsight   Kind = "target.recovery_insight"
+	KindOCRExtract      Kind = "document.ocr_extract"
 )
 
 // Settings is per-branch BYO AI configuration (secrets in ConfigJSON).
 type Settings struct {
-	BranchID          uuid.UUID
-	Provider          Provider
-	Model             string
-	Enabled           bool
-	ConfigJSON        json.RawMessage // api_key etc — never expose raw
-	SetupCompletedAt  *time.Time
-	UpdatedBy         *uuid.UUID
-	UpdatedAt         time.Time
-	CreatedAt         time.Time
+	BranchID         uuid.UUID
+	Provider         Provider
+	Model            string
+	Enabled          bool
+	ConfigJSON       json.RawMessage // api_key etc — never expose raw
+	SetupCompletedAt *time.Time
+	UpdatedBy        *uuid.UUID
+	UpdatedAt        time.Time
+	CreatedAt        time.Time
 	// Public view (no secrets)
 	PublicMeta map[string]any
 }
@@ -121,13 +121,13 @@ func HashInput(parts ...string) string {
 
 // CompletionRequest is provider-agnostic prompt payload.
 type CompletionRequest struct {
-	Model      string
-	System     string
-	User       string
-	MaxTokens  int
-	JSONMode   bool
-	ImageB64   string // optional OCR
-	ImageMIME  string
+	Model     string
+	System    string
+	User      string
+	MaxTokens int
+	JSONMode  bool
+	ImageB64  string // optional OCR
+	ImageMIME string
 }
 
 // CompletionResponse is normalized LLM output.

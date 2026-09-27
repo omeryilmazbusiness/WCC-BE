@@ -155,8 +155,8 @@ func (a *Anthropic) Complete(ctx context.Context, apiKey string, req domain.Comp
 		return nil, err
 	}
 	var parsed struct {
-		Model    string `json:"model"`
-		Content  []struct {
+		Model   string `json:"model"`
+		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`

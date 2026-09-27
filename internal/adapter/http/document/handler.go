@@ -8,9 +8,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/document"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/document"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
@@ -38,6 +39,11 @@ func (h Handler) PresignUpload(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	var req presignRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.Error(w, shared.NewValidation("invalid json"))
@@ -53,7 +59,7 @@ func (h Handler) PresignUpload(w http.ResponseWriter, r *http.Request) {
 		expires = &t
 	}
 	res, err := h.Svc.PresignUpload(r.Context(), appsvc.PresignUploadInput{
-		BranchID: claims.BranchID, RelatedType: req.RelatedType, RelatedID: req.RelatedID,
+		BranchID: branchID, RelatedType: req.RelatedType, RelatedID: req.RelatedID,
 		Kind: req.Kind, FileName: req.FileName, ContentType: req.ContentType,
 		UploadedBy: claims.UserID, ParticipantID: req.ParticipantID, ExpiresAt: expires,
 	})
@@ -247,12 +253,17 @@ func (h Handler) Replace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	items, err := h.Svc.ListPolicies(r.Context(), claims.BranchID)
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	items, err := h.Svc.ListPolicies(r.Context(), branchID)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -261,9 +272,14 @@ func (h Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) UpsertPolicy(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	var body appsvc.UpsertPolicyInput
@@ -271,7 +287,7 @@ func (h Handler) UpsertPolicy(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	body.BranchID = claims.BranchID
+	body.BranchID = branchID
 	p, err := h.Svc.UpsertPolicy(r.Context(), body)
 	if err != nil {
 		response.Error(w, err)

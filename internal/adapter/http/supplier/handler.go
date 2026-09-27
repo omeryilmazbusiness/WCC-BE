@@ -9,11 +9,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/supplier"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
-	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/supplier"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/supplier"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/supplier"
 )
 
 type Handler struct {
@@ -47,9 +48,14 @@ func mapLink(l *domain.Link) map[string]any {
 }
 
 func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	var body appsvc.CreateInput
@@ -57,7 +63,7 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	body.BranchID = claims.BranchID
+	body.BranchID = branchID
 	s, err := h.Svc.Create(r.Context(), body)
 	if err != nil {
 		response.Error(w, err)
@@ -67,13 +73,18 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	activeOnly := r.URL.Query().Get("active") == "1" || r.URL.Query().Get("active") == "true"
-	items, err := h.Svc.List(r.Context(), claims.BranchID, activeOnly)
+	items, err := h.Svc.List(r.Context(), branchID, activeOnly)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -199,13 +210,18 @@ func (h Handler) ConfirmLink(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) ListUnconfirmed(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	items, err := h.Svc.ListUnconfirmed(r.Context(), claims.BranchID, limit)
+	items, err := h.Svc.ListUnconfirmed(r.Context(), branchID, limit)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -218,13 +234,18 @@ func (h Handler) ListUnconfirmed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) ListOversold(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	items, err := h.Svc.ListOversold(r.Context(), claims.BranchID, limit)
+	items, err := h.Svc.ListOversold(r.Context(), branchID, limit)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -237,12 +258,17 @@ func (h Handler) ListOversold(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) ProcessUnconfirmedReminders(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	n, err := h.Svc.ProcessUnconfirmedReminders(r.Context(), claims.BranchID, 100)
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	n, err := h.Svc.ProcessUnconfirmedReminders(r.Context(), branchID, 100)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -255,7 +281,7 @@ func mapInvoice(inv *domain.Invoice) map[string]any {
 		"id": inv.ID, "branch_id": inv.BranchID, "supplier_id": inv.SupplierID,
 		"invoice_number": inv.InvoiceNumber, "status": inv.Status, "currency": inv.Currency,
 		"subtotal": inv.Subtotal, "tax_total": inv.TaxTotal, "grand_total": inv.GrandTotal,
-		"notes": inv.Notes,
+		"notes":      inv.Notes,
 		"created_at": inv.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at": inv.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
@@ -292,9 +318,14 @@ func mapInvoice(inv *domain.Invoice) map[string]any {
 }
 
 func (h Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	var supplierID *uuid.UUID
@@ -316,7 +347,7 @@ func (h Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 		status = &st
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	items, err := h.Svc.ListInvoices(r.Context(), claims.BranchID, supplierID, status, limit)
+	items, err := h.Svc.ListInvoices(r.Context(), branchID, supplierID, status, limit)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -329,9 +360,14 @@ func (h Handler) ListInvoices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) ListSupplierInvoices(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	sid, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -340,7 +376,7 @@ func (h Handler) ListSupplierInvoices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	items, err := h.Svc.ListInvoices(r.Context(), claims.BranchID, &sid, nil, limit)
+	items, err := h.Svc.ListInvoices(r.Context(), branchID, &sid, nil, limit)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -363,7 +399,6 @@ func (h Handler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	body.BranchID = claims.BranchID
 	body.ActorID = claims.UserID
 	inv, err := h.Svc.CreateInvoice(r.Context(), body)
 	if err != nil {
@@ -374,7 +409,7 @@ func (h Handler) CreateInvoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) GetInvoice(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
@@ -384,7 +419,7 @@ func (h Handler) GetInvoice(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	inv, err := h.Svc.GetInvoice(r.Context(), claims.BranchID, id)
+	inv, err := h.Svc.GetInvoice(r.Context(), id)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -393,7 +428,7 @@ func (h Handler) GetInvoice(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) UpdateInvoiceStatus(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
@@ -410,7 +445,7 @@ func (h Handler) UpdateInvoiceStatus(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	inv, err := h.Svc.UpdateInvoiceStatus(r.Context(), claims.BranchID, id, domain.InvoiceStatus(body.Status))
+	inv, err := h.Svc.UpdateInvoiceStatus(r.Context(), id, domain.InvoiceStatus(body.Status))
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -419,7 +454,7 @@ func (h Handler) UpdateInvoiceStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) SetInvoiceLines(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
@@ -434,7 +469,7 @@ func (h Handler) SetInvoiceLines(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	inv, err := h.Svc.SetInvoiceLines(r.Context(), claims.BranchID, id, body)
+	inv, err := h.Svc.SetInvoiceLines(r.Context(), id, body)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -452,7 +487,7 @@ func mapIssue(e *domain.IssueEvent) map[string]any {
 }
 
 func (h Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
@@ -463,7 +498,7 @@ func (h Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	items, err := h.Svc.ListIssues(r.Context(), claims.BranchID, id, limit)
+	items, err := h.Svc.ListIssues(r.Context(), id, limit)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -491,7 +526,6 @@ func (h Handler) AddIssue(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	body.BranchID = claims.BranchID
 	body.ActorID = claims.UserID
 	body.SupplierID = id
 	e, err := h.Svc.AddIssue(r.Context(), body)

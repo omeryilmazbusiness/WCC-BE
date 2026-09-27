@@ -19,6 +19,8 @@ type User struct {
 	TeamID       *uuid.UUID
 	IsActive     bool
 	MFAEnabled   bool
+	// TokenVersion is maintained by the database; access tokens carry it as ver.
+	TokenVersion int
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }

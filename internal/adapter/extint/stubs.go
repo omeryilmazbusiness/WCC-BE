@@ -83,9 +83,9 @@ func NewStub(kind domain.Kind, providerKey, displayName string) *Stub {
 	return &Stub{kind: kind, providerKey: providerKey, displayName: displayName}
 }
 
-func (s *Stub) Kind() domain.Kind        { return s.kind }
-func (s *Stub) ProviderKey() string      { return s.providerKey }
-func (s *Stub) DisplayName() string      { return s.displayName }
+func (s *Stub) Kind() domain.Kind   { return s.kind }
+func (s *Stub) ProviderKey() string { return s.providerKey }
+func (s *Stub) DisplayName() string { return s.displayName }
 
 func (s *Stub) Probe(ctx context.Context, cfg json.RawMessage) (domain.Health, string, error) {
 	_ = ctx

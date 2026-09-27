@@ -18,12 +18,12 @@ const (
 )
 
 type Hit struct {
-	Kind      Kind      `json:"kind"`
-	ID        uuid.UUID `json:"id"`
-	Title     string    `json:"title"`
-	Subtitle  string    `json:"subtitle"`
-	HrefHint  string    `json:"href_hint"`
-	Score     int       `json:"score"`
+	Kind     Kind      `json:"kind"`
+	ID       uuid.UUID `json:"id"`
+	Title    string    `json:"title"`
+	Subtitle string    `json:"subtitle"`
+	HrefHint string    `json:"href_hint"`
+	Score    int       `json:"score"`
 }
 
 // NormalizeQuery trims and lowercases; returns empty if too short.
@@ -37,5 +37,5 @@ func NormalizeQuery(q string) string {
 
 // Searcher is the cross-entity search port (DIP).
 type Searcher interface {
-	Search(ctx context.Context, branchID uuid.UUID, q string, limit int) ([]Hit, error)
+	Search(ctx context.Context, branchID *uuid.UUID, q string, limit int) ([]Hit, error)
 }

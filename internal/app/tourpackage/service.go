@@ -71,12 +71,12 @@ type CloneDepartureInput struct {
 }
 
 type TierInput struct {
-	Code      string
-	Label     string
-	Kind      string
-	Amount    int64
-	Currency  string
-	IsActive  bool
+	Code     string
+	Label    string
+	Kind     string
+	Amount   int64
+	Currency string
+	IsActive bool
 }
 
 // BookingReader is DIP port for readiness / capacity sync (T-050, T-057).

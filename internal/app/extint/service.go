@@ -26,10 +26,10 @@ type EnableInput struct {
 }
 
 type PatchInput struct {
-	DisplayName *string          `json:"display_name"`
-	Status      *domain.Status   `json:"status"`
-	ConfigJSON  json.RawMessage  `json:"config_json"`
-	Disabled    *bool            `json:"disabled"`
+	DisplayName *string         `json:"display_name"`
+	Status      *domain.Status  `json:"status"`
+	ConfigJSON  json.RawMessage `json:"config_json"`
+	Disabled    *bool           `json:"disabled"`
 }
 
 type Service struct {

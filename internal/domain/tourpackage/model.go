@@ -25,18 +25,18 @@ type Package struct {
 
 // PricingTier is room/occupancy/age pricing (T-049).
 type PricingTier struct {
-	ID         uuid.UUID
-	PackageID  uuid.UUID // set for template tiers
+	ID          uuid.UUID
+	PackageID   uuid.UUID // set for template tiers
 	DepartureID *uuid.UUID
-	Code       string
-	Label      string
-	Kind       string // room | occupancy | age
-	Amount     int64
-	Currency   string
-	SortOrder  int
-	IsActive   bool
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	Code        string
+	Label       string
+	Kind        string // room | occupancy | age
+	Amount      int64
+	Currency    string
+	SortOrder   int
+	IsActive    bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 const (
@@ -51,21 +51,21 @@ func ValidTierKind(k string) bool {
 
 // Departure is a dated instance with capacity.
 type Departure struct {
-	ID                uuid.UUID
-	PackageID         uuid.UUID
-	Code              string
-	DepartDate        time.Time
-	ReturnDate        time.Time
-	CapacityTotal     int
-	CapacitySold      int
-	BasePrice         int64
-	Currency          string
-	IsActive          bool
-	SalesClosed       bool
-	SoftThresholdPct  int
-	AllowOversell     bool
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID               uuid.UUID
+	PackageID        uuid.UUID
+	Code             string
+	DepartDate       time.Time
+	ReturnDate       time.Time
+	CapacityTotal    int
+	CapacitySold     int
+	BasePrice        int64
+	Currency         string
+	IsActive         bool
+	SalesClosed      bool
+	SoftThresholdPct int
+	AllowOversell    bool
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 func (d *Departure) Remaining() int {

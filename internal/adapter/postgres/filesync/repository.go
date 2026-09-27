@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/filesync"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -21,15 +22,21 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+var branchScope = pgscope.Columns{Branch: "branch_id"}
+
 func (r *Repository) ListConnections(ctx context.Context, branchID uuid.UUID) ([]domain.Connection, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT id, branch_id, provider, display_name, remote_path, entity_type,
 			source_of_truth, conflict_policy, enabled, status, last_sync_at, last_error,
 			config_json, created_by, created_at, updated_at
 		FROM file_sync_connections
-		WHERE branch_id=$1
-		ORDER BY created_at DESC`, branchID)
+		WHERE branch_id=$1`+clause+`
+		ORDER BY created_at DESC`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -39,12 +46,16 @@ func (r *Repository) ListConnections(ctx context.Context, branchID uuid.UUID) ([
 
 func (r *Repository) GetConnection(ctx context.Context, branchID, id uuid.UUID) (*domain.Connection, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID, id})
+	if err != nil {
+		return nil, err
+	}
 	row := q.QueryRow(ctx, `
 		SELECT id, branch_id, provider, display_name, remote_path, entity_type,
 			source_of_truth, conflict_policy, enabled, status, last_sync_at, last_error,
 			config_json, created_by, created_at, updated_at
 		FROM file_sync_connections
-		WHERE branch_id=$1 AND id=$2`, branchID, id)
+		WHERE branch_id=$1 AND id=$2`+clause, args...)
 	c, err := scanConnection(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
@@ -53,6 +64,9 @@ func (r *Repository) GetConnection(ctx context.Context, branchID, id uuid.UUID) 
 }
 
 func (r *Repository) InsertConnection(ctx context.Context, c *domain.Connection) error {
+	if err := pgscope.EnsureBranch(ctx, c.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	cfg := c.ConfigJSON
 	if len(cfg) == 0 {
@@ -77,16 +91,20 @@ func (r *Repository) UpdateConnection(ctx context.Context, c *domain.Connection)
 	if len(cfg) == 0 {
 		cfg = []byte(`{}`)
 	}
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{
+		c.BranchID, c.ID, c.DisplayName, c.RemotePath, c.EntityType, string(c.SourceOfTruth),
+		string(c.ConflictPolicy), c.Enabled, string(c.Status), c.LastSyncAt, c.LastError,
+		cfg, c.UpdatedAt,
+	})
+	if err != nil {
+		return err
+	}
 	ct, err := q.Exec(ctx, `
 		UPDATE file_sync_connections SET
 			display_name=$3, remote_path=$4, entity_type=$5, source_of_truth=$6,
 			conflict_policy=$7, enabled=$8, status=$9, last_sync_at=$10, last_error=$11,
 			config_json=$12, updated_at=$13
-		WHERE branch_id=$1 AND id=$2`,
-		c.BranchID, c.ID, c.DisplayName, c.RemotePath, c.EntityType, string(c.SourceOfTruth),
-		string(c.ConflictPolicy), c.Enabled, string(c.Status), c.LastSyncAt, c.LastError,
-		cfg, c.UpdatedAt,
-	)
+		WHERE branch_id=$1 AND id=$2`+clause, args...)
 	if err != nil {
 		return err
 	}
@@ -98,7 +116,11 @@ func (r *Repository) UpdateConnection(ctx context.Context, c *domain.Connection)
 
 func (r *Repository) DeleteConnection(ctx context.Context, branchID, id uuid.UUID) error {
 	q := tx.QuerierFrom(ctx, r.pool)
-	ct, err := q.Exec(ctx, `DELETE FROM file_sync_connections WHERE branch_id=$1 AND id=$2`, branchID, id)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID, id})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `DELETE FROM file_sync_connections WHERE branch_id=$1 AND id=$2`+clause, args...)
 	if err != nil {
 		return err
 	}
@@ -109,6 +131,9 @@ func (r *Repository) DeleteConnection(ctx context.Context, branchID, id uuid.UUI
 }
 
 func (r *Repository) InsertRun(ctx context.Context, run *domain.Run) error {
+	if err := pgscope.EnsureBranch(ctx, run.BranchID); err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	sum := run.SummaryJSON
 	if len(sum) == 0 {
@@ -133,14 +158,18 @@ func (r *Repository) UpdateRun(ctx context.Context, run *domain.Run) error {
 	if len(sum) == 0 {
 		sum = []byte(`{}`)
 	}
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{
+		run.ID, string(run.Status), run.RowsRead, run.RowsApplied, run.Conflicts,
+		sum, run.ErrorMessage, run.FinishedAt,
+	})
+	if err != nil {
+		return err
+	}
 	ct, err := q.Exec(ctx, `
 		UPDATE file_sync_runs SET
 			status=$2, rows_read=$3, rows_applied=$4, conflicts=$5,
 			summary_json=$6, error_message=$7, finished_at=$8
-		WHERE id=$1`,
-		run.ID, string(run.Status), run.RowsRead, run.RowsApplied, run.Conflicts,
-		sum, run.ErrorMessage, run.FinishedAt,
-	)
+		WHERE id=$1`+clause, args...)
 	if err != nil {
 		return err
 	}
@@ -155,14 +184,18 @@ func (r *Repository) ListRuns(ctx context.Context, branchID uuid.UUID, connectio
 		limit = 50
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, branchScope, []any{branchID, connectionID, limit})
+	if err != nil {
+		return nil, err
+	}
 	rows, err := q.Query(ctx, `
 		SELECT id, connection_id, branch_id, actor_id, direction, status,
 			rows_read, rows_applied, conflicts, summary_json, error_message,
 			started_at, finished_at
 		FROM file_sync_runs
-		WHERE branch_id=$1 AND ($2::uuid IS NULL OR connection_id=$2)
+		WHERE branch_id=$1 AND ($2::uuid IS NULL OR connection_id=$2)`+clause+`
 		ORDER BY started_at DESC
-		LIMIT $3`, branchID, connectionID, limit)
+		LIMIT $3`, args...)
 	if err != nil {
 		return nil, err
 	}

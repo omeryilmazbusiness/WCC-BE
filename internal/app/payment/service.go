@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
@@ -89,9 +90,9 @@ func NewService(
 	}
 }
 
-func (s *Service) SetAuditor(a audit.Recorder)                 { s.audit = a }
-func (s *Service) SetFX(p domain.ReportingCurrencyPolicy)      { s.fx = p }
-func (s *Service) SetTaskCreator(t PaymentDueTaskCreator)      { s.tasks = t }
+func (s *Service) SetAuditor(a audit.Recorder)            { s.audit = a }
+func (s *Service) SetFX(p domain.ReportingCurrencyPolicy) { s.fx = p }
+func (s *Service) SetTaskCreator(t PaymentDueTaskCreator) { s.tasks = t }
 
 func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, error) {
 	if in.Amount <= 0 {
@@ -472,7 +473,17 @@ func (s *Service) CancelSchedule(ctx context.Context, id, actorID uuid.UUID) (*d
 	return sc, nil
 }
 
-func (s *Service) FinanceQueue(ctx context.Context, branchID uuid.UUID, kind domain.QueueKind, limit int) ([]domain.QueueItem, error) {
+// FinanceQueue lists queue items visible to the caller; requested nil means
+// all branches for global callers and the caller's branch otherwise.
+func (s *Service) FinanceQueue(ctx context.Context, requested *uuid.UUID, kind domain.QueueKind, limit int) ([]domain.QueueItem, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branchID, err := scope.ResolveBranch(requested)
+	if err != nil {
+		return nil, err
+	}
 	if limit <= 0 {
 		limit = 50
 	}
@@ -519,8 +530,8 @@ func (s *Service) FinanceQueue(ctx context.Context, branchID uuid.UUID, kind dom
 	}
 }
 
-func (s *Service) ExportQueueCSV(ctx context.Context, branchID uuid.UUID, kind domain.QueueKind) (string, error) {
-	items, err := s.FinanceQueue(ctx, branchID, kind, 500)
+func (s *Service) ExportQueueCSV(ctx context.Context, requested *uuid.UUID, kind domain.QueueKind) (string, error) {
+	items, err := s.FinanceQueue(ctx, requested, kind, 500)
 	if err != nil {
 		return "", err
 	}
@@ -563,10 +574,19 @@ func (s *Service) ProcessPaymentDueReminders(ctx context.Context, within time.Du
 	return n, nil
 }
 
+// SetReportingCurrency updates branchID's setting (the caller's branch when
+// zero); only global callers may target another branch.
 func (s *Service) SetReportingCurrency(ctx context.Context, branchID uuid.UUID, currency string, actorID uuid.UUID) error {
 	currency = strings.ToUpper(strings.TrimSpace(currency))
 	if len(currency) != 3 {
 		return shared.NewValidation("currency must be ISO-4217 (3 letters)")
+	}
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return err
+	}
+	if branchID, err = scope.WriteBranch(branchID); err != nil {
+		return err
 	}
 	if err := s.payments.UpsertFinanceSettings(ctx, branchID, currency); err != nil {
 		return err

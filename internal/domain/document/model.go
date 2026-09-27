@@ -262,11 +262,11 @@ type ChecklistItem struct {
 }
 
 type Checklist struct {
-	BookingID         uuid.UUID       `json:"booking_id"`
-	PolicyID          *uuid.UUID      `json:"policy_id,omitempty"`
-	PolicyName        string          `json:"policy_name,omitempty"`
-	Items             []ChecklistItem `json:"items"`
-	MissingRequired   []string        `json:"missing_required"`
+	BookingID       uuid.UUID       `json:"booking_id"`
+	PolicyID        *uuid.UUID      `json:"policy_id,omitempty"`
+	PolicyName      string          `json:"policy_name,omitempty"`
+	Items           []ChecklistItem `json:"items"`
+	MissingRequired []string        `json:"missing_required"`
 }
 
 type MissingDocsRow struct {

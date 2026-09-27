@@ -8,57 +8,57 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 
-	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
+	adminconfighttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/adminconfig"
+	aihttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ai"
 	audithttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/audithttp"
+	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
+	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
+	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
-	inboxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/inbox"
 	importhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/importexport"
+	inboxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/inbox"
 	leadhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/lead"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
+	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
+	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
+	searchhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/search"
 	supplierhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/supplier"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
 	visahttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/visa"
-	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
-	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
-	aihttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ai"
-	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
-	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
-	adminconfighttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/adminconfig"
-	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
-	searchhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/search"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
 
 // Handlers aggregates all HTTP handlers for wiring.
 type Handlers struct {
-	Health    health.Handler
-	Auth      authhttp.Handler
-	Users     usershttp.Handler
-	Audit     audithttp.Handler
-	Customer  customerhttp.Handler
-	Lead      leadhttp.Handler
-	Booking   bookinghttp.Handler
-	Payment   paymenthttp.Handler
-	Target    targethttp.Handler
-	Task      taskhttp.Handler
-	Dashboard dashboardhttp.Handler
-	Document  documenthttp.Handler
-	Visa      visahttp.Handler
-	Supplier  supplierhttp.Handler
-	Package   pkghttp.Handler
-	Ops       opshttp.Handler
-	Inbox     inboxhttp.Handler
+	Health       health.Handler
+	Auth         authhttp.Handler
+	Users        usershttp.Handler
+	Audit        audithttp.Handler
+	Customer     customerhttp.Handler
+	Lead         leadhttp.Handler
+	Booking      bookinghttp.Handler
+	Payment      paymenthttp.Handler
+	Target       targethttp.Handler
+	Task         taskhttp.Handler
+	Dashboard    dashboardhttp.Handler
+	Document     documenthttp.Handler
+	Visa         visahttp.Handler
+	Supplier     supplierhttp.Handler
+	Package      pkghttp.Handler
+	Ops          opshttp.Handler
+	Inbox        inboxhttp.Handler
 	Import       importhttp.Handler
 	Notification notificationhttp.Handler
 	Report       reporthttp.Handler
@@ -71,11 +71,21 @@ type Handlers struct {
 	Search       searchhttp.Handler
 }
 
-func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers) http.Handler {
+// NewRouter wires every route. Authenticated routes verify the access token
+// with tokens and its session with sessions.
+func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions middleware.SessionValidator, h Handlers) http.Handler {
 	r := chi.NewRouter()
+	authenticate := middleware.Authenticate(tokens, sessions)
+
+	trusted, err := middleware.ParseCIDRs(cfg.HTTP.TrustedProxies)
+	if err != nil {
+		panic("invalid TRUSTED_PROXIES: " + err.Error())
+	}
 
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
+	r.Use(middleware.TrustedRealIP(trusted))
+	r.Use(middleware.SecurityHeaders(!cfg.IsLocal()))
+	r.Use(middleware.MaxBody(cfg.HTTP.MaxBodyBytes))
 	r.Use(chimw.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(cfg.HTTP.WriteTimeout))
@@ -96,15 +106,27 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 			r.Post("/login", h.Auth.Login)
 			r.Post("/refresh", h.Auth.Refresh)
 			r.Post("/mfa/verify", h.Auth.VerifyMFA)
+			r.Post("/mfa/setup", h.Auth.MFASetup)
+			r.Post("/mfa/setup/confirm", h.Auth.MFASetupConfirm)
+			// The refresh token alone proves the session, so logout still works
+			// after the access token has expired.
+			r.With(middleware.IdentifyBearer(tokens)).Post("/logout", h.Auth.Logout)
 			r.Group(func(r chi.Router) {
-				r.Use(middleware.Authenticate(tokens))
+				r.Use(authenticate)
 				r.Get("/me", h.Auth.Me)
-				r.Post("/logout", h.Auth.Logout)
+				r.Post("/mfa/enroll", h.Auth.MFAEnroll)
+				r.Post("/mfa/confirm", h.Auth.MFAConfirm)
+				r.Post("/mfa/disable", h.Auth.MFADisable)
+				r.Post("/mfa/recovery-codes", h.Auth.MFARecoveryCodes)
+				// Self-service: callers manage only their own sessions.
+				r.Get("/sessions", h.Auth.ListSessions)
+				r.Post("/sessions/revoke-others", h.Auth.RevokeOtherSessions)
+				r.Delete("/sessions/{id}", h.Auth.RevokeSession)
 			})
 		})
 
 		r.Group(func(r chi.Router) {
-			r.Use(middleware.Authenticate(tokens))
+			r.Use(authenticate)
 
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Users.ListBranches)
 			r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Patch("/branches/{id}", h.Users.UpdateBranch)
@@ -116,21 +138,25 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/", h.Users.Create)
 				r.With(middleware.RequirePermission(platformauth.PermUsersRead)).Get("/{id}", h.Users.Get)
 				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Patch("/{id}", h.Users.Update)
+				r.With(middleware.RequirePermission(platformauth.PermUsersUnlock)).Post("/{id}/unlock", h.Auth.UnlockUser)
+				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/{id}/sessions/revoke", h.Auth.AdminRevokeUserSessions)
 			})
 
 			r.With(middleware.RequirePermission(platformauth.PermAuditRead)).Get("/audit-events", h.Audit.List)
 
 			r.Route("/customers", func(r chi.Router) {
-				r.Get("/", h.Customer.Search)
-				r.Post("/", h.Customer.Create)
-				r.Get("/duplicates", h.Customer.CheckDuplicates)
-				r.Get("/{id}", h.Customer.Get)
-				r.Patch("/{id}", h.Customer.Update)
-				r.Post("/{id}/merge", h.Customer.Merge)
-				r.Get("/{id}/timeline", h.Customer.Timeline)
-				r.Get("/{id}/companions", h.Customer.ListCompanions)
-				r.Post("/{id}/companions", h.Customer.LinkCompanion)
-				r.Delete("/{id}/companions/{companionId}", h.Customer.UnlinkCompanion)
+				read := middleware.RequirePermission(platformauth.PermCustomersRead)
+				write := middleware.RequirePermission(platformauth.PermCustomersWrite)
+				r.With(read).Get("/", h.Customer.Search)
+				r.With(write).Post("/", h.Customer.Create)
+				r.With(read).Get("/duplicates", h.Customer.CheckDuplicates)
+				r.With(read).Get("/{id}", h.Customer.Get)
+				r.With(write).Patch("/{id}", h.Customer.Update)
+				r.With(write).Post("/{id}/merge", h.Customer.Merge)
+				r.With(read).Get("/{id}/timeline", h.Customer.Timeline)
+				r.With(read).Get("/{id}/companions", h.Customer.ListCompanions)
+				r.With(write).Post("/{id}/companions", h.Customer.LinkCompanion)
+				r.With(write).Delete("/{id}/companions/{companionId}", h.Customer.UnlinkCompanion)
 			})
 
 			r.Route("/leads", func(r chi.Router) {
@@ -224,11 +250,13 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 				Get("/dashboard/attention", h.Dashboard.Attention)
 			r.With(middleware.RequirePermission(platformauth.PermTasksRead)).
 				Get("/dashboard/my-work", h.Dashboard.MyWork)
-			r.Get("/dashboard/my-target", h.Dashboard.MyTarget)
+			r.With(middleware.RequirePermission(platformauth.PermTargetsRead)).
+				Get("/dashboard/my-target", h.Dashboard.MyTarget)
 
 			r.Route("/ops", func(r chi.Router) {
 				r.With(middleware.RequirePermission(platformauth.PermOpsRead)).Get("/queue", h.Ops.QueueStats)
 				r.With(middleware.RequirePermission(platformauth.PermOpsRead)).Get("/jobs/{id}", h.Ops.JobStatus)
+				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/security-cleanup", h.Ops.SecurityCleanup)
 			})
 
 			r.Route("/documents", func(r chi.Router) {
@@ -430,7 +458,8 @@ func NewRouter(cfg config.Config, tokens *platformauth.TokenService, h Handlers)
 			})
 		})
 
-		// Provider webhooks — signature verification added when live credentials land.
+		// Provider webhooks: signature-verified, branch resolved from the integration account.
+		r.Get("/webhooks/{provider}", h.Webhook.Verify)
 		r.Post("/webhooks/{provider}", h.Webhook.Ingest)
 	})
 

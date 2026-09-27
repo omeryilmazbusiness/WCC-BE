@@ -62,18 +62,18 @@ func ConnectableChannels() []Channel {
 }
 
 type IntegrationAccount struct {
-	ID           uuid.UUID
-	BranchID     uuid.UUID
-	Provider     Channel
-	DisplayName  string
-	Status       string // disconnected|pending|connected|ok|degraded|down
-	ConfigJSON   []byte // secrets — never expose raw in list APIs
-	PublicMeta   map[string]string
-	Connected    bool
-	LastOKAt     *time.Time
-	LastError    string
-	UpdatedAt    time.Time
-	WebhookPath  string // relative hint for FE
+	ID          uuid.UUID
+	BranchID    uuid.UUID
+	Provider    Channel
+	DisplayName string
+	Status      string // disconnected|pending|connected|ok|degraded|down
+	ConfigJSON  []byte // secrets — never expose raw in list APIs
+	PublicMeta  map[string]string
+	Connected   bool
+	LastOKAt    *time.Time
+	LastError   string
+	UpdatedAt   time.Time
+	WebhookPath string // relative hint for FE
 }
 
 type ChannelIdentity struct {

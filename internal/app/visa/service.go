@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
-	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/visa"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/visa"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 

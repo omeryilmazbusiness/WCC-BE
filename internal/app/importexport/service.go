@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/customer"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/importexport"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -66,7 +67,7 @@ func NewService(repo domain.Repository, customers customer.Repository, txm tx.Ru
 }
 
 func (s *Service) SetEnqueuer(q shared.Enqueuer) { s.queue = q }
-func (s *Service) SetQueueMode(m QueueMode)       { s.qMode = m }
+func (s *Service) SetQueueMode(m QueueMode)      { s.qMode = m }
 
 func (s *Service) Upload(ctx context.Context, in UploadInput) (*domain.ImportJob, error) {
 	if !domain.ValidEntityType(in.EntityType) {
@@ -300,7 +301,7 @@ func (s *Service) Process(ctx context.Context, jobID uuid.UUID) error {
 					raw, _ := json.Marshal(p.vals)
 					rowErrs = append(rowErrs, domain.RowError{
 						ID: uuid.New(), JobID: j.ID, RowNumber: p.rowNum,
-						Field: "entity_type",
+						Field:   "entity_type",
 						Message: "import process for " + string(j.EntityType) + " is not implemented; row skipped",
 						RawJSON: raw, CreatedAt: time.Now().UTC(),
 					})
@@ -380,12 +381,12 @@ func (s *Service) applyCustomer(ctx context.Context, j *domain.ImportJob, vals m
 		c := &customer.Customer{
 			ID: uuid.New(), BranchID: j.BranchID, FullName: name,
 			FullNameAR: strings.TrimSpace(vals["full_name_ar"]), Phone: phone,
-			Email: shared.NormalizeEmail(vals["email"]),
+			Email:       shared.NormalizeEmail(vals["email"]),
 			Nationality: strings.TrimSpace(vals["nationality"]),
-			PassportNo: shared.NormalizePassport(vals["passport_no"]),
+			PassportNo:  shared.NormalizePassport(vals["passport_no"]),
 			DateOfBirth: dob, Preferences: json.RawMessage(`{}`),
 			SpecialRequirements: strings.TrimSpace(vals["special_requirements"]),
-			Notes: strings.TrimSpace(vals["notes"]), IsActive: true,
+			Notes:               strings.TrimSpace(vals["notes"]), IsActive: true,
 			CreatedBy: j.CreatedBy, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := s.customers.Create(ctx, c); err != nil {
@@ -417,12 +418,12 @@ func (s *Service) applyCustomer(ctx context.Context, j *domain.ImportJob, vals m
 		c := &customer.Customer{
 			ID: uuid.New(), BranchID: j.BranchID, FullName: name,
 			FullNameAR: strings.TrimSpace(vals["full_name_ar"]), Phone: phone,
-			Email: shared.NormalizeEmail(vals["email"]),
+			Email:       shared.NormalizeEmail(vals["email"]),
 			Nationality: strings.TrimSpace(vals["nationality"]),
-			PassportNo: shared.NormalizePassport(vals["passport_no"]),
+			PassportNo:  shared.NormalizePassport(vals["passport_no"]),
 			DateOfBirth: dob, Preferences: json.RawMessage(`{}`),
 			SpecialRequirements: strings.TrimSpace(vals["special_requirements"]),
-			Notes: strings.TrimSpace(vals["notes"]), IsActive: true,
+			Notes:               strings.TrimSpace(vals["notes"]), IsActive: true,
 			CreatedBy: j.CreatedBy, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := s.customers.Create(ctx, c); err != nil {
@@ -559,11 +560,19 @@ func (s *Service) Schemas() map[string][]domain.FieldDef {
 	}
 }
 
-// ProcessByStringID is used by the worker payload.
+// ProcessByStringID is used by the worker payload. The job is located with
+// the worker's scope and then processed bound to the job's branch.
 func (s *Service) ProcessByStringID(ctx context.Context, id string) error {
 	uid, err := uuid.Parse(id)
 	if err != nil {
 		return shared.NewValidation("invalid import_job_id")
 	}
-	return s.Process(ctx, uid)
+	j, err := s.repo.GetJob(ctx, uid)
+	if err != nil {
+		return err
+	}
+	if j == nil {
+		return shared.NewNotFound("import_job")
+	}
+	return s.Process(access.WithScope(ctx, access.ForBranch(j.BranchID)), uid)
 }

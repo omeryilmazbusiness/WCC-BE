@@ -32,9 +32,9 @@ func ValidProvider(p Provider) bool {
 type SourceOfTruth string
 
 const (
-	TruthPlatform      SourceOfTruth = "platform"
-	TruthFile          SourceOfTruth = "file"
-	TruthManualReview  SourceOfTruth = "manual_review"
+	TruthPlatform     SourceOfTruth = "platform"
+	TruthFile         SourceOfTruth = "file"
+	TruthManualReview SourceOfTruth = "manual_review"
 )
 
 func ValidSourceOfTruth(s SourceOfTruth) bool {
@@ -76,10 +76,10 @@ const (
 type RunStatus string
 
 const (
-	RunRunning    RunStatus = "running"
-	RunOK         RunStatus = "ok"
-	RunError      RunStatus = "error"
-	RunConflicts  RunStatus = "conflicts"
+	RunRunning   RunStatus = "running"
+	RunOK        RunStatus = "ok"
+	RunError     RunStatus = "error"
+	RunConflicts RunStatus = "conflicts"
 )
 
 type Direction string
@@ -92,22 +92,22 @@ const (
 
 // Connection binds a cloud workbook to a branch entity type.
 type Connection struct {
-	ID              uuid.UUID
-	BranchID        uuid.UUID
-	Provider        Provider
-	DisplayName     string
-	RemotePath      string
-	EntityType      string
-	SourceOfTruth   SourceOfTruth
-	ConflictPolicy  ConflictPolicy
-	Enabled         bool
-	Status          ConnStatus
-	LastSyncAt      *time.Time
-	LastError       string
-	ConfigJSON      json.RawMessage
-	CreatedBy       *uuid.UUID
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID             uuid.UUID
+	BranchID       uuid.UUID
+	Provider       Provider
+	DisplayName    string
+	RemotePath     string
+	EntityType     string
+	SourceOfTruth  SourceOfTruth
+	ConflictPolicy ConflictPolicy
+	Enabled        bool
+	Status         ConnStatus
+	LastSyncAt     *time.Time
+	LastError      string
+	ConfigJSON     json.RawMessage
+	CreatedBy      *uuid.UUID
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 func (c *Connection) Normalize() error {

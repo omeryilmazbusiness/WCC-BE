@@ -7,9 +7,10 @@ import (
 
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/report"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/report"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/report"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -18,7 +19,11 @@ type Handler struct {
 	Svc *appsvc.Service
 }
 
-func (h Handler) parseFilter(r *http.Request, branchID uuid.UUID) (domain.Filter, error) {
+func (h Handler) parseFilter(r *http.Request) (domain.Filter, error) {
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		return domain.Filter{}, err
+	}
 	q := r.URL.Query()
 	f := domain.Filter{BranchID: branchID}
 	if v := q.Get("from"); v != "" {
@@ -67,12 +72,11 @@ func (h Handler) parseFilter(r *http.Request, branchID uuid.UUID) (domain.Filter
 }
 
 func (h Handler) runKind(w http.ResponseWriter, r *http.Request, kind domain.Kind) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
+	if _, ok := middleware.ClaimsFrom(r.Context()); !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	f, err := h.parseFilter(r, claims.BranchID)
+	f, err := h.parseFilter(r)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -127,7 +131,7 @@ func (h Handler) Export(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("kind is required"))
 		return
 	}
-	f, err := h.parseFilter(r, claims.BranchID)
+	f, err := h.parseFilter(r)
 	if err != nil {
 		response.Error(w, err)
 		return

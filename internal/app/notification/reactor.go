@@ -64,9 +64,9 @@ func (r *Reactor) onBookingConfirmed(ctx context.Context, ev events.Event) error
 	eid := b.ID
 	_, err := r.svc.Emit(ctx, EmitInput{
 		BranchID: b.BranchID, RecipientUserID: b.OwnerID,
-		Kind: domain.KindBookingConfirmed,
-		Title: "Booking confirmed",
-		Body:  fmt.Sprintf("Booking %s is confirmed", shortID(b.ID)),
+		Kind:       domain.KindBookingConfirmed,
+		Title:      "Booking confirmed",
+		Body:       fmt.Sprintf("Booking %s is confirmed", shortID(b.ID)),
 		EntityType: "booking", EntityID: &eid, HrefHint: "/bookings/" + b.ID.String(),
 	})
 	return err

@@ -8,11 +8,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/tourpackage"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
-	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/tourpackage"
+	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/tourpackage"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/tourpackage"
 )
 
 type Handler struct {
@@ -90,7 +91,7 @@ func mapPackage(p *domain.Package) map[string]any {
 	return map[string]any{
 		"id": p.ID, "branch_id": p.BranchID, "code": p.Code,
 		"name_en": p.NameEN, "name_ar": p.NameAR, "description": p.Description,
-		"is_active": p.IsActive,
+		"is_active":  p.IsActive,
 		"created_at": p.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at": p.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
@@ -99,8 +100,8 @@ func mapPackage(p *domain.Package) map[string]any {
 func mapDeparture(d *domain.Departure) map[string]any {
 	return map[string]any{
 		"id": d.ID, "package_id": d.PackageID, "code": d.Code,
-		"depart_date": d.DepartDate.Format("2006-01-02"),
-		"return_date": d.ReturnDate.Format("2006-01-02"),
+		"depart_date":    d.DepartDate.Format("2006-01-02"),
+		"return_date":    d.ReturnDate.Format("2006-01-02"),
 		"capacity_total": d.CapacityTotal, "capacity_sold": d.CapacitySold,
 		"remaining": d.Remaining(), "fill_pct": d.FillPct(), "alert": d.CapacityAlert(),
 		"base_price": d.BasePrice, "currency": d.Currency, "is_active": d.IsActive,
@@ -127,13 +128,18 @@ func mapTier(t domain.PricingTier) map[string]any {
 }
 
 func (h Handler) ListPackages(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	activeOnly := r.URL.Query().Get("active") != "false"
-	items, err := h.Svc.ListPackages(r.Context(), claims.BranchID, activeOnly)
+	items, err := h.Svc.ListPackages(r.Context(), branchID, activeOnly)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -146,9 +152,14 @@ func (h Handler) ListPackages(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) CreatePackage(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	var req createPackageRequest
@@ -157,7 +168,7 @@ func (h Handler) CreatePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.Svc.CreatePackage(r.Context(), appsvc.CreatePackageInput{
-		BranchID: claims.BranchID, Code: req.Code, NameEN: req.NameEN,
+		BranchID: branchID, Code: req.Code, NameEN: req.NameEN,
 		NameAR: req.NameAR, Description: req.Description,
 	})
 	if err != nil {
@@ -204,9 +215,14 @@ func (h Handler) UpdatePackage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) ClonePackage(w http.ResponseWriter, r *http.Request) {
-	claims, ok := middleware.ClaimsFrom(r.Context())
+	_, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
 		return
 	}
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -220,7 +236,7 @@ func (h Handler) ClonePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.Svc.ClonePackage(r.Context(), appsvc.ClonePackageInput{
-		SourceID: id, BranchID: claims.BranchID, Code: req.Code, NameEN: req.NameEN, NameAR: req.NameAR,
+		SourceID: id, BranchID: branchID, Code: req.Code, NameEN: req.NameEN, NameAR: req.NameAR,
 	})
 	if err != nil {
 		response.Error(w, err)

@@ -155,5 +155,5 @@ type Repository interface {
 	List(ctx context.Context, f ListFilter) ([]Lead, int, error)
 	AppendStageHistory(ctx context.Context, h *StageHistory) error
 	ListStageHistory(ctx context.Context, leadID uuid.UUID) ([]StageHistory, error)
-	Analytics(ctx context.Context, branchID uuid.UUID) (*Analytics, error)
+	Analytics(ctx context.Context, branchID *uuid.UUID) (*Analytics, error)
 }

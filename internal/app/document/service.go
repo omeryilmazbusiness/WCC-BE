@@ -91,14 +91,14 @@ func toDTO(d *domain.Document) DocumentDTO {
 }
 
 type PolicyDTO struct {
-	ID           uuid.UUID             `json:"id"`
-	BranchID     uuid.UUID             `json:"branch_id"`
-	Name         string                `json:"name"`
-	PackageID    *uuid.UUID            `json:"package_id,omitempty"`
-	Nationality  string                `json:"nationality"`
-	IsActive     bool                  `json:"is_active"`
-	CreatedAt    time.Time             `json:"created_at"`
-	Requirements []RequirementDTO      `json:"requirements"`
+	ID           uuid.UUID        `json:"id"`
+	BranchID     uuid.UUID        `json:"branch_id"`
+	Name         string           `json:"name"`
+	PackageID    *uuid.UUID       `json:"package_id,omitempty"`
+	Nationality  string           `json:"nationality"`
+	IsActive     bool             `json:"is_active"`
+	CreatedAt    time.Time        `json:"created_at"`
+	Requirements []RequirementDTO `json:"requirements"`
 }
 
 type RequirementDTO struct {
