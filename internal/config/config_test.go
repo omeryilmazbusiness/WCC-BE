@@ -70,10 +70,48 @@ func TestSessionSettingsValidation(t *testing.T) {
 	for name, c := range cases {
 		auth := validAuth()
 		c.mutate(&auth)
-		cfg := config.Config{App: config.AppConfig{Env: c.env}, Database: config.DatabaseConfig{URL: "postgres://x"}, Auth: auth}
+		cfg := config.Config{App: config.AppConfig{Env: c.env}, Database: config.DatabaseConfig{URL: "postgres://x"}, Auth: auth,
+			Redis: config.RedisConfig{URL: "redis://localhost:6379/0"}}
 		if err := cfg.Validate(); (err == nil) != c.ok {
 			t.Errorf("%s: ok=%v, got err %v", name, c.ok, err)
 		}
+	}
+}
+
+func TestRedisRequiredOutsideDevelopment(t *testing.T) {
+	for _, c := range []struct {
+		env, url string
+		ok       bool
+	}{
+		{"production", "redis://redis:6379/0", true},
+		{"production", "memory://", false},
+		{"production", "", false},
+		{"staging", "memory://", false},
+		{"local", "memory://", true},
+		{"development", "", true},
+	} {
+		cfg := config.Config{App: config.AppConfig{Env: c.env}, Database: config.DatabaseConfig{URL: "postgres://x"}, Auth: validAuth(),
+			Redis: config.RedisConfig{URL: c.url}}
+		if err := cfg.Validate(); (err == nil) != c.ok {
+			t.Errorf("%s %q: ok=%v, got %v", c.env, c.url, c.ok, err)
+		}
+	}
+}
+
+func TestScheduleOverridesFromEnv(t *testing.T) {
+	t.Setenv("APP_ENV", "local")
+	t.Setenv("DATABASE_URL", "postgres://wodi:wodi@localhost:5432/wodi_crm?sslmode=disable")
+	t.Setenv("SCHEDULE_INBOX_SLA_SWEEP", "*/2 * * * *")
+	t.Setenv("SCHEDULE_AI_SUMMARY_DAILY", "off")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Redis.ScheduleOverrides[config.ScheduleKey("inbox.sla_sweep")]; got != "*/2 * * * *" {
+		t.Fatalf("override=%q", got)
+	}
+	if got := cfg.Redis.ScheduleOverrides[config.ScheduleKey("ai.summary.daily")]; got != "off" {
+		t.Fatalf("off override=%q", got)
 	}
 }
 

@@ -2,6 +2,8 @@ package document
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -9,6 +11,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/document"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
@@ -124,8 +127,10 @@ type Service struct {
 	storage    ObjectStore
 	tx         tx.Runner
 	bookings   BookingContext
-	queue      shared.Enqueuer
 	audit      audit.Recorder
+	outbox     events.Outbox
+	alerts     ExpiryAlerts
+	ledger     shared.RunLedger
 	presignTTL time.Duration
 }
 
@@ -134,8 +139,51 @@ func NewService(repo domain.Repository, storage ObjectStore, txm tx.Runner) *Ser
 }
 
 func (s *Service) SetBookingContext(b BookingContext) { s.bookings = b }
-func (s *Service) SetEnqueuer(q shared.Enqueuer)      { s.queue = q }
 func (s *Service) SetAuditor(a audit.Recorder)        { s.audit = a }
+func (s *Service) SetOutbox(o events.Outbox)          { s.outbox = o }
+func (s *Service) SetExpiryAlerts(a ExpiryAlerts)     { s.alerts = a }
+func (s *Service) SetRunLedger(l shared.RunLedger)    { s.ledger = l }
+
+// saveTransition persists a status change and records document.status_changed
+// in the same transaction.
+func (s *Service) saveTransition(ctx context.Context, doc *domain.Document, from string) error {
+	if err := s.repo.Update(ctx, doc); err != nil {
+		return err
+	}
+	if doc.Status() == from {
+		return nil
+	}
+	var bookingID *uuid.UUID
+	if doc.RelatedType == domain.RelatedBooking {
+		id := doc.RelatedID
+		bookingID = &id
+	}
+	return events.Record(ctx, s.outbox, events.Event{Name: events.DocumentStatusChanged, Payload: events.DocumentStatusChangedPayload{
+		DocumentID: doc.ID, BranchID: doc.BranchID, BookingID: bookingID, From: from, To: doc.Status(),
+	}})
+}
+
+// transition loads a document, applies change and saves it atomically.
+func (s *Service) transition(ctx context.Context, id uuid.UUID, change func(*domain.Document) error) (*DocumentDTO, error) {
+	var out *domain.Document
+	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		doc, err := s.repo.FindByID(ctx, id)
+		if err != nil {
+			return shared.NewNotFound("document")
+		}
+		from := doc.Status()
+		if err := change(doc); err != nil {
+			return err
+		}
+		out = doc
+		return s.saveTransition(ctx, doc, from)
+	})
+	if err != nil {
+		return nil, err
+	}
+	dto := toDTO(out)
+	return &dto, nil
+}
 
 func (s *Service) PresignUpload(ctx context.Context, in PresignUploadInput) (*PresignUploadResult, error) {
 	fileName, err := domain.SanitizeFileName(in.FileName)
@@ -197,18 +245,9 @@ func (s *Service) PresignUpload(ctx context.Context, in PresignUploadInput) (*Pr
 }
 
 func (s *Service) CompleteUpload(ctx context.Context, in CompleteUploadInput) (*DocumentDTO, error) {
-	doc, err := s.repo.FindByID(ctx, in.DocumentID)
-	if err != nil {
-		return nil, shared.NewNotFound("document")
-	}
-	if err := doc.MarkUploaded(in.SizeBytes); err != nil {
-		return nil, err
-	}
-	if err := s.repo.Update(ctx, doc); err != nil {
-		return nil, err
-	}
-	dto := toDTO(doc)
-	return &dto, nil
+	return s.transition(ctx, in.DocumentID, func(doc *domain.Document) error {
+		return doc.MarkUploaded(in.SizeBytes)
+	})
 }
 
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*DocumentDTO, error) {
@@ -274,18 +313,7 @@ func (s *Service) Classify(ctx context.Context, id uuid.UUID, kind string) (*Doc
 }
 
 func (s *Service) Submit(ctx context.Context, id uuid.UUID) (*DocumentDTO, error) {
-	doc, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return nil, shared.NewNotFound("document")
-	}
-	if err := doc.Submit(); err != nil {
-		return nil, err
-	}
-	if err := s.repo.Update(ctx, doc); err != nil {
-		return nil, err
-	}
-	dto := toDTO(doc)
-	return &dto, nil
+	return s.transition(ctx, id, func(doc *domain.Document) error { return doc.Submit() })
 }
 
 func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, note string) (*DocumentDTO, error) {
@@ -309,10 +337,11 @@ func (s *Service) review(ctx context.Context, id, actorID uuid.UUID, action stri
 			return shared.NewNotFound("document")
 		}
 		before := reviewSnapshot(doc)
+		from := doc.Status()
 		if err := decide(doc); err != nil {
 			return err
 		}
-		if err := s.repo.Update(ctx, doc); err != nil {
+		if err := s.saveTransition(ctx, doc, from); err != nil {
 			return err
 		}
 		out = doc
@@ -560,32 +589,104 @@ func (s *Service) MissingRequiredKinds(ctx context.Context, bookingID uuid.UUID)
 	return append([]string{}, cl.MissingRequired...), nil
 }
 
-func (s *Service) ProcessExpiryReminders(ctx context.Context, onOrBefore time.Time, limit int) (int, error) {
+// ExpiryReminderDays are the days-before-expiry reminder slots (T-280).
+var ExpiryReminderDays = []int{30, 14, 7}
+
+// ExpiryAlerts delivers document expiry reminders (DIP).
+type ExpiryAlerts interface {
+	DocumentExpiring(ctx context.Context, doc DocumentDTO, daysLeft int) error
+	DocumentExpired(ctx context.Context, doc DocumentDTO) error
+}
+
+const jobExpiryReminder = "document.expiry_reminder"
+
+// ProcessExpiryReminders marks documents past expiry as expired and sends one
+// reminder per slot (30/14/7 days) to the uploader; safe to run repeatedly.
+func (s *Service) ProcessExpiryReminders(ctx context.Context, now time.Time, limit int) (int, error) {
 	if limit <= 0 {
-		limit = 100
+		limit = 500
 	}
-	if onOrBefore.IsZero() {
-		onOrBefore = time.Now().UTC()
+	if now.IsZero() {
+		now = time.Now().UTC()
 	}
-	items, err := s.repo.ListExpiring(ctx, onOrBefore, limit)
+	today := dateOf(now)
+	horizon := today.AddDate(0, 0, ExpiryReminderDays[0])
+	items, err := s.repo.ListExpiring(ctx, horizon, limit)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for i := range items {
-		d := &items[i]
-		if err := d.MarkExpired(); err != nil {
-			continue
+		d := items[i]
+		daysLeft := int(dateOf(*d.ExpiresAt).Sub(today).Hours() / 24)
+		var acted bool
+		if daysLeft < 0 {
+			acted, err = s.expire(ctx, &d)
+		} else {
+			acted, err = s.remindExpiry(ctx, &d, daysLeft)
 		}
-		if err := s.repo.Update(ctx, d); err != nil {
-			continue
+		if err != nil {
+			return n, err
 		}
-		if s.queue != nil {
-			_, _ = s.queue.Enqueue(ctx, shared.JobReminderSend, []byte(`{"type":"document_expired","id":"`+d.ID.String()+`"}`), shared.EnqueueOpts{
-				Queue: "low", UniqueKey: "doc-expiry:" + d.ID.String(),
-			})
+		if acted {
+			n++
 		}
-		n++
 	}
 	return n, nil
+}
+
+func (s *Service) expire(ctx context.Context, d *domain.Document) (bool, error) {
+	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		from := d.Status()
+		if err := d.MarkExpired(); err != nil {
+			return err
+		}
+		if err := s.saveTransition(ctx, d, from); err != nil {
+			return err
+		}
+		if s.alerts == nil {
+			return nil
+		}
+		return s.alerts.DocumentExpired(ctx, toDTO(d))
+	})
+	if err != nil {
+		if errors.Is(err, shared.ErrInvalidState) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Service) remindExpiry(ctx context.Context, d *domain.Document, daysLeft int) (bool, error) {
+	slot := reminderSlot(daysLeft)
+	if slot == 0 || s.alerts == nil || s.ledger == nil {
+		return false, nil
+	}
+	sent := false
+	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		claimed, err := s.ledger.Claim(ctx, jobExpiryReminder, d.ID.String(), strconv.Itoa(slot))
+		if err != nil || !claimed {
+			return err
+		}
+		sent = true
+		return s.alerts.DocumentExpiring(ctx, toDTO(d), daysLeft)
+	})
+	return sent, err
+}
+
+// reminderSlot is the tightest reminder slot daysLeft falls into (0 = none).
+func reminderSlot(daysLeft int) int {
+	slot := 0
+	for _, d := range ExpiryReminderDays {
+		if daysLeft <= d {
+			slot = d
+		}
+	}
+	return slot
+}
+
+func dateOf(t time.Time) time.Time {
+	y, m, d := t.UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }

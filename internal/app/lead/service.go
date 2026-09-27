@@ -89,9 +89,13 @@ type Service struct {
 	repo     domain.Repository
 	tx       tx.Runner
 	bus      *events.Bus
+	outbox   events.Outbox
 	audit    audit.Recorder
 	bookings BookingDraftCreator
 }
+
+// SetOutbox enables durable lead.stage_changed events.
+func (s *Service) SetOutbox(o events.Outbox) { s.outbox = o }
 
 func NewService(repo domain.Repository, txm tx.Runner, bus *events.Bus) *Service {
 	return &Service{repo: repo, tx: txm, bus: bus}
@@ -254,6 +258,11 @@ func (s *Service) ChangeStage(ctx context.Context, in ChangeStageInput) (*domain
 			return err
 		}
 		if err := s.recordAudit(ctx, in.ActorID, "lead.stage_changed", l.ID, &l.BranchID, &before, l, in.IP, in.UserAgent); err != nil {
+			return err
+		}
+		if err := events.Record(ctx, s.outbox, events.Event{Name: events.LeadStageChanged, Payload: events.LeadStageChangedPayload{
+			LeadID: l.ID, BranchID: l.BranchID, OwnerID: l.OwnerID, From: string(from), To: string(in.To),
+		}}); err != nil {
 			return err
 		}
 		out = l

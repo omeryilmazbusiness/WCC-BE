@@ -48,11 +48,17 @@ type EmitInput struct {
 	Severity        domain.Severity // optional override
 }
 
+// RuleSource yields a branch's effective escalation rules (DIP).
+type RuleSource interface {
+	EscalationRules(ctx context.Context, branchID uuid.UUID) ([]domain.Rule, error)
+}
+
 type Service struct {
 	repo  domain.Repository
 	tx    tx.Runner
 	users UserDirectory
 	ext   ExternalNotifier
+	rules RuleSource
 	log   *slog.Logger
 }
 
@@ -61,6 +67,7 @@ func NewService(repo domain.Repository, txm tx.Runner, log *slog.Logger) *Servic
 }
 
 func (s *Service) SetUserDirectory(d UserDirectory) { s.users = d }
+func (s *Service) SetRuleSource(r RuleSource)       { s.rules = r }
 func (s *Service) SetExternal(n ExternalNotifier) {
 	if n != nil {
 		s.ext = n
@@ -205,13 +212,13 @@ func (s *Service) deliverExternal(ctx context.Context, n *domain.Notification) {
 	}
 }
 
-func (s *Service) List(ctx context.Context, userID uuid.UUID, status domain.Status, includeResolved bool, limit, offset int) ([]domain.Notification, int, error) {
+func (s *Service) List(ctx context.Context, userID uuid.UUID, status domain.Status, includeResolved bool, kinds []string, limit, offset int) ([]domain.Notification, int, error) {
 	if userID == uuid.Nil {
 		return nil, 0, shared.NewValidation("user_id required")
 	}
 	items, total, err := s.repo.List(ctx, domain.ListFilter{
 		RecipientUserID: userID, Status: status, IncludeResolved: includeResolved,
-		Limit: limit, Offset: offset,
+		Kinds: kinds, Limit: limit, Offset: offset,
 	})
 	if err != nil {
 		return nil, 0, err
@@ -220,6 +227,26 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, status domain.Stat
 		items[i].Title = domain.DisplayTitle(items[i])
 	}
 	return items, total, nil
+}
+
+// Summary groups the user's active notifications by kind (grouped center view).
+func (s *Service) Summary(ctx context.Context, userID uuid.UUID) ([]domain.KindSummary, error) {
+	if userID == uuid.Nil {
+		return nil, shared.NewValidation("user_id required")
+	}
+	groups, err := s.repo.SummarizeActive(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range groups {
+		if rule := domain.MatchRule(groups[i].Kind); rule != nil {
+			if rule.DefaultTitle != "" {
+				groups[i].Title = rule.DefaultTitle
+			}
+			groups[i].Href = rule.DefaultHref
+		}
+	}
+	return groups, nil
 }
 
 func (s *Service) UnreadCount(ctx context.Context, userID uuid.UUID) (int, error) {
@@ -312,43 +339,80 @@ func (s *Service) Rules() []domain.Rule {
 	return domain.DefaultRules()
 }
 
-// ProcessEscalations promotes aged open alerts to escalate-to roles (T-174/T-175).
+// RulesFor is the effective escalation matrix of a branch (defaults merged
+// with the branch's admin overrides; disabled rules are absent).
+func (s *Service) RulesFor(ctx context.Context, branchID uuid.UUID) ([]domain.Rule, error) {
+	if s.rules == nil {
+		return domain.DefaultRules(), nil
+	}
+	return s.rules.EscalationRules(ctx, branchID)
+}
+
+// escalationBatch bounds one sweep; candidates are oldest first, so a backlog
+// drains over consecutive sweeps.
+const escalationBatch = 1000
+
+// ProcessEscalations promotes aged open alerts to the escalate-to roles of the
+// branch's effective rule (T-174/T-175, T-285). The source is acknowledged so
+// it escalates once; escalated copies never escalate again.
 func (s *Service) ProcessEscalations(ctx context.Context, now time.Time) (int, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
 	ctx = withDeliveryScope(ctx)
-	// Look back far enough to catch slowest escalate_after (48h docs).
-	items, err := s.repo.ListOpenOlderThan(ctx, now.Add(-72*time.Hour), 500)
+	items, err := s.repo.ListEscalationCandidates(ctx, escalatableKinds(), now, escalationBatch)
 	if err != nil {
 		return 0, err
 	}
+	branchRules := map[uuid.UUID]map[string]domain.Rule{}
 	emitted := 0
 	for i := range items {
 		n := items[i]
-		if !domain.ShouldEscalate(n.Kind, n.CreatedAt, now) {
+		rules, ok := branchRules[n.BranchID]
+		if !ok {
+			list, err := s.RulesFor(ctx, n.BranchID)
+			if err != nil {
+				return emitted, err
+			}
+			rules = domain.RulesByKind(list)
+			branchRules[n.BranchID] = rules
+		}
+		rule, ok := rules[n.Kind]
+		if !ok || !rule.Due(n.CreatedAt, now) {
 			continue
 		}
-		rule := domain.MatchRule(n.Kind)
-		if rule == nil || len(rule.EscalateToRoles) == 0 {
+		if err := n.Acknowledge(n.RecipientUserID); err != nil {
 			continue
 		}
-		// Mark source acknowledged so it does not re-escalate every sweep.
-		_ = n.Acknowledge(n.RecipientUserID)
-		_ = s.repo.Update(ctx, &n)
-
+		if err := s.repo.Update(ctx, &n); err != nil {
+			return emitted, err
+		}
 		count, err := s.EmitToRoles(ctx, n.BranchID, rule.EscalateToRoles, EmitInput{
 			Kind: n.Kind, Title: "Escalated: " + n.Title, Body: n.Body,
 			EntityType: n.EntityType, EntityID: n.EntityID, HrefHint: n.HrefHint,
 			Severity: domain.SeverityCritical,
-			Meta:     map[string]any{"escalated_from": n.ID.String(), "source_recipient": n.RecipientUserID.String()},
+			Meta:     domain.EscalationMeta(n),
 		})
 		if err != nil {
+			if s.log != nil {
+				s.log.Error("notification escalation failed", "notification", n.ID, "error", err)
+			}
 			continue
 		}
 		emitted += count
 	}
 	return emitted, nil
+}
+
+// escalatableKinds lists every kind a branch override may enable; overrides
+// only reshape default rules, so the default kinds are the full set.
+func escalatableKinds() []string {
+	defaults := domain.DefaultRules()
+	out := make([]string, 0, len(defaults))
+	for _, r := range defaults {
+		out = append(out, r.Kind)
+	}
+	return out
 }
 
 // NopExternal is a no-op adapter for optional channels.

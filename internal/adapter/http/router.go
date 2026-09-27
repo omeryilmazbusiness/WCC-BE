@@ -32,6 +32,7 @@ import (
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
 	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
 	searchhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/search"
+	streamhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/stream"
 	supplierhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/supplier"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
@@ -74,7 +75,11 @@ type Handlers struct {
 	Privacy      privacyhttp.Handler
 	FX           fxhttp.Handler
 	FXLive       fxhttp.LiveHandler
+	Stream       streamhttp.Handler
 }
+
+// StreamPath is the realtime feed; it is exempt from the request timeout.
+const StreamPath = "/v1/stream"
 
 // NewRouter wires every route. Authenticated routes verify the access token
 // with tokens and its session with sessions.
@@ -94,7 +99,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 	r.Use(middleware.MaxBody(cfg.HTTP.MaxBodyBytes))
 	r.Use(chimw.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(cfg.HTTP.WriteTimeout))
+	r.Use(middleware.Timeout(cfg.HTTP.WriteTimeout, StreamPath))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.HTTP.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
@@ -134,6 +139,9 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 		r.Group(func(r chi.Router) {
 			r.Use(authenticate)
 
+			// Every signed-in user gets their own notifications; the hub
+			// filters branch signals by the caller's scope.
+			r.Get("/stream", h.Stream.Stream)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Users.ListBranches)
 			r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Patch("/branches/{id}", h.Users.UpdateBranch)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/teams", h.Users.ListTeams)
@@ -289,6 +297,9 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermOpsRead)).Get("/jobs/{id}", h.Ops.JobStatus)
 				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/security-cleanup", h.Ops.SecurityCleanup)
 				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/encrypt-backfill", h.Ops.EncryptBackfill)
+				r.With(middleware.RequirePermission(platformauth.PermOpsRead)).Get("/outbox", h.Ops.OutboxStats)
+				r.With(middleware.RequirePermission(platformauth.PermOpsRead)).Get("/outbox/dead", h.Ops.OutboxDead)
+				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/outbox/{id}/requeue", h.Ops.OutboxRequeue)
 			})
 
 			r.Route("/documents", func(r chi.Router) {
@@ -435,6 +446,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			r.Route("/notifications", func(r chi.Router) {
 				r.With(middleware.RequirePermission(platformauth.PermNotificationsRead)).Get("/", h.Notification.List)
 				r.With(middleware.RequirePermission(platformauth.PermNotificationsRead)).Get("/unread-count", h.Notification.UnreadCount)
+				r.With(middleware.RequirePermission(platformauth.PermNotificationsRead)).Get("/summary", h.Notification.Summary)
 				r.With(middleware.RequirePermission(platformauth.PermNotificationsRead)).Get("/preferences", h.Notification.GetPreferences)
 				r.With(middleware.RequirePermission(platformauth.PermNotificationsWrite)).Put("/preferences", h.Notification.UpdatePreferences)
 				r.With(middleware.RequirePermission(platformauth.PermNotificationsRead)).Get("/rules", h.Notification.Rules)
@@ -454,6 +466,12 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/finance", h.Report.Finance)
 				r.With(middleware.RequirePermission(platformauth.PermReportsRead)).Get("/integrations", h.Report.Integrations)
 				r.With(middleware.RequirePermission(platformauth.PermReportsExport)).Get("/export", h.Report.Export)
+				r.With(middleware.RequirePermission(platformauth.PermReportsExport)).Get("/schedules", h.Report.ListSchedules)
+				r.With(middleware.RequirePermission(platformauth.PermReportsExport)).Post("/schedules", h.Report.CreateSchedule)
+				r.With(middleware.RequirePermission(platformauth.PermReportsExport)).Patch("/schedules/{id}", h.Report.UpdateSchedule)
+				r.With(middleware.RequirePermission(platformauth.PermReportsExport)).Delete("/schedules/{id}", h.Report.DeleteSchedule)
+				r.With(middleware.RequirePermission(platformauth.PermReportsExport)).Get("/runs", h.Report.ListRuns)
+				r.With(middleware.RequirePermission(platformauth.PermReportsExport)).Get("/runs/{id}/download", h.Report.DownloadRun)
 			})
 
 			r.Route("/ai", func(r chi.Router) {

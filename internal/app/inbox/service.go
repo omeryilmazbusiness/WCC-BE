@@ -49,9 +49,13 @@ type Service struct {
 	leads     LeadShellCreator
 	tx        tx.Runner
 	bus       *events.Bus
+	outbox    events.Outbox
 	secrets   *accountSecrets
 	now       func() time.Time
 }
+
+// SetOutbox enables durable conversation and integration events.
+func (s *Service) SetOutbox(o events.Outbox) { s.outbox = o }
 
 func NewService(repo domain.Repository, providers domain.Registry, txm tx.Runner, bus *events.Bus) *Service {
 	return &Service{
@@ -174,7 +178,7 @@ func (s *Service) SetStatus(ctx context.Context, in StatusInput) (*domain.Conver
 	if err != nil {
 		return nil, err
 	}
-	if s.bus != nil && in.Status == domain.StatusResolved {
+	if s.bus != nil && in.Status != domain.StatusOpen {
 		s.bus.Publish(ctx, events.Event{Name: events.ConversationResolved, Payload: out})
 	}
 	return out, nil
@@ -260,9 +264,6 @@ func (s *Service) Reply(ctx context.Context, in ReplyInput) (*domain.Message, er
 		if sendErr != nil {
 			msg.Status = domain.MsgFailed
 			msg.ErrorMessage = sendErr.Error()
-			if c.IntegrationAccountID != nil {
-				_ = s.repo.UpdateAccountHealth(ctx, *c.IntegrationAccountID, "degraded", sendErr.Error(), false)
-			}
 			return sendErr
 		}
 		msg.Status = domain.MsgSent
@@ -277,9 +278,17 @@ func (s *Service) Reply(ctx context.Context, in ReplyInput) (*domain.Message, er
 		if c.IntegrationAccountID != nil {
 			_ = s.repo.UpdateAccountHealth(ctx, *c.IntegrationAccountID, "ok", "", true)
 		}
-		return s.repo.UpdateConversation(ctx, c)
+		if err := s.repo.UpdateConversation(ctx, c); err != nil {
+			return err
+		}
+		return events.Record(ctx, s.outbox, events.Event{Name: events.ConversationResponded, Payload: events.ConversationRespondedPayload{
+			ConversationID: c.ID, MessageID: msg.ID, BranchID: c.BranchID, ResponderID: in.ActorID, RespondedAt: now,
+		}})
 	})
 	if err != nil {
+		if msg.Status == domain.MsgFailed {
+			s.recordSendFailure(ctx, c, err)
+		}
 		return nil, err
 	}
 	if s.bus != nil {
@@ -468,7 +477,9 @@ func (s *Service) IngestWebhook(ctx context.Context, channel domain.Channel, bra
 		if acctID != nil {
 			_ = s.repo.UpdateAccountHealth(ctx, *acctID, "ok", "", true)
 		}
-		return nil
+		return events.Record(ctx, s.outbox, events.Event{Name: events.ConversationMessageReceived, Payload: events.ConversationMessageReceivedPayload{
+			ConversationID: conv.ID, MessageID: msg.ID, BranchID: branchID, OwnerID: conv.OwnerID, Channel: string(ev.Provider),
+		}})
 	})
 	if err != nil {
 		return nil, err
@@ -479,23 +490,60 @@ func (s *Service) IngestWebhook(ctx context.Context, channel domain.Channel, bra
 	return msg, nil
 }
 
+// recordSendFailure runs after the reply transaction rolled back, so the
+// degraded health and the failure event are not lost with it.
+func (s *Service) recordSendFailure(ctx context.Context, c *domain.Conversation, sendErr error) {
+	if c.IntegrationAccountID != nil {
+		_ = s.repo.UpdateAccountHealth(ctx, *c.IntegrationAccountID, "degraded", sendErr.Error(), false)
+	}
+	_ = events.Record(ctx, s.outbox, events.Event{Name: events.IntegrationFailed, Payload: events.IntegrationFailedPayload{
+		BranchID: c.BranchID, Source: "inbox_send", Provider: string(c.Channel), AccountID: c.IntegrationAccountID,
+		Error: sendErr.Error(), At: s.now(),
+	}})
+}
+
+// CheckSLABreaches runs the SLA sweep and returns the number of new breaches.
 func (s *Service) CheckSLABreaches(ctx context.Context, limit int) (int, error) {
+	_, breached, err := s.CheckSLA(ctx, limit)
+	return breached, err
+}
+
+// CheckSLA stamps conversations that crossed the A (warning) and B (breach)
+// thresholds and publishes one event per newly stamped stage.
+func (s *Service) CheckSLA(ctx context.Context, limit int) (warned, breached int, err error) {
 	if limit <= 0 {
 		limit = 100
 	}
+	breached, err = s.sweepSLA(ctx, domain.SLABreach, limit, func(c *domain.Conversation) events.Event {
+		return events.Event{Name: events.SLABreached, Payload: c}
+	})
+	if err != nil {
+		return 0, breached, err
+	}
+	warned, err = s.sweepSLA(ctx, domain.SLAWarning, limit, func(c *domain.Conversation) events.Event {
+		return events.Event{Name: events.SLAWarning, Payload: c}
+	})
+	return warned, breached, err
+}
+
+func (s *Service) sweepSLA(ctx context.Context, stage domain.SLAStage, limit int, event func(*domain.Conversation) events.Event) (int, error) {
 	now := s.now()
-	items, err := s.repo.ListDueForSLABreach(ctx, now, limit)
+	items, err := s.repo.ListDueForSLA(ctx, stage, now, limit)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for i := range items {
-		if err := s.repo.MarkSLABreached(ctx, items[i].ID, now); err != nil {
+		stamped, err := s.repo.MarkSLAStage(ctx, stage, items[i].ID, now)
+		if err != nil {
 			return n, err
+		}
+		if !stamped {
+			continue
 		}
 		n++
 		if s.bus != nil {
-			s.bus.Publish(ctx, events.Event{Name: events.SLABreached, Payload: &items[i]})
+			s.bus.Publish(ctx, event(&items[i]))
 		}
 	}
 	return n, nil

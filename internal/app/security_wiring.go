@@ -10,12 +10,9 @@ import (
 
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/signature"
-	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgidentity "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/identity"
 	pgwebhook "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/webhook"
-	appaudit "github.com/wodi-crm/wodi-crm-be/internal/app/audit"
 	appauth "github.com/wodi-crm/wodi-crm-be/internal/app/auth"
-	"github.com/wodi-crm/wodi-crm-be/internal/app/retention"
 	appwebhook "github.com/wodi-crm/wodi-crm-be/internal/app/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
@@ -23,6 +20,7 @@ import (
 	domaininbox "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/crypto"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/ratelimit"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -84,25 +82,17 @@ func newAuthService(
 	})
 }
 
-// NewSecurityRetention builds the retention purge for processes outside the
-// API (worker); the API wires the same service in New.
-func NewSecurityRetention(pool *pgxpool.Pool) *retention.Service {
-	auditor := appaudit.NewService(pgaudit.NewRepository(pool))
-	sec := pgidentity.NewSecurityRepository(pgidentity.NewRepository(pool))
-	return retention.NewService(sec, pgwebhook.NewRepository(pool), auditor, retention.DefaultPolicy)
-}
-
-func newWebhookHandler(
+func newWebhookService(
 	cfg config.Config,
 	log *slog.Logger,
 	pool *pgxpool.Pool,
 	accounts appwebhook.AccountLookup,
 	ingestor appwebhook.Ingestor,
 	auditor audit.Recorder,
-	limiter ratelimit.Window,
-) webhookhttp.Handler {
+	outbox events.Outbox,
+) *appwebhook.Service {
 	meta, shared := signature.Meta(), signature.Shared()
-	svc := appwebhook.NewService(appwebhook.Deps{
+	return appwebhook.NewService(appwebhook.Deps{
 		Accounts: accounts,
 		Events:   pgwebhook.NewRepository(pool),
 		Ingestor: ingestor,
@@ -114,14 +104,18 @@ func newWebhookHandler(
 			domaininbox.ChannelEmail:     shared,
 			domaininbox.ChannelStub:      shared,
 		},
-		Audit: auditor,
-		Log:   log,
+		Audit:  auditor,
+		Outbox: outbox,
+		Log:    log,
 		Options: appwebhook.Options{
 			AllowUnsigned:   cfg.IsLocal(),
 			EnvSecrets:      byChannel(cfg.Webhook.Secrets),
 			EnvVerifyTokens: byChannel(cfg.Webhook.VerifyTokens),
 		},
 	})
+}
+
+func newWebhookHandler(cfg config.Config, svc *appwebhook.Service, limiter ratelimit.Window) webhookhttp.Handler {
 	return webhookhttp.Handler{
 		Svc: svc, Limiter: limiter, RateLimit: cfg.Webhook.RateLimit, RateWindow: cfg.Webhook.RateWindow,
 	}

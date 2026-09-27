@@ -126,4 +126,25 @@ type Repository interface {
 	ListByBooking(ctx context.Context, bookingID uuid.UUID) ([]VisaCase, error)
 	AppendEvent(ctx context.Context, e *Event) error
 	ListEvents(ctx context.Context, visaCaseID uuid.UUID) ([]Event, error)
+	ListAwaitingDecision(ctx context.Context, now time.Time, defaultDays, limit int) ([]FollowUpCandidate, error)
+}
+
+// DefaultFollowUpDays is how long a submitted case may wait for a decision
+// before a follow-up task opens (alert_threshold_settings overrides it).
+const DefaultFollowUpDays = 7
+
+// FollowUpCandidate is a case awaiting a decision past its follow-up window.
+type FollowUpCandidate struct {
+	Case    VisaCase
+	OwnerID uuid.UUID
+}
+
+// Decided reports whether the case left the waiting states.
+func (v *VisaCase) Decided() bool {
+	switch v.Status {
+	case StatusApproved, StatusRejected, StatusIssued, StatusCancelled:
+		return true
+	default:
+		return false
+	}
 }

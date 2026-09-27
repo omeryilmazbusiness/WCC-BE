@@ -79,6 +79,7 @@ func (f fakeAccounts) AccountVerifyTokenExists(_ context.Context, _ domain.Chann
 type fakeEvents struct {
 	rows map[string]*Event
 	all  []*Event
+	next *time.Time
 }
 
 func (f *fakeEvents) Insert(_ context.Context, e *Event) (bool, error) {
@@ -106,6 +107,27 @@ func (f *fakeEvents) MarkStatus(_ context.Context, id uuid.UUID, status, msg str
 		}
 	}
 	return nil
+}
+
+func (f *fakeEvents) MarkFailed(_ context.Context, id uuid.UUID, msg string, next *time.Time, _ time.Time) error {
+	for _, r := range f.rows {
+		if r.ID == id {
+			r.Status, r.Error = StatusFailed, msg
+			r.Attempts++
+			f.next = next
+		}
+	}
+	return nil
+}
+
+func (f *fakeEvents) ListRetryable(_ context.Context, now time.Time, _ int) ([]Event, error) {
+	var out []Event
+	for _, r := range f.rows {
+		if r.Status == StatusFailed && f.next != nil && !f.next.After(now) {
+			out = append(out, *r)
+		}
+	}
+	return out, nil
 }
 
 type fakeIngestor struct {
@@ -250,5 +272,45 @@ func TestHandshake(t *testing.T) {
 	svc.opts.EnvVerifyTokens = map[domain.Channel]string{domain.ChannelFacebook: "env-vt"}
 	if got, err := svc.Handshake(ctx, "facebook", "subscribe", "env-vt", "c"); err != nil || got != "c" {
 		t.Fatalf("env token: %q %v", got, err)
+	}
+}
+
+func TestRetryAfterBacksOffAndStops(t *testing.T) {
+	now := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	transient := errors.New("provider timeout")
+	if at, ok := RetryAfter(2, transient, now); !ok || at != now.Add(5*time.Minute) {
+		t.Fatalf("second retry after 5m, got %s %v", at, ok)
+	}
+	if _, ok := RetryAfter(MaxRetries+1, transient, now); ok {
+		t.Fatal("retries must stop after MaxRetries")
+	}
+	if _, ok := RetryAfter(1, shared.NewValidation("bad"), now); ok {
+		t.Fatal("permanent errors are never retried")
+	}
+}
+
+func TestRetryFailedReplaysTransientFailures(t *testing.T) {
+	svc, ev, ing, _, branch := newTestService(true, `{}`)
+	clock := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	svc.now = func() time.Time { return clock }
+	ing.err = errors.New("db unavailable")
+	if _, err := svc.Handle(context.Background(), Request{Provider: "whatsapp", Body: []byte(waBody)}); err == nil {
+		t.Fatal("expected ingest error")
+	}
+	row := ev.rows["whatsapp|wamid.1"]
+	if row.Status != StatusFailed || row.Attempts != 1 || ev.next == nil || !ev.next.Equal(clock.Add(time.Minute)) {
+		t.Fatalf("first failure must schedule a 1m retry: %+v next=%v", row, ev.next)
+	}
+	if n, _, _ := svc.RetryFailed(context.Background(), 10); n != 0 {
+		t.Fatal("retry is not due yet")
+	}
+	clock = clock.Add(2 * time.Minute)
+	ing.err = nil
+	retried, recovered, err := svc.RetryFailed(context.Background(), 10)
+	if err != nil || retried != 1 || recovered != 1 || row.Status != StatusProcessed {
+		t.Fatalf("retried=%d recovered=%d err=%v row=%+v", retried, recovered, err, row)
+	}
+	if ing.scope.BranchID != branch {
+		t.Fatalf("replay must run under the event branch, got %+v", ing.scope)
 	}
 }

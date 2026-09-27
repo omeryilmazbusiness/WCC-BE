@@ -113,6 +113,42 @@ func (m *taskMem) ListByRelated(_ context.Context, relatedType string, relatedID
 
 func (m *taskMem) CountOverdue(context.Context, *uuid.UUID) (int, error) { return 0, nil }
 
+func (m *taskMem) ListOpenByRule(_ context.Context, rule, relatedType string, relatedID uuid.UUID) ([]domain.Task, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []domain.Task
+	for _, t := range m.byID {
+		open := t.Status == domain.StatusOpen || t.Status == domain.StatusInProgress
+		if open && t.SourceRule == rule && t.RelatedType == relatedType && t.RelatedID == relatedID {
+			out = append(out, *t)
+		}
+	}
+	return out, nil
+}
+
+func (m *taskMem) ListOverdueUnnotified(_ context.Context, now time.Time, limit int) ([]domain.Task, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []domain.Task
+	for _, t := range m.byID {
+		if t.IsOverdue(now) && t.OverdueNotifiedAt == nil && len(out) < limit {
+			out = append(out, *t)
+		}
+	}
+	return out, nil
+}
+
+func (m *taskMem) MarkOverdueNotified(_ context.Context, id uuid.UUID, at time.Time) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	t, ok := m.byID[id]
+	if !ok || t.OverdueNotifiedAt != nil {
+		return false, nil
+	}
+	t.OverdueNotifiedAt = &at
+	return true, nil
+}
+
 type bookingMem struct {
 	byID map[uuid.UUID]*bookingdomain.Booking
 }

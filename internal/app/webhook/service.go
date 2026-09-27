@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 )
 
 // Options configures env fallbacks. AllowUnsigned must only be set for
@@ -32,6 +34,7 @@ type Deps struct {
 	Ingestor  Ingestor
 	Verifiers map[domain.Channel]SignatureVerifier
 	Audit     audit.Recorder
+	Outbox    events.Outbox
 	Log       *slog.Logger
 	Options   Options
 }
@@ -42,6 +45,7 @@ type Service struct {
 	ingestor  Ingestor
 	verifiers map[domain.Channel]SignatureVerifier
 	audit     audit.Recorder
+	outbox    events.Outbox
 	log       *slog.Logger
 	opts      Options
 	now       func() time.Time
@@ -53,7 +57,7 @@ func NewService(d Deps) *Service {
 	}
 	return &Service{
 		accounts: d.Accounts, events: d.Events, ingestor: d.Ingestor, verifiers: d.Verifiers,
-		audit: d.Audit, log: d.Log, opts: d.Options,
+		audit: d.Audit, outbox: d.Outbox, log: d.Log, opts: d.Options,
 		now: func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -124,13 +128,88 @@ func (s *Service) Handle(ctx context.Context, req Request) (*Result, error) {
 	scoped := access.WithScope(ctx, access.ForBranch(acct.BranchID))
 	msg, err := s.ingestor.IngestWebhook(scoped, channel, acct.BranchID, req.Headers, req.Body)
 	if err != nil {
-		_ = s.events.MarkStatus(ctx, ev.ID, StatusFailed, truncate(err.Error(), 1000), s.now())
+		attempts := 0
+		if !inserted {
+			if existing, _ := s.events.FindByExternalID(ctx, channel, ev.ExternalEventID); existing != nil {
+				attempts = existing.Attempts
+			}
+		}
+		s.fail(ctx, &Event{ID: ev.ID, Provider: channel, BranchID: &acct.BranchID, IntegrationAccountID: &acct.ID, Attempts: attempts}, err)
 		return nil, err
 	}
 	if err := s.events.MarkStatus(ctx, ev.ID, StatusProcessed, "", s.now()); err != nil {
 		s.log.Error("webhook status update failed", "event_id", ev.ID, "error", err)
 	}
 	return &Result{EventID: ev.ID, Message: msg}, nil
+}
+
+// MaxRetries bounds automatic reprocessing of a failed webhook.
+const MaxRetries = 5
+
+// retryDelays is the wait before retry n (1-based).
+var retryDelays = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour, 6 * time.Hour}
+
+// RetryAfter is when the next attempt may run after failedAttempts failures;
+// ok=false when the event is out of retries or the error is permanent.
+func RetryAfter(failedAttempts int, cause error, now time.Time) (time.Time, bool) {
+	if failedAttempts < 1 || failedAttempts > MaxRetries || permanent(cause) {
+		return time.Time{}, false
+	}
+	return now.Add(retryDelays[failedAttempts-1]), true
+}
+
+func permanent(err error) bool {
+	return errors.Is(err, shared.ErrValidation) || errors.Is(err, shared.ErrNotFound) ||
+		errors.Is(err, shared.ErrForbidden) || errors.Is(err, shared.ErrUnauthorized)
+}
+
+// fail journals a failed attempt, schedules the next retry and reports the
+// integration failure.
+func (s *Service) fail(ctx context.Context, ev *Event, cause error) {
+	now := s.now()
+	var next *time.Time
+	if at, ok := RetryAfter(ev.Attempts+1, cause, now); ok {
+		next = &at
+	}
+	msg := truncate(cause.Error(), 1000)
+	if err := s.events.MarkFailed(ctx, ev.ID, msg, next, now); err != nil {
+		s.log.Error("webhook failure not journaled", "event_id", ev.ID, "error", err)
+	}
+	if ev.BranchID == nil {
+		return
+	}
+	if err := events.Record(ctx, s.outbox, events.Event{Name: events.IntegrationFailed, Payload: events.IntegrationFailedPayload{
+		BranchID: *ev.BranchID, Source: "webhook", Provider: string(ev.Provider), AccountID: ev.IntegrationAccountID,
+		Error: msg, At: now,
+	}}); err != nil {
+		s.log.Error("integration failure not recorded", "event_id", ev.ID, "error", err)
+	}
+}
+
+// RetryFailed reprocesses failed webhooks whose retry is due (T-280). The
+// stored payload was verified on receipt, so it is replayed unsigned.
+func (s *Service) RetryFailed(ctx context.Context, limit int) (retried, recovered int, err error) {
+	items, err := s.events.ListRetryable(ctx, s.now(), limit)
+	if err != nil {
+		return 0, 0, err
+	}
+	for i := range items {
+		ev := items[i]
+		if ev.BranchID == nil {
+			continue
+		}
+		retried++
+		scoped := access.WithScope(ctx, access.ForBranch(*ev.BranchID))
+		if _, ierr := s.ingestor.IngestWebhook(scoped, ev.Provider, *ev.BranchID, map[string]string{}, ev.Payload); ierr != nil {
+			s.fail(ctx, &ev, ierr)
+			continue
+		}
+		if err := s.events.MarkStatus(ctx, ev.ID, StatusProcessed, "", s.now()); err != nil {
+			return retried, recovered, err
+		}
+		recovered++
+	}
+	return retried, recovered, nil
 }
 
 // Handshake answers the Meta subscription challenge (GET hub.* params).

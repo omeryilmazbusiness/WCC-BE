@@ -49,8 +49,24 @@ func Recoverer(next http.Handler) http.Handler {
 	return middleware.Recoverer(next)
 }
 
-func Timeout(d time.Duration) func(http.Handler) http.Handler {
-	return middleware.Timeout(d)
+// Timeout bounds request handling; long-lived streams listed in except
+// manage their own lifetime.
+func Timeout(d time.Duration, except ...string) func(http.Handler) http.Handler {
+	skip := make(map[string]bool, len(except))
+	for _, p := range except {
+		skip[p] = true
+	}
+	bounded := middleware.Timeout(d)
+	return func(next http.Handler) http.Handler {
+		timed := bounded(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if skip[r.URL.Path] {
+				next.ServeHTTP(w, r)
+				return
+			}
+			timed.ServeHTTP(w, r)
+		})
+	}
 }
 
 // AccessTokenParser verifies an access token's signature and registered claims.

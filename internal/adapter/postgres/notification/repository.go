@@ -230,6 +230,75 @@ func (r *Repository) CountUnread(ctx context.Context, recipientUserID uuid.UUID)
 	return n, err
 }
 
+func (r *Repository) SummarizeActive(ctx context.Context, recipientUserID uuid.UUID) ([]domain.KindSummary, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := recipientScope(ctx, []any{recipientUserID})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Query(ctx, `
+		SELECT kind,
+		       (ARRAY_AGG(severity ORDER BY CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END))[1],
+		       COUNT(*) FILTER (WHERE status='open'),
+		       COUNT(*) FILTER (WHERE status='acknowledged'),
+		       COALESCE(SUM(occurrence_count), 0),
+		       MAX(updated_at),
+		       (ARRAY_AGG(title ORDER BY updated_at DESC))[1]
+		FROM notifications
+		WHERE recipient_user_id=$1 AND status IN ('open','acknowledged')`+clause+`
+		GROUP BY kind
+		ORDER BY COUNT(*) FILTER (WHERE status='open') > 0 DESC,
+		         MIN(CASE severity WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 ELSE 2 END),
+		         MAX(updated_at) DESC`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.KindSummary
+	for rows.Next() {
+		var k domain.KindSummary
+		var sev string
+		if err := rows.Scan(&k.Kind, &sev, &k.Open, &k.Acknowledged, &k.Occurrences, &k.LatestAt, &k.Title); err != nil {
+			return nil, err
+		}
+		k.Severity = domain.Severity(sev)
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) ListEscalationCandidates(ctx context.Context, kinds []string, olderThan time.Time, limit int) ([]domain.Notification, error) {
+	if len(kinds) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 500
+	}
+	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := recipientScope(ctx, []any{olderThan, limit, kinds})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Query(ctx, `
+		SELECT `+cols+` FROM notifications
+		WHERE status='open' AND created_at < $1 AND kind = ANY($3::text[])
+		  AND NOT (meta_json ? 'escalated_from')`+clause+`
+		ORDER BY created_at ASC LIMIT $2`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Notification
+	for rows.Next() {
+		n, err := scan(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *n)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) ListOpenOlderThan(ctx context.Context, olderThan time.Time, limit int) ([]domain.Notification, error) {
 	if limit <= 0 {
 		limit = 200

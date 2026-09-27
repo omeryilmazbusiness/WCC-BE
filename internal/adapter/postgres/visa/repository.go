@@ -182,3 +182,41 @@ func (r *Repository) ListEvents(ctx context.Context, visaCaseID uuid.UUID) ([]do
 	}
 	return out, rows.Err()
 }
+
+// ListAwaitingDecision returns submitted/processing cases older than their
+// branch's visa_follow_up_days (defaultDays without a settings row).
+func (r *Repository) ListAwaitingDecision(ctx context.Context, now time.Time, defaultDays, limit int) ([]domain.FollowUpCandidate, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := pgscope.Clause(ctx, caseScope, []any{now, defaultDays, limit})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Query(ctx, `SELECT `+caseCols+`, b.owner_id FROM visa_cases v
+		JOIN bookings b ON b.id = v.booking_id
+		LEFT JOIN alert_threshold_settings ats ON ats.branch_id = v.branch_id
+		WHERE v.status IN ('submitted','processing') AND v.submitted_at IS NOT NULL
+		  AND v.submitted_at + make_interval(days => COALESCE(ats.visa_follow_up_days, $2)) <= $1`+clause+`
+		ORDER BY v.submitted_at ASC LIMIT $3`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.FollowUpCandidate
+	for rows.Next() {
+		var c domain.FollowUpCandidate
+		var status string
+		if err := rows.Scan(
+			&c.Case.ID, &c.Case.BranchID, &c.Case.BookingID, &c.Case.ParticipantID, &c.Case.CustomerID, &status,
+			&c.Case.ExternalRef, &c.Case.Notes, &c.Case.SubmittedAt, &c.Case.DecidedAt, &c.Case.ExpiresAt,
+			&c.Case.CreatedBy, &c.Case.CreatedAt, &c.Case.UpdatedAt, &c.OwnerID,
+		); err != nil {
+			return nil, err
+		}
+		c.Case.Status = domain.Status(status)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}

@@ -30,6 +30,7 @@ type createRequest struct {
 	Nationality         string          `json:"nationality"`
 	PassportNo          string          `json:"passport_no"`
 	DateOfBirth         *string         `json:"date_of_birth"`
+	PassportExpiresAt   *string         `json:"passport_expires_at"`
 	Preferences         json.RawMessage `json:"preferences"`
 	SpecialRequirements string          `json:"special_requirements"`
 	Notes               string          `json:"notes"`
@@ -44,6 +45,8 @@ type updateRequest struct {
 	PassportNo          *string         `json:"passport_no"`
 	DateOfBirth         *string         `json:"date_of_birth"`
 	ClearDOB            bool            `json:"clear_dob"`
+	PassportExpiresAt   *string         `json:"passport_expires_at"`
+	ClearPassportExpiry bool            `json:"clear_passport_expires_at"`
 	Preferences         json.RawMessage `json:"preferences"`
 	SpecialRequirements *string         `json:"special_requirements"`
 	Notes               *string         `json:"notes"`
@@ -75,10 +78,15 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid date_of_birth (YYYY-MM-DD)"))
 		return
 	}
+	passportExpiry, err := parseDOB(req.PassportExpiresAt)
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid passport_expires_at (YYYY-MM-DD)"))
+		return
+	}
 	res, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
 		FullName: req.FullName, FullNameAR: req.FullNameAR,
 		Phone: req.Phone, Email: req.Email, Nationality: req.Nationality,
-		PassportNo: req.PassportNo, DateOfBirth: dob, Preferences: req.Preferences,
+		PassportNo: req.PassportNo, DateOfBirth: dob, PassportExpiresAt: passportExpiry, Preferences: req.Preferences,
 		SpecialRequirements: req.SpecialRequirements, Notes: req.Notes, CreatedBy: claims.UserID,
 	})
 	if err != nil {
@@ -117,10 +125,16 @@ func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid date_of_birth (YYYY-MM-DD)"))
 		return
 	}
+	passportExpiry, err := parseDOB(req.PassportExpiresAt)
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid passport_expires_at (YYYY-MM-DD)"))
+		return
+	}
 	c, err := h.Svc.Update(r.Context(), appsvc.UpdateInput{
 		ID: id, FullName: req.FullName, FullNameAR: req.FullNameAR, Phone: req.Phone,
 		Email: req.Email, Nationality: req.Nationality, PassportNo: req.PassportNo,
 		DateOfBirth: dob, ClearDOB: req.ClearDOB, Preferences: req.Preferences,
+		PassportExpiresAt: passportExpiry, ClearPassportExpiry: req.ClearPassportExpiry,
 		SpecialRequirements: req.SpecialRequirements, Notes: req.Notes,
 		ActorID: claims.UserID, IP: r.RemoteAddr, UserAgent: r.UserAgent(),
 	})
@@ -311,6 +325,10 @@ func mapCustomer(c *domain.Customer) map[string]any {
 	if c.DateOfBirth != nil {
 		dob = c.DateOfBirth.Format("2006-01-02")
 	}
+	var passportExpiry any
+	if c.PassportExpiresAt != nil {
+		passportExpiry = c.PassportExpiresAt.Format("2006-01-02")
+	}
 	prefs := c.Preferences
 	if len(prefs) == 0 {
 		prefs = json.RawMessage(`{}`)
@@ -319,7 +337,7 @@ func mapCustomer(c *domain.Customer) map[string]any {
 		"id": c.ID, "branch_id": c.BranchID, "full_name": c.FullName, "full_name_ar": c.FullNameAR,
 		"phone": c.Phone, "email": c.Email, "nationality": c.Nationality,
 		"passport_no": shared.MaskedPassport(c.PassportNo), "passport_last4": shared.PassportLast4(c.PassportNo),
-		"date_of_birth": dob, "preferences": prefs,
+		"date_of_birth": dob, "passport_expires_at": passportExpiry, "preferences": prefs,
 		"special_requirements": c.SpecialRequirements, "notes": c.Notes,
 		"merged_into_id": c.MergedIntoID, "is_active": c.IsActive, "anonymized_at": c.AnonymizedAt,
 		"created_by": c.CreatedBy, "created_at": c.CreatedAt, "updated_at": c.UpdatedAt,

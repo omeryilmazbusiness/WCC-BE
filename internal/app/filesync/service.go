@@ -11,6 +11,7 @@ import (
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/filesync"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/crypto"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 )
 
 // ProviderRegistry resolves cloud file adapters (DIP).
@@ -45,7 +46,10 @@ type Service struct {
 	repo     domain.Repository
 	registry ProviderRegistry
 	vault    secretcfg.Vault
+	outbox   events.Outbox
 }
+
+func (s *Service) SetOutbox(o events.Outbox) { s.outbox = o }
 
 func NewService(repo domain.Repository, registry ProviderRegistry, secrets crypto.SecretSealer) *Service {
 	return &Service{repo: repo, registry: registry, vault: secretcfg.NewVault(secrets)}
@@ -273,6 +277,13 @@ func (s *Service) SyncNow(ctx context.Context, branchID, id, actorID uuid.UUID) 
 		c.UpdatedAt = finished
 		_ = s.repo.UpdateRun(ctx, run)
 		_ = s.repo.UpdateConnection(ctx, c)
+		connID := c.ID
+		if err := events.Record(ctx, s.outbox, events.Event{Name: events.IntegrationFailed, Payload: events.IntegrationFailedPayload{
+			BranchID: branchID, Source: "file_sync", Provider: string(c.Provider), AccountID: &connID,
+			Error: pullErr.Error(), At: finished,
+		}}); err != nil {
+			return nil, err
+		}
 		return run, nil
 	}
 

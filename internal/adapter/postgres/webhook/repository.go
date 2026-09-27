@@ -53,11 +53,11 @@ func (r *Repository) FindByExternalID(ctx context.Context, provider domain.Chann
 	var e appwebhook.Event
 	err := q.QueryRow(ctx, `
 		SELECT id, provider, external_event_id, external_account_id, integration_account_id, branch_id,
-		       signature_valid, status, error, source_ip, received_at, processed_at
+		       signature_valid, status, error, source_ip, received_at, processed_at, attempts
 		FROM webhook_events
 		WHERE provider=$1 AND external_event_id=$2 AND status <> 'rejected'`, provider, externalEventID,
 	).Scan(&e.ID, &e.Provider, &e.ExternalEventID, &e.ExternalAccountID, &e.IntegrationAccountID, &e.BranchID,
-		&e.SignatureValid, &e.Status, &e.Error, &e.SourceIP, &e.ReceivedAt, &e.ProcessedAt)
+		&e.SignatureValid, &e.Status, &e.Error, &e.SourceIP, &e.ReceivedAt, &e.ProcessedAt, &e.Attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -72,6 +72,41 @@ func (r *Repository) MarkStatus(ctx context.Context, id uuid.UUID, status, errMs
 	_, err := q.Exec(ctx, `
 		UPDATE webhook_events SET status=$2, error=$3, processed_at=$4 WHERE id=$1`, id, status, errMsg, at)
 	return err
+}
+
+func (r *Repository) MarkFailed(ctx context.Context, id uuid.UUID, errMsg string, nextRetry *time.Time, at time.Time) error {
+	_, err := tx.QuerierFrom(ctx, r.pool).Exec(ctx, `
+		UPDATE webhook_events SET status='failed', error=$2, processed_at=$3,
+			attempts = attempts + 1, next_retry_at = $4
+		WHERE id=$1`, id, errMsg, at, nextRetry)
+	return err
+}
+
+func (r *Repository) ListRetryable(ctx context.Context, now time.Time, limit int) ([]appwebhook.Event, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := tx.QuerierFrom(ctx, r.pool).Query(ctx, `
+		SELECT id, provider, external_event_id, external_account_id, integration_account_id, branch_id,
+		       signature_valid, status, error, source_ip, payload, received_at, processed_at, attempts
+		FROM webhook_events
+		WHERE status='failed' AND next_retry_at IS NOT NULL AND next_retry_at <= $1
+		ORDER BY next_retry_at ASC LIMIT $2`, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []appwebhook.Event
+	for rows.Next() {
+		var e appwebhook.Event
+		if err := rows.Scan(&e.ID, &e.Provider, &e.ExternalEventID, &e.ExternalAccountID, &e.IntegrationAccountID,
+			&e.BranchID, &e.SignatureValid, &e.Status, &e.Error, &e.SourceIP, &e.Payload, &e.ReceivedAt,
+			&e.ProcessedAt, &e.Attempts); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // PurgeWebhookEvents deletes journal rows received before cutoff.

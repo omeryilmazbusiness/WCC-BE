@@ -11,6 +11,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/revenuetarget"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
@@ -58,6 +59,8 @@ type Service struct {
 	audit  audit.Recorder
 	engine domain.Engine
 	tasks  RecoveryTaskCreator
+	outbox events.Outbox
+	alerts BehindAlerts
 }
 
 func NewService(repo domain.Repository, txm tx.Runner) *Service {
@@ -69,6 +72,13 @@ func NewService(repo domain.Repository, txm tx.Runner) *Service {
 
 func (s *Service) SetAuditor(a audit.Recorder)          { s.audit = a }
 func (s *Service) SetTaskCreator(t RecoveryTaskCreator) { s.tasks = t }
+func (s *Service) SetOutbox(o events.Outbox)            { s.outbox = o }
+func (s *Service) SetBehindAlerts(a BehindAlerts)       { s.alerts = a }
+
+// BehindAlerts tells branch managers a target is behind pace (DIP).
+type BehindAlerts interface {
+	TargetBehind(ctx context.Context, branchID uuid.UUID, p domain.Progress, deficit int64) error
+}
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Target, error) {
 	label := strings.TrimSpace(in.Label)
@@ -279,7 +289,9 @@ func (s *Service) Progress(ctx context.Context, id uuid.UUID) (*domain.Progress,
 		ForecastAmount: calc.ForecastAmount, Status: calc.Status,
 		UpdatedAt: time.Now().UTC(),
 	}
-	_ = s.repo.UpsertSnapshot(ctx, snap)
+	if err := s.saveSnapshot(ctx, t, snap); err != nil {
+		return nil, err
+	}
 
 	return &domain.Progress{
 		TargetID: t.ID, Label: t.Label, Currency: t.Currency, Metric: t.Metric,
@@ -403,6 +415,43 @@ func (s *Service) RecomputeBranch(ctx context.Context, branchID uuid.UUID) ([]do
 	return out, nil
 }
 
+// saveSnapshot stores the day's snapshot and, when the pace status moved,
+// records target.status_changed in the same transaction.
+func (s *Service) saveSnapshot(ctx context.Context, t *domain.Target, snap *domain.Snapshot) error {
+	return s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		prev, err := s.repo.LatestSnapshot(ctx, t.ID)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.UpsertSnapshot(ctx, snap); err != nil {
+			return err
+		}
+		var from domain.Status
+		if prev != nil {
+			from = prev.Status
+		}
+		if from == snap.Status || (prev == nil && snap.Status != domain.StatusBehind) {
+			return nil
+		}
+		deficit := snap.ExpectedToDate - snap.ActualAmount
+		if deficit < 0 {
+			deficit = 0
+		}
+		return events.Record(ctx, s.outbox, events.Event{Name: events.TargetStatusChanged, Payload: events.TargetStatusChangedPayload{
+			TargetID: t.ID, BranchID: t.BranchID, Label: t.Label, From: string(from), To: string(snap.Status),
+			Deficit: deficit, VariancePct: variancePct(snap.ExpectedToDate, snap.ActualAmount),
+		}})
+	})
+}
+
+// variancePct is how far actual trails expected, in whole percent.
+func variancePct(expected, actual int64) int {
+	if expected <= 0 || actual >= expected {
+		return 0
+	}
+	return int((expected - actual) * 100 / expected)
+}
+
 // CheckBehindAlerts creates recovery tasks for behind targets (once per as_of day).
 func (s *Service) CheckBehindAlerts(ctx context.Context, branchID, actorID uuid.UUID) (int, error) {
 	progresses, err := s.RecomputeBranch(ctx, branchID)
@@ -429,8 +478,15 @@ func (s *Service) CheckBehindAlerts(ctx context.Context, branchID, actorID uuid.
 		if deficit < 0 {
 			deficit = 0
 		}
-		if err := s.tasks.EnsureTargetRecoveryTask(ctx, branchID, p.TargetID, assignee, p.Label, deficit); err != nil {
-			return n, err
+		if assignee != uuid.Nil {
+			if err := s.tasks.EnsureTargetRecoveryTask(ctx, branchID, p.TargetID, assignee, p.Label, deficit); err != nil {
+				return n, err
+			}
+		}
+		if s.alerts != nil {
+			if err := s.alerts.TargetBehind(ctx, branchID, p, deficit); err != nil {
+				return n, err
+			}
 		}
 		n++
 	}

@@ -111,6 +111,9 @@ type FieldConfig struct {
 	UpdatedAt     time.Time `json:"updated_at"`
 }
 
+// MaxThresholdHours caps the hour-based alert windows (30 days).
+const MaxThresholdHours = 720
+
 // AlertThresholds are global branch alert knobs (T-227).
 type AlertThresholds struct {
 	BranchID            uuid.UUID `json:"branch_id"`
@@ -119,13 +122,18 @@ type AlertThresholds struct {
 	MissingDocHours     int       `json:"missing_doc_hours"`
 	LeadNoFollowupHours int       `json:"lead_no_followup_hours"`
 	TargetBehindPct     int       `json:"target_behind_pct"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	// SLAWarnPct (A) and SLABreachPct (B) are shares of the SLA window.
+	SLAWarnPct       int       `json:"sla_warn_pct"`
+	SLABreachPct     int       `json:"sla_breach_pct"`
+	VisaFollowUpDays int       `json:"visa_follow_up_days"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func DefaultAlertThresholds(branchID uuid.UUID) AlertThresholds {
 	return AlertThresholds{
 		BranchID: branchID, CapacitySoftPct: 80, PaymentOverdueHours: 12,
 		MissingDocHours: 24, LeadNoFollowupHours: 24, TargetBehindPct: 15,
+		SLAWarnPct: 75, SLABreachPct: 100, VisaFollowUpDays: 7,
 		UpdatedAt: time.Now().UTC(),
 	}
 }
@@ -134,11 +142,28 @@ func (a *AlertThresholds) Normalize() error {
 	if a.CapacitySoftPct < 1 || a.CapacitySoftPct > 100 {
 		return shared.NewValidation("capacity_soft_pct out of range")
 	}
-	if a.PaymentOverdueHours <= 0 || a.MissingDocHours <= 0 || a.LeadNoFollowupHours <= 0 {
-		return shared.NewValidation("hours must be > 0")
+	for _, h := range []int{a.PaymentOverdueHours, a.MissingDocHours, a.LeadNoFollowupHours} {
+		if h < 1 || h > MaxThresholdHours {
+			return shared.NewValidation("hours must be between 1 and 720")
+		}
 	}
 	if a.TargetBehindPct < 1 || a.TargetBehindPct > 100 {
 		return shared.NewValidation("target_behind_pct out of range")
+	}
+	if a.SLAWarnPct == 0 && a.SLABreachPct == 0 {
+		a.SLAWarnPct, a.SLABreachPct = 75, 100
+	}
+	if a.VisaFollowUpDays == 0 {
+		a.VisaFollowUpDays = 7
+	}
+	if a.SLAWarnPct < 10 || a.SLAWarnPct > 100 || a.SLABreachPct < 50 || a.SLABreachPct > 300 {
+		return shared.NewValidation("sla_warn_pct must be 10-100 and sla_breach_pct 50-300")
+	}
+	if a.SLAWarnPct >= a.SLABreachPct {
+		return shared.NewValidation("sla_warn_pct must be below sla_breach_pct")
+	}
+	if a.VisaFollowUpDays < 1 || a.VisaFollowUpDays > 90 {
+		return shared.NewValidation("visa_follow_up_days out of range")
 	}
 	return nil
 }

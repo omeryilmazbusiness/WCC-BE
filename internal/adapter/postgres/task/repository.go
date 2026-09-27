@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -27,7 +28,8 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 }
 
 const taskCols = `id, branch_id, title, kind, status, priority, outcome, assignee_id, related_type, related_id,
-	due_at, escalated_at, idempotency_key, created_at, updated_at, completed_at`
+	due_at, escalated_at, COALESCE(idempotency_key, ''), source_rule, created_by, overdue_notified_at,
+	created_at, updated_at, completed_at`
 
 func (r *Repository) Create(ctx context.Context, t *domain.Task) error {
 	if err := pgscope.EnsureBranch(ctx, t.BranchID); err != nil {
@@ -40,10 +42,10 @@ func (r *Repository) Create(ctx context.Context, t *domain.Task) error {
 	_, err := q.Exec(ctx, `
 		INSERT INTO tasks (
 			id, branch_id, title, kind, status, priority, outcome, assignee_id, related_type, related_id,
-			due_at, escalated_at, idempotency_key, created_at, updated_at, completed_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+			due_at, escalated_at, idempotency_key, source_rule, created_by, created_at, updated_at, completed_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		t.ID, t.BranchID, t.Title, t.Kind, t.Status, t.Priority, t.Outcome, t.AssigneeID, t.RelatedType, t.RelatedID,
-		t.DueAt, t.EscalatedAt, nullIfEmpty(t.IdempotencyKey), t.CreatedAt, t.UpdatedAt, t.CompletedAt,
+		t.DueAt, t.EscalatedAt, nullIfEmpty(t.IdempotencyKey), t.SourceRule, t.CreatedBy, t.CreatedAt, t.UpdatedAt, t.CompletedAt,
 	)
 	return err
 }
@@ -66,6 +68,7 @@ func (r *Repository) Update(ctx context.Context, t *domain.Task) error {
 	}
 	tag, err := q.Exec(ctx, `
 		UPDATE tasks SET title=$2, kind=$3, status=$4, priority=$5, outcome=$6, assignee_id=$7,
+			overdue_notified_at = CASE WHEN due_at IS DISTINCT FROM $8 THEN NULL ELSE overdue_notified_at END,
 			due_at=$8, escalated_at=$9, updated_at=$10, completed_at=$11
 		WHERE id=$1`+scope, args...)
 	if err != nil {
@@ -197,12 +200,74 @@ func (r *Repository) CountOverdue(ctx context.Context, branchID *uuid.UUID) (int
 	return n, err
 }
 
+func (r *Repository) ListOpenByRule(ctx context.Context, rule, relatedType string, relatedID uuid.UUID) ([]domain.Task, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeTasks, []any{rule, relatedType, relatedID})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Query(ctx, `SELECT `+taskCols+` FROM tasks
+		WHERE source_rule=$1 AND related_type=$2 AND related_id=$3
+		  AND status IN ('open','in_progress')`+scope, args...)
+	if err != nil {
+		return nil, err
+	}
+	return collect(rows)
+}
+
+func (r *Repository) ListOverdueUnnotified(ctx context.Context, now time.Time, limit int) ([]domain.Task, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeTasks, []any{now, limit})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Query(ctx, `SELECT `+taskCols+` FROM tasks
+		WHERE status IN ('open','in_progress') AND due_at IS NOT NULL AND due_at < $1
+		  AND overdue_notified_at IS NULL`+scope+`
+		ORDER BY due_at ASC LIMIT $2`, args...)
+	if err != nil {
+		return nil, err
+	}
+	return collect(rows)
+}
+
+func (r *Repository) MarkOverdueNotified(ctx context.Context, id uuid.UUID, at time.Time) (bool, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeTasks, []any{id, at})
+	if err != nil {
+		return false, err
+	}
+	tag, err := q.Exec(ctx, `UPDATE tasks SET overdue_notified_at=$2
+		WHERE id=$1 AND overdue_notified_at IS NULL`+scope, args...)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
+}
+
+func collect(rows pgx.Rows) ([]domain.Task, error) {
+	defer rows.Close()
+	var out []domain.Task
+	for rows.Next() {
+		t, err := scanRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *t)
+	}
+	return out, rows.Err()
+}
+
 func scan(row pgx.Row) (*domain.Task, error) {
 	var t domain.Task
 	var kind, status, priority string
 	err := row.Scan(
 		&t.ID, &t.BranchID, &t.Title, &kind, &status, &priority, &t.Outcome, &t.AssigneeID,
 		&t.RelatedType, &t.RelatedID, &t.DueAt, &t.EscalatedAt, &t.IdempotencyKey,
+		&t.SourceRule, &t.CreatedBy, &t.OverdueNotifiedAt,
 		&t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -223,6 +288,7 @@ func scanRows(rows pgx.Rows) (*domain.Task, error) {
 	err := rows.Scan(
 		&t.ID, &t.BranchID, &t.Title, &kind, &status, &priority, &t.Outcome, &t.AssigneeID,
 		&t.RelatedType, &t.RelatedID, &t.DueAt, &t.EscalatedAt, &t.IdempotencyKey,
+		&t.SourceRule, &t.CreatedBy, &t.OverdueNotifiedAt,
 		&t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
 	)
 	if err != nil {

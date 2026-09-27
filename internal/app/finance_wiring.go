@@ -12,14 +12,9 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/fxlive"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/fxprovider"
 	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
-	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgbooking "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/booking"
 	pgfx "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/fx"
-	pgnotification "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/notification"
 	pgpayment "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/payment"
-	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
-	pgtask "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/task"
-	appaudit "github.com/wodi-crm/wodi-crm-be/internal/app/audit"
 	appfx "github.com/wodi-crm/wodi-crm-be/internal/app/fx"
 	appnotification "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
 	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
@@ -29,7 +24,7 @@ import (
 	fxdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
 	notificationdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/notification"
 	paymentdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
-	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
@@ -140,7 +135,7 @@ func (n promiseNotifier) NotifyPromiseBroken(ctx context.Context, p *paymentdoma
 	_, err := n.svc.Emit(ctx, appnotification.EmitInput{
 		BranchID: p.BranchID, RecipientUserID: ownerID, Kind: notificationdomain.KindPaymentOverdue,
 		Title:      "Payment promise broken",
-		Body:       fmt.Sprintf("%d %s promised for %s was not collected", p.Amount, p.Currency, p.PromisedOn.Format(time.DateOnly)),
+		Body:       fmt.Sprintf("%s promised for %s was not collected", shared.FormatMinor(p.Amount, p.Currency), p.PromisedOn.Format(time.DateOnly)),
 		EntityType: "booking", EntityID: &bookingID, HrefHint: "/bookings/" + bookingID.String(),
 	})
 	return err
@@ -155,21 +150,8 @@ type FinanceJobs struct {
 	log      *slog.Logger
 }
 
-func NewFinanceJobs(pool *pgxpool.Pool, passports *pgpii.Passports, cfg config.Config, log *slog.Logger) *FinanceJobs {
-	txm := tx.NewManager(pool)
-	auditor := appaudit.NewService(pgaudit.NewRepository(pool))
-	paymentRepo := pgpayment.NewRepository(pool)
-	bookingRepo := pgbooking.NewRepository(pool, passports)
-	payments := apppayment.NewService(paymentRepo, bookingRepo, txm, events.NewBus(log))
-	payments.SetAuditor(auditor)
-	notifier := appnotification.NewService(pgnotification.NewRepository(pool), txm, log)
-	notifier.SetExternal(appnotification.LogExternal{Log: log})
-	fin := newFinanceModule(financeDeps{
-		Cfg: cfg, Log: log, Pool: pool, Tx: txm, Auditor: auditor, Payments: payments,
-		Repo: paymentRepo, Bookings: bookingRepo, Tasks: apptask.NewSeeder(pgtask.NewRepository(pool), txm),
-		Notifier: notifier,
-	})
-	return &FinanceJobs{fx: fin.FX, live: fin.Live, payments: payments, promises: fin.Promises, log: log}
+func newFinanceJobs(m *modules) *FinanceJobs {
+	return &FinanceJobs{fx: m.finance.FX, live: m.finance.Live, payments: m.payments, promises: m.finance.Promises, log: m.log}
 }
 
 // SyncLive handles fx.live_sync (no-op when the live board is disabled).

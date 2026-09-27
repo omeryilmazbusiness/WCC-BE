@@ -52,9 +52,14 @@ type Task struct {
 	DueAt          *time.Time
 	EscalatedAt    *time.Time
 	IdempotencyKey string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	CompletedAt    *time.Time
+	// SourceRule names the automation rule that created the task ("" = manual).
+	SourceRule string
+	// CreatedBy is the user who created a manual task (nil for automation).
+	CreatedBy         *uuid.UUID
+	OverdueNotifiedAt *time.Time
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	CompletedAt       *time.Time
 }
 
 type ListFilter struct {
@@ -185,4 +190,10 @@ type Repository interface {
 	ListByAssignee(ctx context.Context, assigneeID uuid.UUID, status *Status, limit, offset int) ([]Task, int, error)
 	ListByRelated(ctx context.Context, relatedType string, relatedID uuid.UUID) ([]Task, error)
 	CountOverdue(ctx context.Context, branchID *uuid.UUID) (int, error)
+	// ListOpenByRule returns open tasks a rule created for one record.
+	ListOpenByRule(ctx context.Context, rule, relatedType string, relatedID uuid.UUID) ([]Task, error)
+	// ListOverdueUnnotified returns open overdue tasks not yet announced.
+	ListOverdueUnnotified(ctx context.Context, now time.Time, limit int) ([]Task, error)
+	// MarkOverdueNotified stamps the announcement once; false when already stamped.
+	MarkOverdueNotified(ctx context.Context, id uuid.UUID, at time.Time) (bool, error)
 }

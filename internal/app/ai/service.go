@@ -249,8 +249,12 @@ func (s *Service) complete(ctx context.Context, st *domain.Settings, p domain.Co
 	return p.Complete(ctx, key, req)
 }
 
-// DailySummary — T-190 / T-197.
+// DailySummary — T-190 / T-197. actorID is uuid.Nil for the scheduled run.
 func (s *Service) DailySummary(ctx context.Context, branchID, actorID uuid.UUID) (map[string]any, error) {
+	var actor *uuid.UUID
+	if actorID != uuid.Nil {
+		actor = &actorID
+	}
 	facts := &DashboardFacts{}
 	if s.dash != nil {
 		f, err := s.dash.Facts(ctx, branchID)
@@ -279,7 +283,7 @@ func (s *Service) DailySummary(ctx context.Context, branchID, actorID uuid.UUID)
 			"source":     "deterministic",
 			"ai_enabled": false,
 		}
-		run, _ := s.record(ctx, branchID, &actorID, domain.KindDailySummary, nil, scope, out, hash, "skipped", "ai_not_configured")
+		run, _ := s.record(ctx, branchID, actor, domain.KindDailySummary, nil, scope, out, hash, "skipped", "ai_not_configured")
 		out["run_id"] = runID(run)
 		return out, nil
 	}
@@ -303,7 +307,7 @@ func (s *Service) DailySummary(ctx context.Context, branchID, actorID uuid.UUID)
 			"ai_enabled":     true,
 			"provider_error": trimErr(err),
 		}
-		run, _ := s.record(ctx, branchID, &actorID, domain.KindDailySummary, st, scope, out, hash, "error", err.Error())
+		run, _ := s.record(ctx, branchID, actor, domain.KindDailySummary, st, scope, out, hash, "error", err.Error())
 		out["run_id"] = runID(run)
 		return out, nil
 	}
@@ -311,7 +315,7 @@ func (s *Service) DailySummary(ctx context.Context, branchID, actorID uuid.UUID)
 	out["source"] = "ai"
 	out["model"] = resp.Model
 	out["ai_enabled"] = true
-	run, _ := s.record(ctx, branchID, &actorID, domain.KindDailySummary, st, scope, out, hash, "ok", "")
+	run, _ := s.record(ctx, branchID, actor, domain.KindDailySummary, st, scope, out, hash, "ok", "")
 	out["run_id"] = runID(run)
 	return out, nil
 }

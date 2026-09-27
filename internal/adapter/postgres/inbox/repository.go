@@ -233,7 +233,7 @@ const convSelect = `
 	c.last_inbound_at, c.last_outbound_at, c.unanswered_since, c.last_message_preview,
 	COALESCE(cu.full_name,''),
 	TRIM(BOTH ' ·' FROM CONCAT_WS(' ·', NULLIF(ci.display_name,''), NULLIF(ci.phone,''), NULLIF(ci.email,''))),
-	c.created_at, c.updated_at`
+	c.created_at, c.updated_at, c.sla_warned_at`
 
 func scanConv(row pgx.Row) (*domain.Conversation, error) {
 	var c domain.Conversation
@@ -242,7 +242,7 @@ func scanConv(row pgx.Row) (*domain.Conversation, error) {
 		&c.CustomerID, &c.LeadID, &c.OwnerID, &c.OwnerName,
 		&c.Subject, &c.Status, &c.SLAStartedAt, &c.SLADueAt, &c.SLABreachedAt, &c.SLAStoppedAt,
 		&c.LastInboundAt, &c.LastOutboundAt, &c.UnansweredSince, &c.LastMessagePreview,
-		&c.CustomerName, &c.IdentityLabel, &c.CreatedAt, &c.UpdatedAt,
+		&c.CustomerName, &c.IdentityLabel, &c.CreatedAt, &c.UpdatedAt, &c.SLAWarnedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -287,6 +287,7 @@ func (r *Repository) UpdateConversation(ctx context.Context, c *domain.Conversat
 	ct, err := q.Exec(ctx, `
 		UPDATE conversations c SET
 			customer_id=$2, lead_id=$3, owner_id=$4, subject=$5, status=$6,
+			sla_warned_at = CASE WHEN c.sla_started_at IS DISTINCT FROM $7 THEN NULL ELSE c.sla_warned_at END,
 			sla_started_at=$7, sla_due_at=$8, sla_breached_at=$9, sla_stopped_at=$10,
 			last_inbound_at=$11, last_outbound_at=$12, unanswered_since=$13,
 			last_message_preview=$14, updated_at=$15
@@ -541,9 +542,13 @@ func (r *Repository) FirstResponseSeconds(ctx context.Context, branchID uuid.UUI
 	return secs, err
 }
 
-func (r *Repository) ListDueForSLABreach(ctx context.Context, now time.Time, limit int) ([]domain.Conversation, error) {
+func (r *Repository) ListDueForSLA(ctx context.Context, stage domain.SLAStage, now time.Time, limit int) ([]domain.Conversation, error) {
+	pctCol, pctDefault, pending := "ats.sla_breach_pct", domain.DefaultSLABreachPct, "c.sla_breached_at IS NULL"
+	if stage == domain.SLAWarning {
+		pctCol, pctDefault, pending = "ats.sla_warn_pct", domain.DefaultSLAWarnPct, "c.sla_warned_at IS NULL AND c.sla_breached_at IS NULL"
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
-	clause, args, err := pgscope.Clause(ctx, convScope, []any{now, limit})
+	clause, args, err := pgscope.Clause(ctx, convScope, []any{now, limit, pctDefault})
 	if err != nil {
 		return nil, err
 	}
@@ -553,8 +558,10 @@ func (r *Repository) ListDueForSLABreach(ctx context.Context, now time.Time, lim
 		LEFT JOIN users u ON u.id = c.owner_id
 		LEFT JOIN customers cu ON cu.id = c.customer_id
 		LEFT JOIN channel_identities ci ON ci.id = c.channel_identity_id
-		WHERE c.status='open' AND c.sla_stopped_at IS NULL AND c.sla_breached_at IS NULL
-		  AND c.sla_due_at IS NOT NULL AND c.sla_due_at < $1`+clause+`
+		LEFT JOIN alert_threshold_settings ats ON ats.branch_id = c.branch_id
+		WHERE c.status='open' AND c.sla_stopped_at IS NULL AND `+pending+`
+		  AND c.sla_started_at IS NOT NULL AND c.sla_due_at IS NOT NULL
+		  AND c.sla_started_at + (c.sla_due_at - c.sla_started_at) * (COALESCE(`+pctCol+`, $3)::float8 / 100) <= $1`+clause+`
 		ORDER BY c.sla_due_at ASC
 		LIMIT $2`, args...)
 	if err != nil {
@@ -572,13 +579,21 @@ func (r *Repository) ListDueForSLABreach(ctx context.Context, now time.Time, lim
 	return out, rows.Err()
 }
 
-func (r *Repository) MarkSLABreached(ctx context.Context, id uuid.UUID, at time.Time) error {
+// MarkSLAStage stamps the stage once; false means another sweep got there first.
+func (r *Repository) MarkSLAStage(ctx context.Context, stage domain.SLAStage, id uuid.UUID, at time.Time) (bool, error) {
+	col := "sla_breached_at"
+	if stage == domain.SLAWarning {
+		col = "sla_warned_at"
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	clause, args, err := pgscope.Clause(ctx, convScope, []any{id, at})
 	if err != nil {
-		return err
+		return false, err
 	}
-	_, err = q.Exec(ctx, `
-		UPDATE conversations c SET sla_breached_at=$2, updated_at=$2 WHERE c.id=$1 AND c.sla_breached_at IS NULL`+clause, args...)
-	return err
+	tag, err := q.Exec(ctx, `
+		UPDATE conversations c SET `+col+`=$2, updated_at=$2 WHERE c.id=$1 AND c.`+col+` IS NULL`+clause, args...)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }

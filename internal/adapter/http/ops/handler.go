@@ -32,6 +32,7 @@ type Handler struct {
 	Queue    shared.QueueInspector
 	Cleanup  SecurityCleaner
 	Backfill EncryptBackfiller
+	Outbox   OutboxAdmin
 }
 
 func (h Handler) QueueStats(w http.ResponseWriter, r *http.Request) {

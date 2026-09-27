@@ -174,12 +174,22 @@ func (m *memRepo) ListMessages(_ context.Context, conversationID uuid.UUID, _ in
 func (m *memRepo) FirstResponseSeconds(context.Context, uuid.UUID, domain.Channel) (int, error) {
 	return 900, nil
 }
-func (m *memRepo) ListDueForSLABreach(_ context.Context, now time.Time, limit int) ([]domain.Conversation, error) {
+func (m *memRepo) ListDueForSLA(_ context.Context, stage domain.SLAStage, now time.Time, limit int) ([]domain.Conversation, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	pct := domain.DefaultSLABreachPct
+	if stage == domain.SLAWarning {
+		pct = domain.DefaultSLAWarnPct
+	}
 	var out []domain.Conversation
 	for _, c := range m.convs {
-		if c.Status == domain.StatusOpen && c.SLABreachedAt == nil && c.SLAStoppedAt == nil && c.SLADueAt != nil && now.After(*c.SLADueAt) {
+		if c.Status != domain.StatusOpen || c.SLABreachedAt != nil || c.SLAStoppedAt != nil || c.SLAStartedAt == nil || c.SLADueAt == nil {
+			continue
+		}
+		if stage == domain.SLAWarning && c.SLAWarnedAt != nil {
+			continue
+		}
+		if !domain.SLAThresholdAt(*c.SLAStartedAt, *c.SLADueAt, pct).After(now) {
 			out = append(out, *c)
 			if len(out) >= limit {
 				break
@@ -188,13 +198,22 @@ func (m *memRepo) ListDueForSLABreach(_ context.Context, now time.Time, limit in
 	}
 	return out, nil
 }
-func (m *memRepo) MarkSLABreached(_ context.Context, id uuid.UUID, at time.Time) error {
+func (m *memRepo) MarkSLAStage(_ context.Context, stage domain.SLAStage, id uuid.UUID, at time.Time) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if c := m.convs[id]; c != nil {
-		c.SLABreachedAt = &at
+	c := m.convs[id]
+	if c == nil {
+		return false, nil
 	}
-	return nil
+	field := &c.SLABreachedAt
+	if stage == domain.SLAWarning {
+		field = &c.SLAWarnedAt
+	}
+	if *field != nil {
+		return false, nil
+	}
+	*field = &at
+	return true, nil
 }
 
 type noopTx struct{}
@@ -238,10 +257,11 @@ func TestSLABreach(t *testing.T) {
 	repo := newMem()
 	reg := integration.NewRegistry(stub.New())
 	svc := inbox.NewService(repo, reg, noopTx{}, nil)
+	started := time.Now().UTC().Add(-2 * time.Hour)
 	past := time.Now().UTC().Add(-time.Hour)
 	id := uuid.New()
 	_ = repo.CreateConversation(context.Background(), &domain.Conversation{
-		ID: id, BranchID: uuid.New(), Channel: domain.ChannelStub, Status: domain.StatusOpen, SLADueAt: &past,
+		ID: id, BranchID: uuid.New(), Channel: domain.ChannelStub, Status: domain.StatusOpen, SLAStartedAt: &started, SLADueAt: &past,
 	})
 	n, err := svc.CheckSLABreaches(context.Background(), 10)
 	if err != nil {
@@ -249,5 +269,38 @@ func TestSLABreach(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("want 1 breach, got %d", n)
+	}
+	if n, _ := svc.CheckSLABreaches(context.Background(), 10); n != 0 {
+		t.Fatalf("breach must be stamped once, got %d", n)
+	}
+}
+
+func TestSLAWarningThenBreach(t *testing.T) {
+	repo := newMem()
+	svc := inbox.NewService(repo, integration.NewRegistry(stub.New()), noopTx{}, nil)
+	now := time.Now().UTC()
+	started := now.Add(-8 * time.Minute) // 80% of a 10 minute window
+	due := started.Add(10 * time.Minute)
+	id := uuid.New()
+	_ = repo.CreateConversation(context.Background(), &domain.Conversation{
+		ID: id, BranchID: uuid.New(), Channel: domain.ChannelStub, Status: domain.StatusOpen, SLAStartedAt: &started, SLADueAt: &due,
+	})
+	warned, breached, err := svc.CheckSLA(context.Background(), 10)
+	if err != nil || warned != 1 || breached != 0 {
+		t.Fatalf("warned=%d breached=%d err=%v", warned, breached, err)
+	}
+	if warned, _, _ := svc.CheckSLA(context.Background(), 10); warned != 0 {
+		t.Fatalf("warning must fire once, got %d", warned)
+	}
+}
+
+func TestSLAThresholdAt(t *testing.T) {
+	start := time.Date(2026, 9, 27, 10, 0, 0, 0, time.UTC)
+	due := start.Add(20 * time.Minute)
+	if got := domain.SLAThresholdAt(start, due, 75); !got.Equal(start.Add(15 * time.Minute)) {
+		t.Fatalf("75%%: %s", got)
+	}
+	if got := domain.SLAThresholdAt(start, due, 150); !got.Equal(start.Add(30 * time.Minute)) {
+		t.Fatalf("150%%: %s", got)
 	}
 }

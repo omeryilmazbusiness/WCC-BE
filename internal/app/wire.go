@@ -2,18 +2,14 @@ package app
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 
-	aiprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/ai"
-	extintadapter "github.com/wodi-crm/wodi-crm-be/internal/adapter/extint"
-	filesyncprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/filesync"
 	httpadapter "github.com/wodi-crm/wodi-crm-be/internal/adapter/http"
 	adminconfighttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/adminconfig"
 	aihttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ai"
@@ -38,296 +34,123 @@ import (
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
 	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
 	searchhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/search"
+	streamhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/stream"
 	supplierhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/supplier"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
 	visahttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/visa"
-	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
-	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/email"
-	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/instagram"
-	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/stub"
-	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/whatsapp"
-	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
-	pgadminconfig "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/adminconfig"
-	pgai "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/ai"
-	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgbooking "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/booking"
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
-	pgdocument "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/document"
-	pgextint "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/extint"
-	pgfilesync "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/filesync"
 	pgidentity "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/identity"
-	pgimportexport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/importexport"
 	pginbox "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/inbox"
 	pglead "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/lead"
-	pgnotification "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/notification"
-	pgpayment "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/payment"
-	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
-	pgreport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/report"
-	pgrevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/revenuetarget"
-	pgrooming "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/rooming"
-	pgsearch "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/search"
-	pgsupplier "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/supplier"
+	pgrealtime "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/realtime"
 	pgtask "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/task"
-	pkgpg "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/tourpackage"
-	pgvisa "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/visa"
-	pgwebhook "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/queue"
-	"github.com/wodi-crm/wodi-crm-be/internal/adapter/sessioncache"
-	"github.com/wodi-crm/wodi-crm-be/internal/adapter/storage"
-	appadminconfig "github.com/wodi-crm/wodi-crm-be/internal/app/adminconfig"
 	appai "github.com/wodi-crm/wodi-crm-be/internal/app/ai"
-	appaudit "github.com/wodi-crm/wodi-crm-be/internal/app/audit"
 	appbooking "github.com/wodi-crm/wodi-crm-be/internal/app/booking"
-	appcustomer "github.com/wodi-crm/wodi-crm-be/internal/app/customer"
 	appdashboard "github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
-	appdocument "github.com/wodi-crm/wodi-crm-be/internal/app/document"
-	appextint "github.com/wodi-crm/wodi-crm-be/internal/app/extint"
-	appfilesync "github.com/wodi-crm/wodi-crm-be/internal/app/filesync"
-	appimportexport "github.com/wodi-crm/wodi-crm-be/internal/app/importexport"
 	appinbox "github.com/wodi-crm/wodi-crm-be/internal/app/inbox"
 	applead "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
 	appnotification "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
-	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
-	appreport "github.com/wodi-crm/wodi-crm-be/internal/app/report"
-	"github.com/wodi-crm/wodi-crm-be/internal/app/retention"
+	appoutbox "github.com/wodi-crm/wodi-crm-be/internal/app/outbox"
+	"github.com/wodi-crm/wodi-crm-be/internal/app/realtime"
 	apprevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/app/revenuetarget"
-	approoming "github.com/wodi-crm/wodi-crm-be/internal/app/rooming"
-	appsearch "github.com/wodi-crm/wodi-crm-be/internal/app/search"
-	appsupplier "github.com/wodi-crm/wodi-crm-be/internal/app/supplier"
 	apptask "github.com/wodi-crm/wodi-crm-be/internal/app/task"
-	apppkg "github.com/wodi-crm/wodi-crm-be/internal/app/tourpackage"
-	appuser "github.com/wodi-crm/wodi-crm-be/internal/app/useradmin"
-	appvisa "github.com/wodi-crm/wodi-crm-be/internal/app/visa"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	domainai "github.com/wodi-crm/wodi-crm-be/internal/domain/ai"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
-	domaininbox "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	taskdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/task"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
-	"github.com/wodi-crm/wodi-crm-be/internal/platform/crypto"
-	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
-	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
-	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
-// Application is the composition root (Dependency Injection).
+// Realtime hub bounds per API process.
+const (
+	streamBuffer    = 32
+	maxStreams      = 2000
+	streamHeartbeat = 25 * time.Second
+)
+
+// Application is the API composition root (Dependency Injection).
 type Application struct {
 	Cfg    config.Config
 	Log    *slog.Logger
 	Pool   *pgxpool.Pool
 	Server *http.Server
-	Queue  *queue.AsynqClient
-	redis  *redis.Client
+	Queue  *queue.Client
+	mods   *modules
+	stop   context.CancelFunc
 }
 
 func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application, error) {
-	pool, err := database.NewPool(ctx, cfg.Database)
+	m, err := buildModules(ctx, cfg, log)
 	if err != nil {
-		return nil, fmt.Errorf("database: %w", err)
+		return nil, err
 	}
-
-	txm := tx.NewManager(pool)
-	bus := events.NewBus(log)
-	tokens, err := platformauth.NewTokenServiceFromConfig(cfg.Auth)
-	if err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("access tokens: %w", err)
-	}
-	store := storage.NewMinIO(cfg.Storage)
-	q := queue.NewAsynqClient(cfg.Redis, log)
-	keyring, err := NewKeyring(cfg.Auth)
-	if err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("encryption keyring: %w", err)
-	}
-	secretBox := crypto.NewSecretBox(keyring)
-	passports := pgpii.NewPassports(keyring)
-	limiter, rdb := newRateLimiter(cfg.Redis, log)
-
-	identityRepo := pgidentity.NewRepository(pool)
-	auditRepo := pgaudit.NewRepository(pool)
-	customerRepo := pgcustomer.NewRepository(pool, passports)
-	leadRepo := pglead.NewRepository(pool)
-	bookingRepo := pgbooking.NewRepository(pool, passports)
-	paymentRepo := pgpayment.NewRepository(pool)
-	taskRepo := pgtask.NewRepository(pool)
-	pkgRepo := pkgpg.NewRepository(pool)
-	docRepo := pgdocument.NewRepository(pool)
-	visaRepo := pgvisa.NewRepository(pool)
-	supplierRepo := pgsupplier.NewRepository(pool)
-	dashAgg := pgdash.NewDashboardAggregator(pool)
-	inboxRepo := pginbox.NewRepository(pool)
-	providers := integration.NewRegistry(
-		stub.New(),
-		whatsapp.New(),
-		instagram.New(),
-		email.New(),
-		stub.NewNamed(domaininbox.ChannelFacebook, "ok", ""),
-		stub.NewNamed(domaininbox.ChannelGmail, "ok", ""),
-	)
-
-	auditSvc := appaudit.NewService(auditRepo)
-	auditor := auditSvc
-	securityRepo := pgidentity.NewSecurityRepository(identityRepo)
-	sessionCheck := sessioncache.New(securityRepo, cfg.Auth.SessionCheckCacheTTL, sessioncache.DefaultMaxEntries)
-	authSvc := newAuthService(cfg, identityRepo, securityRepo, auditor, tokens, txm, keyring, limiter, sessionCheck)
-	userSvc := appuser.NewService(identityRepo, auditSvc, txm, sessionCheck)
-	retentionSvc := retention.NewService(securityRepo, pgwebhook.NewRepository(pool), auditor, retention.DefaultPolicy)
-	customerSvc := appcustomer.NewService(customerRepo, txm)
-	customerSvc.SetAuditor(auditSvc)
-	leadSvc := applead.NewService(leadRepo, txm, bus)
-	leadSvc.SetAuditor(auditSvc)
-	bookingSvc := appbooking.NewService(bookingRepo, bookingRepo, pkgRepo, txm, bus)
-	bookingSvc.SetAuditor(auditSvc)
-	bookingSvc.SetTimeZone(businessLocation(cfg))
-	leadSvc.SetBookingCreator(leadBookingBridge{svc: bookingSvc})
-	paymentSvc := apppayment.NewService(paymentRepo, bookingRepo, txm, bus)
-	paymentSvc.SetAuditor(auditSvc)
-	taskSvc := apptask.NewService(taskRepo, txm, bus)
-	taskSvc.SetConversationReader(taskConvBridge{repo: inboxRepo})
-	taskSeeder := apptask.NewSeeder(taskRepo, txm)
-	paymentSvc.SetTaskCreator(taskSeeder)
-	appbooking.NewLifecycle(bookingSvc, taskSeeder).Register(bus)
-	targetRepo := pgrevenuetarget.NewRepository(pool)
-	targetSvc := apprevenuetarget.NewService(targetRepo, txm)
-	targetSvc.SetAuditor(auditSvc)
-	targetSvc.SetTaskCreator(taskSeeder)
-	targetReactor := apprevenuetarget.NewReactor(targetSvc, bookingRepo)
-	targetReactor.Register(bus)
-	pkgSvc := apppkg.NewService(pkgRepo, txm)
-	pkgSvc.SetAuditor(auditSvc)
-	pkgSvc.SetBookingReader(bookingRepo)
-	dashSvc := appdashboard.NewService(dashAgg)
-	docSvc := appdocument.NewService(docRepo, store, txm)
-	docSvc.SetAuditor(auditSvc)
-	docSvc.SetBookingContext(bookingDocsBridge{repo: bookingRepo})
-	docSvc.SetEnqueuer(q)
-	bookingSvc.SetDocReadiness(docSvc)
-	visaSvc := appvisa.NewService(visaRepo, txm)
-	supplierSvc := appsupplier.NewService(supplierRepo, txm)
-	supplierSvc.SetEnqueuer(q)
-	notifRepo := pgnotification.NewRepository(pool)
-	notifSvc := appnotification.NewService(notifRepo, txm, log)
-	notifSvc.SetUserDirectory(identityDirectory{repo: identityRepo})
-	notifSvc.SetExternal(appnotification.LogExternal{Log: log})
-	notifReactor := appnotification.NewReactor(notifSvc)
-	notifReactor.Register(bus)
-	finance := newFinanceModule(financeDeps{
-		Cfg: cfg, Log: log, Pool: pool, Tx: txm, Auditor: auditSvc, Payments: paymentSvc,
-		Repo: paymentRepo, Bookings: bookingRepo, Tasks: taskSeeder, Notifier: notifSvc,
-	})
-	paymentSvc.RegisterReactors(bus)
-	reportRepo := pgreport.NewRepository(pool)
-	reportSvc := appreport.NewService(reportRepo)
-	aiRepo := pgai.NewRepository(pool)
-	aiReg := aiprovider.NewRegistry(
-		aiprovider.NewOpenAI(),
-		aiprovider.NewAnthropic(),
-		aiprovider.NewGemini(),
-	)
-	aiSvc := appai.NewService(aiRepo, aiReg, secretBox)
-	aiSvc.SetAuditor(auditSvc)
-	aiSvc.SetLeadPriorityWriter(aiRepo)
-	aiSvc.SetDashboardReader(aiDashBridge{dash: dashSvc})
-	aiSvc.SetConversationReader(aiInboxBridge{repo: inboxRepo})
-	aiSvc.SetLeadReader(aiLeadBridge{repo: leadRepo, tasks: taskRepo})
-	aiSvc.SetTargetReader(aiTargetBridge{svc: targetSvc})
-	fileSyncRepo := pgfilesync.NewRepository(pool)
-	fileSyncReg := filesyncprovider.NewRegistry(
-		filesyncprovider.NewOneDrive(),
-		filesyncprovider.NewSharePoint(),
-	)
-	fileSyncSvc := appfilesync.NewService(fileSyncRepo, fileSyncReg, secretBox)
-	extIntRepo := pgextint.NewRepository(pool)
-	extIntReg := extintadapter.DefaultRegistry()
-	extIntSvc := appextint.NewService(extIntRepo, extIntReg, extintadapter.Catalog(), secretBox)
-	inboxSvc := appinbox.NewService(inboxRepo, providers, txm, bus)
-	inboxSvc.SetSecrets(secretBox, keyring)
-	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
-	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
-
-	adminConfigRepo := pgadminconfig.NewRepository(pool)
-	adminConfigSvc := appadminconfig.NewService(adminConfigRepo, txm)
-	adminConfigSvc.SetAuditor(auditSvc)
-	roomingRepo := pgrooming.NewRepository(pool, passports)
-	roomingSvc := approoming.NewService(roomingRepo)
-	searchRepo := pgsearch.NewRepository(pool, passports)
-	searchSvc := appsearch.NewService(searchRepo)
-
-	importRepo := pgimportexport.NewRepository(pool, passports)
-	importSvc := appimportexport.NewService(importRepo, customerRepo, txm)
-	importSvc.SetEnqueuer(q)
-	importSvc.SetQueueMode(q)
-	backfillSvc := newEncryptBackfill(pool, keyring, auditSvc)
-	privacySvc := newPrivacyService(pool, customerRepo, bookingRepo, txm, auditSvc, limiter)
-
-	taskSeeder.Register(bus)
-	taskReactor := apptask.NewReactor(taskRepo, bookingRepo, txm)
-	taskReactor.Register(bus)
+	hub := realtime.NewHub(streamBuffer, maxStreams)
+	listenCtx, stop := context.WithCancel(context.Background())
+	go pgrealtime.Listen(listenCtx, m.pool, hub, log)
+	streamsClosing := make(chan struct{})
 
 	handlers := httpadapter.Handlers{
 		Health: health.Handler{
-			DB:      pool,
-			Queue:   q,
+			DB:      m.pool,
+			Queue:   m.queue,
 			Version: cfg.App.Version,
 			Env:     cfg.App.Env,
 		},
-		Auth:         authhttp.Handler{Svc: authSvc},
-		Users:        usershttp.Handler{Svc: userSvc},
-		Audit:        audithttp.Handler{Svc: auditSvc},
-		Customer:     customerhttp.Handler{Svc: customerSvc},
-		Lead:         leadhttp.Handler{Svc: leadSvc},
-		Booking:      bookinghttp.Handler{Svc: bookingSvc},
-		Payment:      paymenthttp.Handler{Svc: paymentSvc, Promises: finance.Promises},
-		FX:           fxhttp.Handler{Svc: finance.FX},
-		FXLive:       liveHandler(finance.Live),
-		Target:       targethttp.Handler{Svc: targetSvc},
-		Task:         taskhttp.Handler{Svc: taskSvc},
-		Dashboard:    dashboardhttp.Handler{Svc: dashSvc},
-		Document:     documenthttp.Handler{Svc: docSvc},
-		Visa:         visahttp.Handler{Svc: visaSvc},
-		Supplier:     supplierhttp.Handler{Svc: supplierSvc},
-		Package:      pkghttp.Handler{Svc: pkgSvc},
-		Ops:          opshttp.Handler{Queue: q, Cleanup: retentionSvc, Backfill: backfillSvc},
-		Inbox:        inboxhttp.Handler{Svc: inboxSvc},
-		Import:       importhttp.Handler{Svc: importSvc},
-		Notification: notificationhttp.Handler{Svc: notifSvc},
-		Report:       reporthttp.Handler{Svc: reportSvc},
-		AI:           aihttp.Handler{Svc: aiSvc},
-		FileSync:     filesynchttp.Handler{Svc: fileSyncSvc},
-		ExtInt:       extinthttp.Handler{Svc: extIntSvc},
-		AdminConfig:  adminconfighttp.Handler{Svc: adminConfigSvc},
-		Rooming:      roominghttp.Handler{Svc: roomingSvc},
-		Search:       searchhttp.Handler{Svc: searchSvc},
-		Privacy:      privacyhttp.Handler{Svc: privacySvc},
-		Webhook:      newWebhookHandler(cfg, log, pool, appinbox.NewWebhookAccounts(inboxRepo, secretBox, keyring), inboxSvc, auditor, limiter),
+		Auth:         authhttp.Handler{Svc: m.auth},
+		Users:        usershttp.Handler{Svc: m.users},
+		Audit:        audithttp.Handler{Svc: m.audit},
+		Customer:     customerhttp.Handler{Svc: m.customers},
+		Lead:         leadhttp.Handler{Svc: m.leads},
+		Booking:      bookinghttp.Handler{Svc: m.bookings},
+		Payment:      paymenthttp.Handler{Svc: m.payments, Promises: m.finance.Promises},
+		FX:           fxhttp.Handler{Svc: m.finance.FX},
+		FXLive:       liveHandler(m.finance.Live),
+		Target:       targethttp.Handler{Svc: m.targets},
+		Task:         taskhttp.Handler{Svc: m.tasks},
+		Dashboard:    dashboardhttp.Handler{Svc: m.dashboard},
+		Document:     documenthttp.Handler{Svc: m.documents},
+		Visa:         visahttp.Handler{Svc: m.visas},
+		Supplier:     supplierhttp.Handler{Svc: m.suppliers},
+		Package:      pkghttp.Handler{Svc: m.packages},
+		Ops:          opshttp.Handler{Queue: m.queue, Cleanup: m.retention, Backfill: m.backfill, Outbox: appoutbox.NewAdmin(m.outboxRepo)},
+		Inbox:        inboxhttp.Handler{Svc: m.inbox},
+		Import:       importhttp.Handler{Svc: m.imports},
+		Notification: notificationhttp.Handler{Svc: m.notify},
+		Report:       reporthttp.Handler{Svc: m.reports, Schedules: m.schedules},
+		AI:           aihttp.Handler{Svc: m.ai},
+		FileSync:     filesynchttp.Handler{Svc: m.fileSync},
+		ExtInt:       extinthttp.Handler{Svc: m.extInt},
+		AdminConfig:  adminconfighttp.Handler{Svc: m.adminConfig},
+		Rooming:      roominghttp.Handler{Svc: m.rooming},
+		Search:       searchhttp.Handler{Svc: m.search},
+		Privacy:      privacyhttp.Handler{Svc: m.privacy},
+		Webhook:      newWebhookHandler(cfg, m.webhooks, m.limiter),
+		Stream:       streamhttp.Handler{Hub: hub, Heartbeat: streamHeartbeat, Closing: streamsClosing},
 	}
-
-	router := httpadapter.NewRouter(cfg, tokens, sessionCheck, handlers)
 
 	srv := &http.Server{
 		Addr:         cfg.HTTP.Addr,
-		Handler:      router,
+		Handler:      httpadapter.NewRouter(cfg, m.tokens, m.sessionCheck, handlers),
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 		IdleTimeout:  cfg.HTTP.IdleTimeout,
 	}
-
-	return &Application{Cfg: cfg, Log: log, Pool: pool, Server: srv, Queue: q, redis: rdb}, nil
+	var closeStreams sync.Once
+	srv.RegisterOnShutdown(func() { closeStreams.Do(func() { close(streamsClosing) }) })
+	return &Application{Cfg: cfg, Log: log, Pool: m.pool, Server: srv, Queue: m.queue, mods: m, stop: stop}, nil
 }
 
 func (a *Application) Close() {
-	if a.Queue != nil {
-		_ = a.Queue.Close()
+	if a.stop != nil {
+		a.stop()
 	}
-	if a.redis != nil {
-		_ = a.redis.Close()
-	}
-	if a.Pool != nil {
-		a.Pool.Close()
+	if a.mods != nil {
+		a.mods.close()
 	}
 }
 

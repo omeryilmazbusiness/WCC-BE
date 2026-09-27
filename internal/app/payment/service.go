@@ -90,14 +90,26 @@ type FinanceDeps struct {
 }
 
 type Service struct {
-	payments domain.Repository
-	bookings bookingdomain.Repository
-	tx       tx.Runner
-	bus      *events.Bus
-	audit    audit.Recorder
-	tasks    PaymentDueTaskCreator
-	fin      FinanceDeps
+	payments  domain.Repository
+	bookings  bookingdomain.Repository
+	tx        tx.Runner
+	bus       *events.Bus
+	outbox    events.Outbox
+	audit     audit.Recorder
+	tasks     PaymentDueTaskCreator
+	dueAlerts PaymentDueAlerts
+	fin       FinanceDeps
 }
+
+// PaymentDueAlerts tells the booking owner a scheduled payment is due (DIP).
+type PaymentDueAlerts interface {
+	PaymentDue(ctx context.Context, branchID, bookingID, ownerID uuid.UUID, dueAt time.Time, amount int64, currency string) error
+}
+
+// SetOutbox enables durable payment.reversed events.
+func (s *Service) SetOutbox(o events.Outbox) { s.outbox = o }
+
+func (s *Service) SetDueAlerts(a PaymentDueAlerts) { s.dueAlerts = a }
 
 func NewService(
 	payments domain.Repository,
@@ -271,6 +283,11 @@ func (s *Service) Reverse(ctx context.Context, in ReverseInput) (*domain.Payment
 		}
 		if err := s.recordPayment(ctx, in.ActorID, "payment.reversed", p, b, nil, money,
 			map[string]any{"reversed_entry": paymentSnapshot(orig)}); err != nil {
+			return err
+		}
+		if err := events.Record(ctx, s.outbox, events.Event{Name: events.PaymentReversed, Payload: events.PaymentReversedPayload{
+			PaymentID: orig.ID, ReversalID: p.ID, BookingID: b.ID, BranchID: b.BranchID, Amount: orig.Amount, Currency: orig.Currency,
+		}}); err != nil {
 			return err
 		}
 		out = p
@@ -759,10 +776,17 @@ func (s *Service) ProcessPaymentDueReminders(ctx context.Context, within time.Du
 			continue
 		}
 		if s.tasks != nil {
-			_ = s.tasks.EnsurePaymentDueTask(ctx, b.BranchID, sc.BookingID, b.OwnerID, sc.DueAt, sc.Amount, sc.Currency)
+			if err := s.tasks.EnsurePaymentDueTask(ctx, b.BranchID, sc.BookingID, b.OwnerID, sc.DueAt, sc.Amount, sc.Currency); err != nil {
+				return n, err
+			}
+		}
+		if s.dueAlerts != nil {
+			if err := s.dueAlerts.PaymentDue(ctx, b.BranchID, sc.BookingID, b.OwnerID, sc.DueAt, sc.Amount, sc.Currency); err != nil {
+				return n, err
+			}
 		}
 		if err := s.payments.MarkReminderSent(ctx, sc.ID, now); err != nil {
-			continue
+			return n, err
 		}
 		n++
 	}

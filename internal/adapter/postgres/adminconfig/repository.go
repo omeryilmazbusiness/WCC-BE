@@ -345,10 +345,12 @@ func (r *Repository) GetAlertThresholds(ctx context.Context, branchID uuid.UUID)
 	var a domain.AlertThresholds
 	err := q.QueryRow(ctx, `
 		SELECT branch_id, capacity_soft_pct, payment_overdue_hours, missing_doc_hours,
-			lead_no_followup_hours, target_behind_pct, updated_at
+			lead_no_followup_hours, target_behind_pct, sla_warn_pct, sla_breach_pct,
+			visa_follow_up_days, updated_at
 		FROM alert_threshold_settings WHERE branch_id=$1`, branchID).Scan(
 		&a.BranchID, &a.CapacitySoftPct, &a.PaymentOverdueHours, &a.MissingDocHours,
-		&a.LeadNoFollowupHours, &a.TargetBehindPct, &a.UpdatedAt,
+		&a.LeadNoFollowupHours, &a.TargetBehindPct, &a.SLAWarnPct, &a.SLABreachPct,
+		&a.VisaFollowUpDays, &a.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -367,17 +369,22 @@ func (r *Repository) UpsertAlertThresholds(ctx context.Context, a *domain.AlertT
 	_, err := q.Exec(ctx, `
 		INSERT INTO alert_threshold_settings (
 			branch_id, capacity_soft_pct, payment_overdue_hours, missing_doc_hours,
-			lead_no_followup_hours, target_behind_pct, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7)
+			lead_no_followup_hours, target_behind_pct, sla_warn_pct, sla_breach_pct,
+			visa_follow_up_days, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		ON CONFLICT (branch_id) DO UPDATE SET
 			capacity_soft_pct = EXCLUDED.capacity_soft_pct,
 			payment_overdue_hours = EXCLUDED.payment_overdue_hours,
 			missing_doc_hours = EXCLUDED.missing_doc_hours,
 			lead_no_followup_hours = EXCLUDED.lead_no_followup_hours,
 			target_behind_pct = EXCLUDED.target_behind_pct,
+			sla_warn_pct = EXCLUDED.sla_warn_pct,
+			sla_breach_pct = EXCLUDED.sla_breach_pct,
+			visa_follow_up_days = EXCLUDED.visa_follow_up_days,
 			updated_at = EXCLUDED.updated_at`,
 		a.BranchID, a.CapacitySoftPct, a.PaymentOverdueHours, a.MissingDocHours,
-		a.LeadNoFollowupHours, a.TargetBehindPct, a.UpdatedAt,
+		a.LeadNoFollowupHours, a.TargetBehindPct, a.SLAWarnPct, a.SLABreachPct,
+		a.VisaFollowUpDays, a.UpdatedAt,
 	)
 	return err
 }

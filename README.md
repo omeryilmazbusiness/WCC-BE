@@ -789,6 +789,61 @@ records `capacity_sold_before/after`.
 - Deferred: automatic `travelled → completed` after `return_date`, hold extension endpoint, recompute on document
   review (covered by the hourly sweep).
 
+## Epic 22 — Automation, events & realtime
+
+| Task | Status |
+|------|--------|
+| T-279 Cron scheduler (`SCHEDULER_TZ`, per-job `SCHEDULE_<JOB>` override / `off`) | Done |
+| T-280 Real worker handlers (expiry reminders, webhook retry, scheduled reports, AI daily summary) | Done |
+| T-281 Transactional outbox + dispatcher with backoff, dead letters | Done |
+| T-282 Event catalog (`GET /v1/events/catalog`) | Done |
+| T-283 Subscriptions (in-process bus + durable outbox subscribers) | Done |
+| T-284 Notification triggers, SLA A (warning) / B (breach) as % of the policy window | Done |
+| T-285 Escalation rules per kind (branch override, enable/disable) | Done |
+| T-286 Automatic tasks with `source_rule` provenance | Done |
+| T-288 Server-sent events `GET /v1/stream` | Done |
+
+**Scheduler** (worker, `SCHEDULER_TZ`, every job idempotent via the `scheduled_job_runs` ledger)
+- The default table lives in `internal/app/worker_schedule.go`. Override one job with
+  `SCHEDULE_<JOB>` (job name upper-cased, `.`/`-` → `_`), e.g. `SCHEDULE_INBOX_SLA_SWEEP="*/2 * * * *"`,
+  or disable it with `SCHEDULE_AI_SUMMARY_DAILY=off`. An unknown key fails startup.
+- `finance.payment_overdue` `35 * * * *` — one alert per payment schedule once it is
+  `thresholds.payment_overdue_hours` (default 12) past due; looks back 30 days, skips cancelled/draft bookings.
+- Money in alert bodies is formatted from integer minor units (`shared.FormatMinor`, no floats).
+
+**Outbox / events**
+- Durable events are written to `outbox_events` in the business transaction and delivered by the worker
+  dispatcher; after delivery it announces `invalidate` (topic = event name) on the `wcc_events` channel.
+- Notification changes are announced by the `notifications_realtime` trigger.
+- Ops: `GET /v1/ops/outbox`, `GET /v1/ops/outbox/dead` (`ops.read`), `POST /v1/ops/outbox/{id}/requeue` (`users.write`).
+  `automation.outbox_purge` `30 3 * * *` removes delivered rows.
+
+**Settings** (`settings.read` / `settings.write`)
+- `GET|PUT /v1/settings/sla` — `[{"channel","first_response_seconds"}]`.
+- `GET /v1/settings/escalation` · `PUT /v1/settings/escalation/{kind}` `{"escalate_after_seconds","escalate_to_roles","enabled"}`
+  · `DELETE /v1/settings/escalation/{kind}` (back to the default rule).
+- `GET|PUT /v1/settings/thresholds` — hours fields 1–720, `sla_warn_pct` 10–100 below `sla_breach_pct` 50–300,
+  `visa_follow_up_days` 1–90.
+
+**Notifications**
+- `GET /v1/notifications?kind=...` filters by kind; `GET /v1/notifications/summary` groups active notifications
+  per kind: `{"kind","severity","open","acknowledged","occurrences","latest_at","title","href"}`.
+- Reports: `GET|POST /v1/reports/schedules`, `DELETE /v1/reports/schedules/{id}`, `GET /v1/reports/runs`,
+  `GET /v1/reports/runs/{id}/download` (`reports.export`).
+
+**Realtime** — `GET /v1/stream` (authenticated, `text/event-stream`)
+- Each API replica `LISTEN`s on Postgres and fans signals out to its connected clients, filtered by the caller's
+  visibility. Events: `notification` (recipient only) and `invalidate` `{"topic":"payment.reversed",...}`.
+- Payloads carry ids only; clients refetch through the normal API, so permissions are never bypassed.
+- `expired` is sent when the access token lapses (client reconnects with a fresh token); `503` when the hub is full.
+  Streams close on graceful shutdown. Headers: `Cache-Control: no-store, no-transform`, `X-Accel-Buffering: no`.
+- The FE opens one stream per tab through the BFF proxy (`/api/proxy/stream`), polls only while it is down and
+  refreshes affected screens silently on `invalidate`.
+
+- Migration: `00029_epic22_automation.sql` — `outbox_events`, `scheduled_job_runs`, `report_schedules`,
+  `report_runs`, task provenance, SLA A/B columns, branch timezone, passport expiry, webhook retry bookkeeping,
+  notification realtime trigger.
+
 ## Go-Live Backlog (Epic 19–26)
 
 Monzer.pdf %100 uyum ve canlıya çıkış için 110 task (T-236–T-345), sprint sırası ve kabul kriterleri: [`docs/GO_LIVE_BACKLOG.md`](docs/GO_LIVE_BACKLOG.md).

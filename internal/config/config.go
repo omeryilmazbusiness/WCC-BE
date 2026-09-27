@@ -134,6 +134,20 @@ type RedisConfig struct {
 	URL string
 	// SchedulerTZ is the IANA zone cron specs are evaluated in.
 	SchedulerTZ string
+	// ScheduleOverrides maps SCHEDULE_<JOB> (job name upper-cased, "." → "_")
+	// to a cron spec, or "off" to disable that job.
+	ScheduleOverrides map[string]string
+}
+
+// ScheduleKey is the SCHEDULE_ suffix for a job name (inbox.sla_sweep → INBOX_SLA_SWEEP).
+func ScheduleKey(job string) string {
+	return strings.ToUpper(strings.NewReplacer(".", "_", "-", "_").Replace(job))
+}
+
+// RequiresRedis reports whether queues must be backed by Redis: staging and
+// production never fall back to the in-memory queue.
+func (c Config) RequiresRedis() bool {
+	return c.App.Env == "production" || c.App.Env == "staging"
 }
 
 type StorageConfig struct {
@@ -208,8 +222,9 @@ func Load() (Config, error) {
 			RateWindow:   getDuration("WEBHOOK_RATE_WINDOW", time.Minute),
 		},
 		Redis: RedisConfig{
-			URL:         getEnv("REDIS_URL", "redis://localhost:6379/0"),
-			SchedulerTZ: getEnv("SCHEDULER_TZ", "Asia/Riyadh"),
+			URL:               getEnv("REDIS_URL", "redis://localhost:6379/0"),
+			SchedulerTZ:       getEnv("SCHEDULER_TZ", "Asia/Riyadh"),
+			ScheduleOverrides: envWithPrefix("SCHEDULE_"),
 		},
 		Storage: StorageConfig{
 			Endpoint:  getEnv("S3_ENDPOINT", "http://localhost:9000"),
@@ -265,10 +280,27 @@ func envByProvider(prefix string) map[string]string {
 	return out
 }
 
+// envWithPrefix collects KEY=value pairs whose key starts with prefix, keyed
+// by the remainder.
+func envWithPrefix(prefix string) map[string]string {
+	out := map[string]string{}
+	for _, kv := range os.Environ() {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || !strings.HasPrefix(k, prefix) || strings.TrimSpace(v) == "" {
+			continue
+		}
+		out[strings.TrimPrefix(k, prefix)] = strings.TrimSpace(v)
+	}
+	return out
+}
+
 // Validate enforces production-safe minimums.
 func (c Config) Validate() error {
 	if c.Database.URL == "" {
 		return fmt.Errorf("DATABASE_URL is required")
+	}
+	if c.RequiresRedis() && (c.Redis.URL == "" || strings.HasPrefix(c.Redis.URL, "memory://")) {
+		return fmt.Errorf("REDIS_URL must point to Redis in %s (no in-memory queue fallback)", c.App.Env)
 	}
 	if err := c.Auth.validateSessions(); err != nil {
 		return err

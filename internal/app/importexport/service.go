@@ -12,6 +12,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/customer"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/importexport"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
@@ -63,7 +64,10 @@ type Service struct {
 	tx        tx.Runner
 	queue     shared.Enqueuer
 	qMode     QueueMode
+	outbox    events.Outbox
 }
+
+func (s *Service) SetOutbox(o events.Outbox) { s.outbox = o }
 
 func NewService(repo domain.Repository, customers customer.Repository, txm tx.Runner) *Service {
 	return &Service{repo: repo, customers: customers, tx: txm}
@@ -350,7 +354,20 @@ func (s *Service) Process(ctx context.Context, jobID uuid.UUID) error {
 	j.SkippedCount = skipped
 	j.Status = domain.StatusCompleted
 	j.UpdatedAt = time.Now().UTC()
-	return s.repo.UpdateJob(ctx, j)
+	return s.finish(ctx, j)
+}
+
+// finish stores the job's final state and records import.completed with it.
+func (s *Service) finish(ctx context.Context, j *domain.ImportJob) error {
+	return s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.repo.UpdateJob(ctx, j); err != nil {
+			return err
+		}
+		return events.Record(ctx, s.outbox, events.Event{Name: events.ImportCompleted, Payload: events.ImportCompletedPayload{
+			ImportJobID: j.ID, BranchID: j.BranchID, ActorID: j.CreatedBy, Status: string(j.Status),
+			Inserted: j.SuccessCount, Failed: j.FailedCount,
+		}})
+	})
 }
 
 type fieldErr struct{ field, msg string }
@@ -470,7 +487,9 @@ func (s *Service) failJob(ctx context.Context, j *domain.ImportJob, msg string) 
 	j.Status = domain.StatusFailed
 	j.ErrorMessage = msg
 	j.UpdatedAt = time.Now().UTC()
-	_ = s.repo.UpdateJob(ctx, j)
+	if err := s.finish(ctx, j); err != nil {
+		return err
+	}
 	return shared.NewValidation(msg)
 }
 

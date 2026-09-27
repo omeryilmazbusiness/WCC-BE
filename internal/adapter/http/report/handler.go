@@ -16,7 +16,8 @@ import (
 )
 
 type Handler struct {
-	Svc *appsvc.Service
+	Svc       *appsvc.Service
+	Schedules *appsvc.Scheduler
 }
 
 func (h Handler) parseFilter(r *http.Request) (domain.Filter, error) {

@@ -110,6 +110,7 @@ type Conversation struct {
 	SLAStartedAt         *time.Time
 	SLADueAt             *time.Time
 	SLABreachedAt        *time.Time
+	SLAWarnedAt          *time.Time
 	SLAStoppedAt         *time.Time
 	LastInboundAt        *time.Time
 	LastOutboundAt       *time.Time
@@ -173,8 +174,29 @@ type Repository interface {
 	ListMessages(ctx context.Context, conversationID uuid.UUID, limit int) ([]Message, error)
 
 	FirstResponseSeconds(ctx context.Context, branchID uuid.UUID, channel Channel) (int, error)
-	ListDueForSLABreach(ctx context.Context, now time.Time, limit int) ([]Conversation, error)
-	MarkSLABreached(ctx context.Context, id uuid.UUID, at time.Time) error
+	// ListDueForSLA returns open conversations that crossed the stage's
+	// threshold (branch alert_threshold_settings, else the defaults).
+	ListDueForSLA(ctx context.Context, stage SLAStage, now time.Time, limit int) ([]Conversation, error)
+	MarkSLAStage(ctx context.Context, stage SLAStage, id uuid.UUID, at time.Time) (bool, error)
+}
+
+// SLAStage is the A (warning) or B (breach) SLA threshold (T-284).
+type SLAStage string
+
+const (
+	SLAWarning SLAStage = "warning"
+	SLABreach  SLAStage = "breach"
+
+	// Thresholds as a percentage of the first-response window.
+	DefaultSLAWarnPct   = 75
+	DefaultSLABreachPct = 100
+)
+
+// SLAThresholdAt is when pct percent of the SLA window has elapsed; the
+// repository query mirrors this arithmetic.
+func SLAThresholdAt(started, due time.Time, pct int) time.Time {
+	window := due.Sub(started)
+	return started.Add(time.Duration(float64(window) * float64(pct) / 100))
 }
 
 func (c *Conversation) MarkResolved() error {
@@ -227,6 +249,7 @@ func (c *Conversation) StartSLA(now time.Time, window time.Duration) {
 	due := now.Add(window)
 	c.SLADueAt = &due
 	c.SLABreachedAt = nil
+	c.SLAWarnedAt = nil
 	c.SLAStoppedAt = nil
 }
 

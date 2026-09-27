@@ -30,9 +30,36 @@ type TransitionInput struct {
 	Note       string
 }
 
+// FollowUps opens and closes the visa follow-up work (DIP).
+type FollowUps interface {
+	VisaAwaitingDecision(ctx context.Context, c domain.FollowUpCandidate) error
+	VisaDecided(ctx context.Context, v *domain.VisaCase) error
+}
+
 type Service struct {
-	repo domain.Repository
-	tx   tx.Runner
+	repo      domain.Repository
+	tx        tx.Runner
+	followUps FollowUps
+}
+
+func (s *Service) SetFollowUps(f FollowUps) { s.followUps = f }
+
+// ProcessFollowUps opens a follow-up for every case still undecided after
+// its branch window; idempotent per case.
+func (s *Service) ProcessFollowUps(ctx context.Context, now time.Time, limit int) (int, error) {
+	if s.followUps == nil {
+		return 0, nil
+	}
+	items, err := s.repo.ListAwaitingDecision(ctx, now, domain.DefaultFollowUpDays, limit)
+	if err != nil {
+		return 0, err
+	}
+	for i := range items {
+		if err := s.followUps.VisaAwaitingDecision(ctx, items[i]); err != nil {
+			return i, err
+		}
+	}
+	return len(items), nil
 }
 
 func NewService(repo domain.Repository, txm tx.Runner) *Service {
@@ -93,6 +120,9 @@ func (s *Service) Transition(ctx context.Context, in TransitionInput) (*domain.V
 			return err
 		}
 		out = v
+		if s.followUps != nil && v.Decided() {
+			return s.followUps.VisaDecided(ctx, v)
+		}
 		return nil
 	})
 	return out, err

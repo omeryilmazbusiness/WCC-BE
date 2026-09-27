@@ -18,6 +18,7 @@ type Customer struct {
 	Nationality         string
 	PassportNo          string // plaintext inside the app; encrypted at rest
 	DateOfBirth         *time.Time
+	PassportExpiresAt   *time.Time
 	Preferences         json.RawMessage
 	SpecialRequirements string
 	Notes               string

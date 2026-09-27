@@ -39,8 +39,14 @@ type Client struct {
 // AsynqClient is a backward-compatible alias used by the composition root.
 type AsynqClient = Client
 
-func NewClient(cfg config.RedisConfig, log *slog.Logger) (*Client, error) {
+// NewClient connects to Redis. With strict set (staging, production) it never
+// falls back to the in-memory queue: an unreachable Redis keeps the client in
+// redis mode so enqueues fail loudly and readiness reports not ready.
+func NewClient(cfg config.RedisConfig, log *slog.Logger, strict bool) (*Client, error) {
 	if cfg.URL == "" || cfg.URL == "memory://" {
+		if strict {
+			return nil, fmt.Errorf("redis queue required (got %q)", cfg.URL)
+		}
 		log.Info("queue running in memory mode")
 		return memoryClient(log), nil
 	}
@@ -70,6 +76,10 @@ func NewClient(cfg config.RedisConfig, log *slog.Logger) (*Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := c.Ping(ctx); err != nil {
+		if strict {
+			log.Error("redis not reachable; queue stays in redis mode and reports not ready", "error", err)
+			return c, nil
+		}
 		log.Warn("redis not reachable; falling back to memory queue", "error", err)
 		_ = c.Close()
 		return memoryClient(log), nil
@@ -84,16 +94,6 @@ func memoryClient(log *slog.Logger) *Client {
 		memJobs:  make(map[string]shared.JobInfo),
 		memStats: shared.QueueStats{Mode: "memory"},
 	}
-}
-
-// NewAsynqClient keeps backward-compatible constructor used by wire.go.
-func NewAsynqClient(cfg config.RedisConfig, log *slog.Logger) *Client {
-	c, err := NewClient(cfg, log)
-	if err != nil {
-		log.Error("queue init failed; falling back to memory", "error", err)
-		return memoryClient(log)
-	}
-	return c
 }
 
 func (c *Client) Mode() string { return c.mode }

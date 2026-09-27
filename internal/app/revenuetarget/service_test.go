@@ -9,6 +9,7 @@ import (
 
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/revenuetarget"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/revenuetarget"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 )
 
 type memRepo struct {
@@ -87,7 +88,13 @@ func (m *memRepo) UpsertSnapshot(ctx context.Context, s *domain.Snapshot) error 
 	return nil
 }
 func (m *memRepo) LatestSnapshot(ctx context.Context, targetID uuid.UUID) (*domain.Snapshot, error) {
-	return nil, nil
+	var latest *domain.Snapshot
+	for _, s := range m.snaps {
+		if s.TargetID == targetID && (latest == nil || s.AsOf.After(latest.AsOf)) {
+			latest = s
+		}
+	}
+	return latest, nil
 }
 func (m *memRepo) InsertRevision(ctx context.Context, r *domain.Revision) error { return nil }
 func (m *memRepo) ListRevisions(ctx context.Context, targetID uuid.UUID, limit int) ([]domain.Revision, error) {
@@ -146,5 +153,47 @@ func TestSetSharesValidation(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected validation error for share sum")
+	}
+}
+
+type memOutbox struct{ events []events.Event }
+
+func (o *memOutbox) Add(_ context.Context, ev events.Event) error {
+	o.events = append(o.events, ev)
+	return nil
+}
+
+func TestProgressRecordsStatusChangeOnce(t *testing.T) {
+	repo := newMemRepo()
+	now := time.Now().UTC()
+	id := uuid.New()
+	repo.targets[id] = &domain.Target{
+		ID: id, BranchID: uuid.New(), Label: "Q", TargetAmount: 100000,
+		CurveType: domain.CurveLinear, PeriodStart: now.AddDate(0, 0, -20), PeriodEnd: now.AddDate(0, 0, 10),
+	}
+	svc := appsvc.NewService(repo, nil)
+	out := &memOutbox{}
+	svc.SetOutbox(out)
+
+	if _, err := svc.Progress(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Progress(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.events) != 1 || out.events[0].Name != events.TargetStatusChanged {
+		t.Fatalf("want one behind event, got %+v", out.events)
+	}
+	p := out.events[0].Payload.(events.TargetStatusChangedPayload)
+	if p.To != string(domain.StatusBehind) || p.From != "" || p.Deficit <= 0 || p.VariancePct != 100 {
+		t.Fatalf("payload %+v", p)
+	}
+
+	repo.actual = 100000
+	if _, err := svc.Progress(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.events) != 2 || out.events[1].Payload.(events.TargetStatusChangedPayload).From != string(domain.StatusBehind) {
+		t.Fatalf("recovery must be recorded: %+v", out.events)
 	}
 }

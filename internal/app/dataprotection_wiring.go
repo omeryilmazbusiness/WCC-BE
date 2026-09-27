@@ -6,11 +6,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgdataprotection "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/dataprotection"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
 	pgprivacy "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/privacy"
-	appaudit "github.com/wodi-crm/wodi-crm-be/internal/app/audit"
 	"github.com/wodi-crm/wodi-crm-be/internal/app/dataprotection"
 	appprivacy "github.com/wodi-crm/wodi-crm-be/internal/app/privacy"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
@@ -44,12 +42,6 @@ func NewKeyring(a config.AuthConfig) (*crypto.Keyring, error) {
 func newEncryptBackfill(pool *pgxpool.Pool, keyring *crypto.Keyring, rec audit.Recorder) *dataprotection.Service {
 	store := pgdataprotection.NewStore(pool, pgpii.NewPassports(keyring))
 	return dataprotection.NewService(store, store, crypto.NewSecretBox(keyring), keyring, keyring, rec)
-}
-
-// NewEncryptBackfill builds the encrypt backfill for processes outside the
-// API (worker); the API wires the same service in New.
-func NewEncryptBackfill(pool *pgxpool.Pool, keyring *crypto.Keyring) *dataprotection.Service {
-	return newEncryptBackfill(pool, keyring, appaudit.NewService(pgaudit.NewRepository(pool)))
 }
 
 func newPrivacyService(

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -61,7 +62,13 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 	includeResolved := q.Get("include_resolved") == "1" || q.Get("include_resolved") == "true"
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	offset, _ := strconv.Atoi(q.Get("offset"))
-	items, total, err := h.Svc.List(r.Context(), claims.UserID, status, includeResolved, limit, offset)
+	var kinds []string
+	for _, k := range strings.Split(q.Get("kind"), ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			kinds = append(kinds, k)
+		}
+	}
+	items, total, err := h.Svc.List(r.Context(), claims.UserID, status, includeResolved, kinds, limit, offset)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -71,6 +78,29 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		out = append(out, mapNotification(&items[i]))
 	}
 	response.JSONMeta(w, http.StatusOK, out, map[string]any{"total": total})
+}
+
+// Summary: GET /v1/notifications/summary — active notifications per kind.
+func (h Handler) Summary(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	groups, err := h.Svc.Summary(r.Context(), claims.UserID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, map[string]any{
+			"kind": g.Kind, "severity": g.Severity, "open": g.Open,
+			"acknowledged": g.Acknowledged, "occurrences": g.Occurrences,
+			"latest_at": g.LatestAt, "title": g.Title, "href": g.Href,
+		})
+	}
+	response.JSON(w, http.StatusOK, out)
 }
 
 func (h Handler) UnreadCount(w http.ResponseWriter, r *http.Request) {

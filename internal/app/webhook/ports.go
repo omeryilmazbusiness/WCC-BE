@@ -33,6 +33,7 @@ type Event struct {
 	Payload              json.RawMessage
 	ReceivedAt           time.Time
 	ProcessedAt          *time.Time
+	Attempts             int
 }
 
 // SignatureVerifier authenticates a raw webhook body for one provider.
@@ -54,6 +55,10 @@ type EventStore interface {
 	Insert(ctx context.Context, e *Event) (bool, error)
 	FindByExternalID(ctx context.Context, provider domain.Channel, externalEventID string) (*Event, error)
 	MarkStatus(ctx context.Context, id uuid.UUID, status, errMsg string, at time.Time) error
+	// MarkFailed stores a failed attempt (attempts+1); nextRetry nil stops retries.
+	MarkFailed(ctx context.Context, id uuid.UUID, errMsg string, nextRetry *time.Time, at time.Time) error
+	// ListRetryable returns failed events whose retry is due, with payload.
+	ListRetryable(ctx context.Context, now time.Time, limit int) ([]Event, error)
 }
 
 // Ingestor hands a verified, branch-resolved payload to the inbox.

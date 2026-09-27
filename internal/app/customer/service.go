@@ -24,6 +24,7 @@ type CreateInput struct {
 	Nationality         string
 	PassportNo          string
 	DateOfBirth         *time.Time
+	PassportExpiresAt   *time.Time
 	Preferences         json.RawMessage
 	SpecialRequirements string
 	Notes               string
@@ -46,6 +47,8 @@ type UpdateInput struct {
 	PassportNo          *string
 	DateOfBirth         *time.Time
 	ClearDOB            bool
+	PassportExpiresAt   *time.Time
+	ClearPassportExpiry bool
 	Preferences         json.RawMessage
 	SpecialRequirements *string
 	Notes               *string
@@ -109,7 +112,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 		ID: uuid.New(), BranchID: branchID, FullName: name,
 		FullNameAR: strings.TrimSpace(in.FullNameAR), Phone: phone, Email: email,
 		Nationality: strings.TrimSpace(in.Nationality), PassportNo: passport,
-		DateOfBirth: in.DateOfBirth, Preferences: prefs,
+		DateOfBirth: in.DateOfBirth, PassportExpiresAt: in.PassportExpiresAt, Preferences: prefs,
 		SpecialRequirements: strings.TrimSpace(in.SpecialRequirements),
 		Notes:               in.Notes, IsActive: true, CreatedBy: in.CreatedBy,
 		CreatedAt: now, UpdatedAt: now,
@@ -153,6 +156,11 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*domain.Customer,
 		c.DateOfBirth = nil
 	} else if in.DateOfBirth != nil {
 		c.DateOfBirth = in.DateOfBirth
+	}
+	if in.ClearPassportExpiry {
+		c.PassportExpiresAt = nil
+	} else if in.PassportExpiresAt != nil {
+		c.PassportExpiresAt = in.PassportExpiresAt
 	}
 	if in.Preferences != nil {
 		c.Preferences = in.Preferences

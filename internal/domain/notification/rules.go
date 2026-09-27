@@ -84,7 +84,70 @@ func DefaultRules() []Rule {
 			Groupable: true, DefaultTitle: "Supplier unconfirmed",
 			DefaultHref: "/suppliers", EntityType: "supplier",
 		},
+		{
+			Kind: KindMessageSLAWarning, Severity: SeverityWarning,
+			EscalateAfter: 0, EscalateToRoles: nil,
+			Groupable: true, DefaultTitle: "Conversation nearing SLA",
+			DefaultHref: "/inbox", EntityType: "conversation",
+		},
+		{
+			Kind: KindPaymentDue, Severity: SeverityWarning,
+			EscalateAfter: 24 * time.Hour, EscalateToRoles: []string{"finance"},
+			Groupable: true, DefaultTitle: "Payment due soon",
+			DefaultHref: "/finance", EntityType: "booking",
+		},
+		{
+			Kind: KindPassportExpiring, Severity: SeverityWarning,
+			EscalateAfter: 72 * time.Hour, EscalateToRoles: []string{"operations"},
+			Groupable: true, DefaultTitle: "Passport expiring",
+			DefaultHref: "/customers", EntityType: "customer",
+		},
+		{
+			Kind: KindVisaFollowUp, Severity: SeverityWarning,
+			EscalateAfter: 48 * time.Hour, EscalateToRoles: []string{"operations", "manager"},
+			Groupable: true, DefaultTitle: "Visa awaiting decision",
+			DefaultHref: "/bookings", EntityType: "visa_application",
+		},
+		{
+			Kind: KindReportReady, Severity: SeverityInfo,
+			Groupable: false, DefaultTitle: "Scheduled report ready",
+			DefaultHref: "/reports", EntityType: "report_run",
+		},
+		{
+			Kind: KindImportCompleted, Severity: SeverityInfo,
+			Groupable: false, DefaultTitle: "Import finished",
+			DefaultHref: "/import-export", EntityType: "import_job",
+		},
+		{
+			Kind: KindAISummary, Severity: SeverityInfo,
+			Groupable: true, DefaultTitle: "Daily AI summary",
+			DefaultHref: "/manager", EntityType: "branch",
+		},
+		{
+			Kind: KindTaskReminder, Severity: SeverityInfo,
+			Groupable: false, DefaultTitle: "Task reminder",
+			DefaultHref: "/tasks", EntityType: "task",
+		},
 	}
+}
+
+// Escalates reports whether the rule promotes alerts at all.
+func (r Rule) Escalates() bool {
+	return r.EscalateAfter > 0 && len(r.EscalateToRoles) > 0
+}
+
+// Due reports whether an alert created at createdAt is past the rule's window.
+func (r Rule) Due(createdAt, now time.Time) bool {
+	return r.Escalates() && !createdAt.Add(r.EscalateAfter).After(now)
+}
+
+// RulesByKind indexes a rule set.
+func RulesByKind(rules []Rule) map[string]Rule {
+	out := make(map[string]Rule, len(rules))
+	for _, r := range rules {
+		out[r.Kind] = r
+	}
+	return out
 }
 
 // MatchRule returns the matrix row for a kind, or nil if unknown.
@@ -103,8 +166,5 @@ var defaultRulesCache = DefaultRules()
 // ShouldEscalate reports whether an open alert of this kind is past the grace window.
 func ShouldEscalate(kind string, createdAt, now time.Time) bool {
 	r := MatchRule(kind)
-	if r == nil || r.EscalateAfter <= 0 || len(r.EscalateToRoles) == 0 {
-		return false
-	}
-	return !createdAt.Add(r.EscalateAfter).After(now)
+	return r != nil && r.Due(createdAt, now)
 }

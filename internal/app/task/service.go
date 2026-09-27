@@ -56,12 +56,23 @@ type ListInput struct {
 }
 
 type Service struct {
-	repo domain.Repository
-	tx   tx.Runner
-	bus  *events.Bus
-	conv ConversationReader
-	now  func() time.Time
+	repo   domain.Repository
+	tx     tx.Runner
+	bus    *events.Bus
+	conv   ConversationReader
+	outbox events.Outbox
+	grace  GracePolicy
+	now    func() time.Time
 }
+
+// GracePolicy decides how long an overdue task of a rule may stay open in a
+// branch before escalating; enabled=false turns escalation off (DIP).
+type GracePolicy interface {
+	Grace(ctx context.Context, branchID uuid.UUID, rule string) (grace time.Duration, enabled bool)
+}
+
+func (s *Service) SetOutbox(o events.Outbox)    { s.outbox = o }
+func (s *Service) SetGracePolicy(g GracePolicy) { s.grace = g }
 
 // ConversationReader loads inbox conversations for next-task flows (ISP / DIP).
 type ConversationReader interface {
@@ -124,6 +135,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, err
 		ID: uuid.New(), BranchID: branchID, Title: title, Kind: in.Kind, Priority: prio,
 		Status: domain.StatusOpen, AssigneeID: assigneeID, RelatedType: relatedType,
 		RelatedID: in.RelatedID, DueAt: in.DueAt, CreatedAt: now, UpdatedAt: now,
+	}
+	if scope.UserID != uuid.Nil {
+		creator := scope.UserID
+		t.CreatedBy = &creator
 	}
 	if err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		return s.repo.Create(ctx, t)
@@ -319,7 +334,8 @@ func (s *Service) EscalateOverdue(ctx context.Context, requested *uuid.UUID) (in
 	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		for i := range items {
 			t := items[i]
-			if !t.ShouldEscalate(now, domain.DefaultGrace) {
+			grace, enabled := s.graceFor(ctx, t)
+			if !enabled || !t.ShouldEscalate(now, grace) {
 				continue
 			}
 			t.Escalate(now)
@@ -338,6 +354,41 @@ func (s *Service) EscalateOverdue(ctx context.Context, requested *uuid.UUID) (in
 		s.bus.Publish(ctx, events.Event{Name: events.TaskEscalated, Payload: &cp})
 	}
 	return len(escalated), nil
+}
+
+func (s *Service) graceFor(ctx context.Context, t domain.Task) (time.Duration, bool) {
+	if s.grace == nil {
+		return domain.Grace(t.SourceRule, nil), true
+	}
+	return s.grace.Grace(ctx, t.BranchID, t.SourceRule)
+}
+
+// AnnounceOverdue records task.overdue once per overdue episode (a reschedule
+// starts a new one); the stamp and the event commit together.
+func (s *Service) AnnounceOverdue(ctx context.Context, limit int) (int, error) {
+	now := s.now()
+	items, err := s.repo.ListOverdueUnnotified(ctx, now, limit)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for i := range items {
+		t := items[i]
+		err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+			stamped, err := s.repo.MarkOverdueNotified(ctx, t.ID, now)
+			if err != nil || !stamped {
+				return err
+			}
+			n++
+			return events.Record(ctx, s.outbox, events.Event{Name: events.TaskOverdue, Payload: events.TaskOverduePayload{
+				TaskID: t.ID, BranchID: t.BranchID, AssigneeID: t.AssigneeID, Title: t.Title, DueAt: *t.DueAt,
+			}})
+		})
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
 }
 
 // SuggestionDTO is the HTTP-facing next-task proposal (never auto-created).
@@ -428,7 +479,7 @@ func (s *Service) ConfirmNextTask(ctx context.Context, in ConfirmNextTaskInput) 
 	t := &domain.Task{
 		ID: uuid.New(), BranchID: c.BranchID, Title: title, Kind: kind, Priority: prio,
 		Status: domain.StatusOpen, AssigneeID: assignee, RelatedType: relatedType,
-		RelatedID: relatedID, DueAt: &due, IdempotencyKey: key,
+		RelatedID: relatedID, DueAt: &due, IdempotencyKey: key, SourceRule: domain.RuleConversationOutcome,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.tx.WithinTransaction(ctx, func(txCtx context.Context) error {
@@ -494,7 +545,8 @@ func (s *Seeder) onLeadCreated(ctx context.Context, ev events.Event) error {
 		ID: uuid.New(), BranchID: l.BranchID, Title: "Follow up lead",
 		Kind: domain.KindFollowUp, Priority: domain.PriorityNormal, Status: domain.StatusOpen,
 		AssigneeID: l.OwnerID, RelatedType: "lead", RelatedID: l.ID, DueAt: &due,
-		IdempotencyKey: fmt.Sprintf("lead:%s:followup", l.ID), CreatedAt: now, UpdatedAt: now,
+		IdempotencyKey: fmt.Sprintf("lead:%s:followup", l.ID), SourceRule: domain.RuleLeadFollowUp,
+		CreatedAt: now, UpdatedAt: now,
 	})
 }
 
@@ -511,13 +563,15 @@ func (s *Seeder) onBookingConfirmed(ctx context.Context, ev events.Event) error 
 			ID: uuid.New(), BranchID: b.BranchID, Title: "Collect documents",
 			Kind: domain.KindDocument, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
 			AssigneeID: b.OwnerID, RelatedType: "booking", RelatedID: b.ID, DueAt: &dueDoc,
-			IdempotencyKey: fmt.Sprintf("booking:%s:document", b.ID), CreatedAt: now, UpdatedAt: now,
+			IdempotencyKey: fmt.Sprintf("booking:%s:document", b.ID), SourceRule: domain.RuleBookingDocuments,
+			CreatedAt: now, UpdatedAt: now,
 		},
 		{
 			ID: uuid.New(), BranchID: b.BranchID, Title: "Collect payment",
 			Kind: domain.KindPayment, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
 			AssigneeID: b.OwnerID, RelatedType: "booking", RelatedID: b.ID, DueAt: &duePay,
-			IdempotencyKey: fmt.Sprintf("booking:%s:payment", b.ID), CreatedAt: now, UpdatedAt: now,
+			IdempotencyKey: fmt.Sprintf("booking:%s:payment", b.ID), SourceRule: domain.RuleBookingPayment,
+			CreatedAt: now, UpdatedAt: now,
 		},
 	}
 	for i := range seeds {
@@ -556,6 +610,7 @@ func (s *Seeder) EnsurePaymentDueTask(ctx context.Context, branchID, bookingID, 
 		Kind: domain.KindPayment, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
 		AssigneeID: actorID, RelatedType: "booking", RelatedID: bookingID, DueAt: &dueAt,
 		IdempotencyKey: fmt.Sprintf("booking:%s:payment-due:%s", bookingID, dueAt.UTC().Format("2006-01-02")),
+		SourceRule:     domain.RulePaymentDue,
 		CreatedAt:      now, UpdatedAt: now,
 	})
 }
@@ -570,6 +625,7 @@ func (s *Seeder) EnsureHoldExpiredTask(ctx context.Context, branchID, bookingID,
 		Kind: domain.KindFollowUp, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
 		AssigneeID: ownerID, RelatedType: "booking", RelatedID: bookingID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("booking:%s:hold-expired:%s", bookingID, expiredAt.UTC().Format(time.RFC3339)),
+		SourceRule:     domain.RuleHoldExpired,
 		CreatedAt:      now, UpdatedAt: now,
 	})
 }
@@ -585,6 +641,7 @@ func (s *Seeder) EnsureTargetRecoveryTask(ctx context.Context, branchID, targetI
 		Kind: domain.KindCustom, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
 		AssigneeID: assigneeID, RelatedType: "revenue_target", RelatedID: targetID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("target:%s:recovery:%s", targetID, asOf),
+		SourceRule:     domain.RuleTargetRecovery,
 		CreatedAt:      now, UpdatedAt: now,
 	})
 }

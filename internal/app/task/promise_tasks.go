@@ -22,6 +22,7 @@ func (s *Seeder) EnsurePromiseFollowUp(ctx context.Context, p *paymentdomain.Pro
 		Kind:  domain.KindPayment, Priority: domain.PriorityNormal, Status: domain.StatusOpen,
 		AssigneeID: assigneeID, RelatedType: "booking", RelatedID: p.BookingID, DueAt: &dueAt,
 		IdempotencyKey: "payment-promise:" + p.ID.String() + ":follow-up",
+		SourceRule:     domain.RulePaymentPromise,
 		CreatedAt:      now, UpdatedAt: now,
 	})
 }
@@ -36,6 +37,7 @@ func (s *Seeder) EnsurePromiseBroken(ctx context.Context, p *paymentdomain.Promi
 		Kind:  domain.KindPayment, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
 		AssigneeID: assigneeID, RelatedType: "booking", RelatedID: p.BookingID, DueAt: &due,
 		IdempotencyKey: "payment-promise:" + p.ID.String() + ":broken",
+		SourceRule:     domain.RulePaymentPromiseBroken,
 		CreatedAt:      now, UpdatedAt: now,
 	})
 	return err

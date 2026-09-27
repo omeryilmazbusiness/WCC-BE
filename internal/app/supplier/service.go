@@ -44,17 +44,24 @@ type LinkInput struct {
 	Notes      string          `json:"notes"`
 }
 
+// ConfirmationFollowUp chases unconfirmed supplier links and closes the chase
+// once confirmed (DIP).
+type ConfirmationFollowUp interface {
+	SupplierUnconfirmed(ctx context.Context, sup *domain.Supplier, link *domain.Link) error
+	SupplierConfirmed(ctx context.Context, link *domain.Link) error
+}
+
 type Service struct {
-	repo  domain.Repository
-	tx    tx.Runner
-	queue shared.Enqueuer
+	repo     domain.Repository
+	tx       tx.Runner
+	followUp ConfirmationFollowUp
 }
 
 func NewService(repo domain.Repository, txm tx.Runner) *Service {
 	return &Service{repo: repo, tx: txm}
 }
 
-func (s *Service) SetEnqueuer(q shared.Enqueuer) { s.queue = q }
+func (s *Service) SetFollowUp(f ConfirmationFollowUp) { s.followUp = f }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Supplier, error) {
 	now := time.Now().UTC()
@@ -169,6 +176,11 @@ func (s *Service) Confirm(ctx context.Context, linkID uuid.UUID, ref string) (*d
 	if err := s.repo.UpdateLink(ctx, l); err != nil {
 		return nil, err
 	}
+	if s.followUp != nil {
+		if err := s.followUp.SupplierConfirmed(ctx, l); err != nil {
+			return nil, err
+		}
+	}
 	return l, nil
 }
 
@@ -190,17 +202,29 @@ func (s *Service) ListOversold(ctx context.Context, branchID *uuid.UUID, limit i
 	return s.repo.ListOversold(ctx, branchID, limit)
 }
 
+// ProcessUnconfirmedReminders opens a confirmation task and alerts operations
+// for every unconfirmed link (both idempotent, so the daily run is safe).
 func (s *Service) ProcessUnconfirmedReminders(ctx context.Context, branchID *uuid.UUID, limit int) (int, error) {
 	items, err := s.ListUnconfirmed(ctx, branchID, limit)
 	if err != nil {
 		return 0, err
 	}
+	if s.followUp == nil {
+		return 0, nil
+	}
+	suppliers := map[uuid.UUID]*domain.Supplier{}
 	n := 0
 	for i := range items {
-		if s.queue != nil {
-			_, _ = s.queue.Enqueue(ctx, shared.JobReminderSend, []byte(`{"type":"supplier_unconfirmed","id":"`+items[i].ID.String()+`"}`), shared.EnqueueOpts{
-				Queue: "low", UniqueKey: "supplier-unconfirmed:" + items[i].ID.String(),
-			})
+		link := &items[i]
+		sup, ok := suppliers[link.SupplierID]
+		if !ok {
+			if sup, err = s.repo.FindByID(ctx, link.SupplierID); err != nil {
+				return n, err
+			}
+			suppliers[link.SupplierID] = sup
+		}
+		if err := s.followUp.SupplierUnconfirmed(ctx, sup, link); err != nil {
+			return n, err
 		}
 		n++
 	}

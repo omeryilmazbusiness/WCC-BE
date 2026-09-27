@@ -61,7 +61,37 @@ const (
 	KindIntegrationDown     = "integration.unhealthy"
 	KindBookingConfirmed    = "booking.confirmed"
 	KindSupplierUnconfirmed = "supplier.unconfirmed"
+	KindMessageSLAWarning   = "message.sla_warning"
+	KindPaymentDue          = "payment.due"
+	KindPassportExpiring    = "passport.expiring"
+	KindVisaFollowUp        = "visa.follow_up"
+	KindReportReady         = "report.ready"
+	KindImportCompleted     = "import.completed"
+	KindAISummary           = "ai.summary"
+	KindTaskReminder        = "task.reminder"
 )
+
+// metaEscalatedFrom marks a notification produced by escalation; escalated
+// copies never escalate again.
+const metaEscalatedFrom = "escalated_from"
+
+// EscalationMeta is the meta attached to an escalated copy.
+func EscalationMeta(source Notification) map[string]any {
+	return map[string]any{metaEscalatedFrom: source.ID.String(), "source_recipient": source.RecipientUserID.String()}
+}
+
+// IsEscalation reports whether the notification is an escalated copy.
+func (n Notification) IsEscalation() bool {
+	if len(n.MetaJSON) == 0 {
+		return false
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(n.MetaJSON, &meta); err != nil {
+		return false
+	}
+	_, ok := meta[metaEscalatedFrom]
+	return ok
+}
 
 // Notification is the durable in-app alert for one recipient.
 type Notification struct {
@@ -209,6 +239,14 @@ func GroupLabel(kind string, count int, baseTitle string) string {
 		return c + " integration issues"
 	case KindSupplierUnconfirmed:
 		return c + " unconfirmed suppliers"
+	case KindMessageSLAWarning:
+		return c + " conversations near SLA"
+	case KindPaymentDue:
+		return c + " payments due"
+	case KindPassportExpiring:
+		return c + " passports expiring"
+	case KindVisaFollowUp:
+		return c + " visas awaiting decision"
 	default:
 		return c + " alerts — " + baseTitle
 	}
@@ -224,6 +262,18 @@ type ListFilter struct {
 	Offset          int
 }
 
+// KindSummary counts a recipient's active notifications of one kind.
+type KindSummary struct {
+	Kind         string
+	Severity     Severity
+	Open         int
+	Acknowledged int
+	Occurrences  int
+	LatestAt     time.Time
+	Title        string
+	Href         string
+}
+
 // Repository is the persistence port (DIP).
 type Repository interface {
 	Create(ctx context.Context, n *Notification) error
@@ -232,7 +282,13 @@ type Repository interface {
 	FindOpenByGroup(ctx context.Context, recipientUserID uuid.UUID, groupKey string) (*Notification, error)
 	List(ctx context.Context, f ListFilter) ([]Notification, int, error)
 	CountUnread(ctx context.Context, recipientUserID uuid.UUID) (int, error)
+	// SummarizeActive groups open and acknowledged notifications by kind,
+	// most urgent first.
+	SummarizeActive(ctx context.Context, recipientUserID uuid.UUID) ([]KindSummary, error)
 	ListOpenOlderThan(ctx context.Context, olderThan time.Time, limit int) ([]Notification, error)
+	// ListEscalationCandidates returns open, non-escalated notifications of
+	// the given kinds created before olderThan, oldest first.
+	ListEscalationCandidates(ctx context.Context, kinds []string, olderThan time.Time, limit int) ([]Notification, error)
 
 	GetPreference(ctx context.Context, userID uuid.UUID) (*Preference, error)
 	UpsertPreference(ctx context.Context, p *Preference) error

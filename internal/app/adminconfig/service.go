@@ -109,13 +109,28 @@ func (s *Service) GetEscalationMatrix(ctx context.Context, branchID uuid.UUID) (
 		if o.Enabled {
 			continue
 		}
-		out = append(out, EscalationRuleDTO{
+		dto := EscalationRuleDTO{
 			Kind: o.Kind, EscalateAfterSeconds: o.EscalateAfterSeconds,
 			EscalateToRoles: append([]string(nil), o.EscalateToRoles...),
 			Overridden:      true, Enabled: false,
-		})
+		}
+		if def := notification.MatchRule(o.Kind); def != nil {
+			dto.Severity, dto.Groupable = string(def.Severity), def.Groupable
+			dto.DefaultTitle, dto.DefaultHref, dto.EntityType = def.DefaultTitle, def.DefaultHref, def.EntityType
+		}
+		out = append(out, dto)
 	}
 	return out, nil
+}
+
+// EscalationRules is the effective matrix the escalation engine runs for a
+// branch (notification.RuleSource).
+func (s *Service) EscalationRules(ctx context.Context, branchID uuid.UUID) ([]notification.Rule, error) {
+	overlays, err := s.repo.ListEscalationOverrides(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	return domain.MergeEscalation(notification.DefaultRules(), overlays), nil
 }
 
 type UpsertEscalationInput struct {
@@ -128,6 +143,9 @@ func (s *Service) UpsertEscalation(ctx context.Context, branchID uuid.UUID, kind
 	kind = strings.TrimSpace(kind)
 	if kind == "" {
 		return nil, shared.NewValidation("kind is required")
+	}
+	if notification.MatchRule(kind) == nil {
+		return nil, shared.NewValidation("unknown escalation kind: " + kind)
 	}
 	if in.EscalateAfterSeconds < 0 {
 		return nil, shared.NewValidation("escalate_after_seconds must be >= 0")

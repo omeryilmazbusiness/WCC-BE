@@ -50,7 +50,7 @@ func NewRepository(pool *pgxpool.Pool, pii *pgpii.Passports) *Repository {
 const customerCols = `id, branch_id, full_name, full_name_ar, phone, email, nationality,
 	COALESCE(passport_no,''), passport_enc, date_of_birth, COALESCE(preferences,'{}'::jsonb),
 	COALESCE(special_requirements,''), notes, merged_into_id, COALESCE(is_active,true),
-	created_by, created_at, updated_at, anonymized_at`
+	created_by, created_at, updated_at, anonymized_at, passport_expires_at`
 
 func (r *Repository) Create(ctx context.Context, c *domain.Customer) error {
 	if err := pgscope.EnsureBranch(ctx, c.BranchID); err != nil {
@@ -69,12 +69,12 @@ func (r *Repository) Create(ctx context.Context, c *domain.Customer) error {
 			id, branch_id, full_name, full_name_ar, phone, email, nationality,
 			passport_no, passport_enc, passport_hash, passport_last4,
 			date_of_birth, preferences, special_requirements, notes,
-			merged_into_id, is_active, created_by, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,'',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
+			merged_into_id, is_active, created_by, created_at, updated_at, passport_expires_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,'',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
 		c.ID, c.BranchID, c.FullName, c.FullNameAR, c.Phone, c.Email, c.Nationality,
 		pp.Enc, pp.Hash, pp.Last4,
 		c.DateOfBirth, c.Preferences, c.SpecialRequirements, c.Notes,
-		c.MergedIntoID, c.IsActive, c.CreatedBy, c.CreatedAt, c.UpdatedAt,
+		c.MergedIntoID, c.IsActive, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.PassportExpiresAt,
 	)
 	return err
 }
@@ -91,7 +91,7 @@ func (r *Repository) Update(ctx context.Context, c *domain.Customer) error {
 	scope, args, err := pgscope.Clause(ctx, scopeCustomers, []any{
 		c.ID, c.FullName, c.FullNameAR, c.Phone, c.Email, c.Nationality,
 		pp.Enc, pp.Hash, pp.Last4, c.DateOfBirth, c.Preferences, c.SpecialRequirements,
-		c.Notes, c.IsActive, c.UpdatedAt,
+		c.Notes, c.IsActive, c.UpdatedAt, c.PassportExpiresAt,
 	})
 	if err != nil {
 		return err
@@ -101,7 +101,7 @@ func (r *Repository) Update(ctx context.Context, c *domain.Customer) error {
 			full_name=$2, full_name_ar=$3, phone=$4, email=$5, nationality=$6,
 			passport_no='', passport_enc=$7, passport_hash=$8, passport_last4=$9,
 			date_of_birth=$10, preferences=$11, special_requirements=$12,
-			notes=$13, is_active=$14, updated_at=$15
+			notes=$13, is_active=$14, updated_at=$15, passport_expires_at=$16
 		WHERE id=$1`+scope, args...)
 	if err != nil {
 		return err
@@ -261,7 +261,7 @@ func (r *Repository) ListCompanions(ctx context.Context, customerID uuid.UUID) (
 			c.id, c.branch_id, c.full_name, c.full_name_ar, c.phone, c.email, c.nationality,
 			COALESCE(c.passport_no,''), c.passport_enc, c.date_of_birth, COALESCE(c.preferences,'{}'::jsonb),
 			COALESCE(c.special_requirements,''), c.notes, c.merged_into_id, COALESCE(c.is_active,true),
-			c.created_by, c.created_at, c.updated_at, c.anonymized_at
+			c.created_by, c.created_at, c.updated_at, c.anonymized_at, c.passport_expires_at
 		FROM customer_companions cc
 		JOIN customers c ON c.id = cc.companion_id
 		WHERE cc.customer_id=$1`+scope+parentScope+`
@@ -279,7 +279,7 @@ func (r *Repository) ListCompanions(ctx context.Context, customerID uuid.UUID) (
 			&link.ID, &link.CustomerID, &link.CompanionID, &link.Relation, &link.Notes, &link.CreatedAt,
 			&comp.ID, &comp.BranchID, &comp.FullName, &comp.FullNameAR, &comp.Phone, &comp.Email, &comp.Nationality,
 			&legacy, &enc, &comp.DateOfBirth, &comp.Preferences, &comp.SpecialRequirements, &comp.Notes,
-			&comp.MergedIntoID, &comp.IsActive, &comp.CreatedBy, &comp.CreatedAt, &comp.UpdatedAt, &comp.AnonymizedAt,
+			&comp.MergedIntoID, &comp.IsActive, &comp.CreatedBy, &comp.CreatedAt, &comp.UpdatedAt, &comp.AnonymizedAt, &comp.PassportExpiresAt,
 		); err != nil {
 			return nil, err
 		}
@@ -419,7 +419,7 @@ func (r *Repository) scan(row scannable) (*domain.Customer, error) {
 	err := row.Scan(
 		&c.ID, &c.BranchID, &c.FullName, &c.FullNameAR, &c.Phone, &c.Email, &c.Nationality,
 		&legacy, &enc, &c.DateOfBirth, &c.Preferences, &c.SpecialRequirements, &c.Notes,
-		&c.MergedIntoID, &c.IsActive, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.AnonymizedAt,
+		&c.MergedIntoID, &c.IsActive, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.AnonymizedAt, &c.PassportExpiresAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

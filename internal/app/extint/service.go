@@ -11,6 +11,7 @@ import (
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/extint"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/crypto"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 )
 
 // AdapterRegistry resolves stub probes (DIP).
@@ -39,7 +40,10 @@ type Service struct {
 	registry AdapterRegistry
 	catalog  []domain.CatalogEntry
 	vault    secretcfg.Vault
+	outbox   events.Outbox
 }
+
+func (s *Service) SetOutbox(o events.Outbox) { s.outbox = o }
 
 func NewService(repo domain.Repository, registry AdapterRegistry, catalog []domain.CatalogEntry, secrets crypto.SecretSealer) *Service {
 	return &Service{repo: repo, registry: registry, catalog: catalog, vault: secretcfg.NewVault(secrets)}
@@ -237,10 +241,17 @@ func (s *Service) Probe(ctx context.Context, branchID, id uuid.UUID) (*domain.In
 		if i.Status == domain.StatusStub || i.Status == domain.StatusError {
 			i.Status = domain.StatusConfigured
 		}
-		_ = msg
 	}
 	if err := s.repo.Update(ctx, i); err != nil {
 		return nil, err
+	}
+	if probeErr != nil {
+		intID := i.ID
+		if err := events.Record(ctx, s.outbox, events.Event{Name: events.IntegrationFailed, Payload: events.IntegrationFailedPayload{
+			BranchID: i.BranchID, Source: "external", Provider: i.ProviderKey, AccountID: &intID, Error: msg, At: now,
+		}}); err != nil {
+			return nil, err
+		}
 	}
 	return i, s.redact(i)
 }

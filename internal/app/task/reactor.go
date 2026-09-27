@@ -76,6 +76,7 @@ func (r *Reactor) onLeadConverted(ctx context.Context, ev events.Event) error {
 		RelatedID:      l.ID,
 		DueAt:          &due,
 		IdempotencyKey: fmt.Sprintf("lead:%s:converted-booking", l.ID),
+		SourceRule:     domain.RuleLeadConverted,
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
