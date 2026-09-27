@@ -9,7 +9,9 @@ import (
 	"github.com/google/uuid"
 
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/ai"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/crypto"
 )
 
 // ProviderRegistry resolves BYO LLM adapters (DIP).
@@ -63,6 +65,8 @@ type SetupInput struct {
 type Service struct {
 	repo     domain.Repository
 	registry ProviderRegistry
+	secrets  crypto.SecretSealer
+	audit    audit.Recorder
 	leadsPri LeadPriorityWriter
 	dash     DashboardReader
 	inbox    ConversationReader
@@ -70,8 +74,24 @@ type Service struct {
 	targets  TargetReader
 }
 
-func NewService(repo domain.Repository, registry ProviderRegistry) *Service {
-	return &Service{repo: repo, registry: registry}
+func NewService(repo domain.Repository, registry ProviderRegistry, secrets crypto.SecretSealer) *Service {
+	return &Service{repo: repo, registry: registry, secrets: secrets}
+}
+
+func secretBinding(branchID uuid.UUID) crypto.Binding {
+	return crypto.Binding{Table: domain.SecretsTable, RowID: branchID, BranchID: branchID}
+}
+
+// apiKey opens the sealed key; rows not yet backfilled still carry it in config_json.
+func (s *Service) apiKey(st *domain.Settings) (string, error) {
+	if st.SecretsEnc == "" {
+		return domain.ParseAPIKey(st.ConfigJSON), nil
+	}
+	secrets, err := s.secrets.Open(st.SecretsEnc, secretBinding(st.BranchID))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(secrets["api_key"]), nil
 }
 
 func (s *Service) SetLeadPriorityWriter(w LeadPriorityWriter) { s.leadsPri = w }
@@ -93,7 +113,10 @@ func (s *Service) GetSetup(ctx context.Context, branchID uuid.UUID) (map[string]
 			"accepted_providers": []string{"openai", "anthropic", "gemini"},
 		}, nil
 	}
-	key := domain.ParseAPIKey(st.ConfigJSON)
+	key, err := s.apiKey(st)
+	if err != nil {
+		return nil, err
+	}
 	completed := st.SetupCompletedAt != nil
 	return map[string]any{
 		"configured":         key != "" && domain.ValidProvider(st.Provider),
@@ -122,26 +145,35 @@ func (s *Service) CompleteSetup(ctx context.Context, in SetupInput) (map[string]
 		if err != nil {
 			return nil, err
 		}
-		if existing == nil || domain.ParseAPIKey(existing.ConfigJSON) == "" {
+		if existing != nil {
+			if key, err = s.apiKey(existing); err != nil {
+				return nil, err
+			}
+		}
+		if key == "" {
 			return nil, shared.NewValidation("api_key is required")
 		}
-		key = domain.ParseAPIKey(existing.ConfigJSON)
 	}
 	model := strings.TrimSpace(in.Model)
 	if model == "" {
 		model = domain.DefaultModel(in.Provider)
 	}
-	cfg, _ := json.Marshal(map[string]string{"api_key": key})
+	sealed, err := s.secrets.Seal(map[string]string{"api_key": key}, secretBinding(in.BranchID))
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	actor := in.ActorID
 	st := &domain.Settings{
 		BranchID: in.BranchID, Provider: in.Provider, Model: model,
-		Enabled: in.Enabled, ConfigJSON: cfg,
+		Enabled: in.Enabled, ConfigJSON: json.RawMessage(`{}`), SecretsEnc: sealed,
 		SetupCompletedAt: &now, UpdatedBy: &actor, UpdatedAt: now, CreatedAt: now,
 	}
+	before := s.currentMeta(ctx, in.BranchID)
 	if err := s.repo.UpsertSettings(ctx, st); err != nil {
 		return nil, err
 	}
+	s.recordSettings(ctx, "ai.settings_updated", in.BranchID, in.ActorID, before, st, strings.TrimSpace(in.APIKey) != "")
 	return s.GetSetup(ctx, in.BranchID)
 }
 
@@ -150,6 +182,7 @@ func (s *Service) Disable(ctx context.Context, branchID, actorID uuid.UUID) (map
 	if err != nil || st == nil {
 		return nil, shared.NewNotFound("ai_settings")
 	}
+	before := settingsMeta(st)
 	st.Enabled = false
 	now := time.Now().UTC()
 	st.UpdatedAt = now
@@ -157,6 +190,7 @@ func (s *Service) Disable(ctx context.Context, branchID, actorID uuid.UUID) (map
 	if err := s.repo.UpsertSettings(ctx, st); err != nil {
 		return nil, err
 	}
+	s.recordSettings(ctx, "ai.disabled", branchID, actorID, before, st, false)
 	return s.GetSetup(ctx, branchID)
 }
 
@@ -168,7 +202,10 @@ func (s *Service) resolve(ctx context.Context, branchID uuid.UUID) (*domain.Sett
 	if st == nil || !st.Enabled {
 		return nil, nil, "", domain.ErrNotConfigured()
 	}
-	key := domain.ParseAPIKey(st.ConfigJSON)
+	key, err := s.apiKey(st)
+	if err != nil {
+		return nil, nil, "", err
+	}
 	if key == "" || !domain.ValidProvider(st.Provider) {
 		return nil, nil, "", domain.ErrNotConfigured()
 	}

@@ -16,7 +16,6 @@ import (
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/customer"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/customer"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
-	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
 
 type Handler struct {
@@ -94,7 +93,7 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 			meta["duplicate_of"] = res.Duplicates[0].Customer.ID
 		}
 	}
-	response.JSONMeta(w, http.StatusCreated, mapCustomer(res.Customer, !canReadPII(r)), meta)
+	response.JSONMeta(w, http.StatusCreated, mapCustomer(res.Customer), meta)
 }
 
 func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +128,7 @@ func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapCustomer(c, !canReadPII(r)))
+	response.JSON(w, http.StatusOK, mapCustomer(c))
 }
 
 func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +142,7 @@ func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapCustomer(c, !canReadPII(r)))
+	response.JSON(w, http.StatusOK, mapCustomer(c))
 }
 
 func (h Handler) Search(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +162,7 @@ func (h Handler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(items))
 	for i := range items {
-		out = append(out, mapCustomer(&items[i], true))
+		out = append(out, mapCustomer(&items[i]))
 	}
 	meta := shared.NewPageMeta(int64(total), page)
 	response.JSONMeta(w, http.StatusOK, out, map[string]any{
@@ -214,7 +213,7 @@ func (h Handler) Merge(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapCustomer(c, !canReadPII(r)))
+	response.JSON(w, http.StatusOK, mapCustomer(c))
 }
 
 func (h Handler) Timeline(w http.ResponseWriter, r *http.Request) {
@@ -243,13 +242,11 @@ func (h Handler) ListCompanions(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	if !canReadPII(r) {
-		for i := range items {
-			if c := items[i].Companion; c != nil {
-				masked := *c
-				masked.PassportNo = shared.MaskPassport(masked.PassportNo)
-				items[i].Companion = &masked
-			}
+	for i := range items {
+		if c := items[i].Companion; c != nil {
+			masked := *c
+			masked.PassportNo = shared.MaskedPassport(masked.PassportNo)
+			items[i].Companion = &masked
 		}
 	}
 	response.JSON(w, http.StatusOK, items)
@@ -304,19 +301,11 @@ func (h Handler) UnlinkCompanion(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// canReadPII reports whether full passport numbers may be returned (T-243).
-func canReadPII(r *http.Request) bool {
-	claims, ok := middleware.ClaimsFrom(r.Context())
-	return ok && platformauth.HasPermission(claims.Role, platformauth.PermPIIRead)
-}
-
-func mapCustomer(c *domain.Customer, maskPassport bool) map[string]any {
+// mapCustomer always masks the passport, even for pii.read holders: the full
+// number is only disclosed through the audited reveal endpoint (T-261).
+func mapCustomer(c *domain.Customer) map[string]any {
 	if c == nil {
 		return nil
-	}
-	passport := c.PassportNo
-	if maskPassport {
-		passport = shared.MaskPassport(passport)
 	}
 	var dob any
 	if c.DateOfBirth != nil {
@@ -329,9 +318,10 @@ func mapCustomer(c *domain.Customer, maskPassport bool) map[string]any {
 	return map[string]any{
 		"id": c.ID, "branch_id": c.BranchID, "full_name": c.FullName, "full_name_ar": c.FullNameAR,
 		"phone": c.Phone, "email": c.Email, "nationality": c.Nationality,
-		"passport_no": passport, "date_of_birth": dob, "preferences": prefs,
+		"passport_no": shared.MaskedPassport(c.PassportNo), "passport_last4": shared.PassportLast4(c.PassportNo),
+		"date_of_birth": dob, "preferences": prefs,
 		"special_requirements": c.SpecialRequirements, "notes": c.Notes,
-		"merged_into_id": c.MergedIntoID, "is_active": c.IsActive,
+		"merged_into_id": c.MergedIntoID, "is_active": c.IsActive, "anonymized_at": c.AnonymizedAt,
 		"created_by": c.CreatedBy, "created_at": c.CreatedAt, "updated_at": c.UpdatedAt,
 	}
 }

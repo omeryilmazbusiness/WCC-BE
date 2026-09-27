@@ -8,22 +8,27 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/search"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
 type Repository struct {
 	pool *pgxpool.Pool
+	pii  *pgpii.Passports
 }
 
-func NewRepository(pool *pgxpool.Pool) *Repository {
-	return &Repository{pool: pool}
+func NewRepository(pool *pgxpool.Pool, pii *pgpii.Passports) *Repository {
+	return &Repository{pool: pool, pii: pii}
 }
 
 // Search spans customers (branch-shared), leads and bookings (branch + owner)
 // and booking participants (via their booking), each filtered by the
 // caller's scope; branchID nil searches every branch the scope allows.
+// Passport hits match the full number exactly (blind index) and carry only
+// the last four characters as subtitle.
 func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, limit int) ([]domain.Hit, error) {
 	if limit <= 0 {
 		limit = 20
@@ -32,7 +37,7 @@ func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, 
 		limit = 50
 	}
 	pat := "%" + strings.ToLower(strings.TrimSpace(q)) + "%"
-	args := []any{branchID, q, pat}
+	args := []any{branchID, q, pat, r.pii.Hash(q), shared.NormalizePassport(q)}
 	var sc [3]string
 	for i, cols := range []pgscope.Columns{
 		{Branch: "c.branch_id"},
@@ -93,14 +98,19 @@ func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, q string, 
 		(
 			SELECT 'passport', p.id,
 				p.full_name,
-				COALESCE(NULLIF(p.passport_no,''), ''),
+				CASE
+					WHEN p.passport_last4 <> '' THEN p.passport_last4
+					WHEN length(replace(p.passport_no,' ','')) > 4 THEN right(upper(replace(p.passport_no,' ','')), 4)
+					ELSE ''
+				END,
 				'bookings',
 				80
 			FROM booking_participants p
 			JOIN bookings b ON b.id = p.booking_id
 			WHERE ($1::uuid IS NULL OR b.branch_id=$1)`+bsc+`
-			  AND p.passport_no <> ''
-			  AND lower(p.passport_no) LIKE $3
+			  AND $4 <> ''
+			  AND (p.passport_hash = $4
+			    OR (p.passport_no <> '' AND upper(replace(p.passport_no,' ','')) = $5))
 		)
 		ORDER BY score DESC, title
 		LIMIT $%d`, len(args)), args...)

@@ -41,10 +41,10 @@ func (r *Repository) GetSettings(ctx context.Context, branchID uuid.UUID) (*doma
 	var s domain.Settings
 	var cfg []byte
 	err = q.QueryRow(ctx, `
-		SELECT branch_id, provider, model, enabled, config_json,
+		SELECT branch_id, provider, model, enabled, config_json, secrets_enc,
 		       setup_completed_at, updated_by, updated_at, created_at
 		FROM ai_settings WHERE branch_id=$1`+clause, args...).Scan(
-		&s.BranchID, &s.Provider, &s.Model, &s.Enabled, &cfg,
+		&s.BranchID, &s.Provider, &s.Model, &s.Enabled, &cfg, &s.SecretsEnc,
 		&s.SetupCompletedAt, &s.UpdatedBy, &s.UpdatedAt, &s.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -68,18 +68,19 @@ func (r *Repository) UpsertSettings(ctx context.Context, s *domain.Settings) err
 	}
 	_, err := q.Exec(ctx, `
 		INSERT INTO ai_settings (
-			branch_id, provider, model, enabled, config_json,
+			branch_id, provider, model, enabled, config_json, secrets_enc,
 			setup_completed_at, updated_by, updated_at, created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 		ON CONFLICT (branch_id) DO UPDATE SET
 			provider=EXCLUDED.provider,
 			model=EXCLUDED.model,
 			enabled=EXCLUDED.enabled,
 			config_json=EXCLUDED.config_json,
+			secrets_enc=EXCLUDED.secrets_enc,
 			setup_completed_at=EXCLUDED.setup_completed_at,
 			updated_by=EXCLUDED.updated_by,
 			updated_at=EXCLUDED.updated_at`,
-		s.BranchID, string(s.Provider), s.Model, s.Enabled, cfg,
+		s.BranchID, string(s.Provider), s.Model, s.Enabled, cfg, s.SecretsEnc,
 		s.SetupCompletedAt, s.UpdatedBy, s.UpdatedAt, s.CreatedAt,
 	)
 	return err

@@ -12,7 +12,9 @@ import (
 
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
 	pgimportexport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/importexport"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
 	"github.com/wodi-crm/wodi-crm-be/internal/app"
+	"github.com/wodi-crm/wodi-crm-be/internal/app/dataprotection"
 	appimportexport "github.com/wodi-crm/wodi-crm-be/internal/app/importexport"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/database"
@@ -38,9 +40,16 @@ func main() {
 	}
 	defer pool.Close()
 
+	keyring, err := app.NewKeyring(cfg.Auth)
+	if err != nil {
+		log.Error("encryption keyring", "error", err)
+		os.Exit(1)
+	}
+	passports := pgpii.NewPassports(keyring)
+
 	txm := tx.NewManager(pool)
-	importRepo := pgimportexport.NewRepository(pool)
-	customerRepo := pgcustomer.NewRepository(pool)
+	importRepo := pgimportexport.NewRepository(pool, passports)
+	customerRepo := pgcustomer.NewRepository(pool, passports)
 	importSvc := appimportexport.NewService(importRepo, customerRepo, txm)
 
 	srv, err := worker.NewServer(cfg.Redis, log)
@@ -52,6 +61,11 @@ func main() {
 	cleanup := app.NewSecurityRetention(pool)
 	srv.SetSecurityCleanup(func(ctx context.Context) error {
 		_, err := cleanup.Run(ctx, uuid.Nil)
+		return err
+	})
+	backfill := app.NewEncryptBackfill(pool, keyring)
+	srv.SetEncryptBackfill(func(ctx context.Context, rehash bool) error {
+		_, err := backfill.Run(ctx, uuid.Nil, dataprotection.Options{Rehash: rehash})
 		return err
 	})
 

@@ -173,8 +173,21 @@ func (s *Service) Unassign(ctx context.Context, departureID, participantID uuid.
 	return nil
 }
 
-func (s *Service) GroupList(ctx context.Context, departureID uuid.UUID) ([]domain.GroupListRow, error) {
-	return s.repo.GroupList(ctx, departureID)
+// GroupList returns the departure's participants with masked passports;
+// revealPassports (pii.read holders exporting for carriers/visa) keeps the
+// full numbers.
+func (s *Service) GroupList(ctx context.Context, departureID uuid.UUID, revealPassports bool) ([]domain.GroupListRow, error) {
+	rows, err := s.repo.GroupList(ctx, departureID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		rows[i].PassportLast4 = shared.PassportLast4(rows[i].PassportNo)
+		if !revealPassports {
+			rows[i].PassportNo = shared.MaskedPassport(rows[i].PassportNo)
+		}
+	}
+	return rows, nil
 }
 
 // ExportCSV builds a group-list CSV (header + rows).

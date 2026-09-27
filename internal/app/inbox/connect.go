@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/app/secretcfg"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -38,6 +39,9 @@ type ConnectInput struct {
 type ConnectResult struct {
 	Account    *domain.IntegrationAccount
 	WebhookURL string // relative; the branch is resolved from the signed payload's account
+	// VerifyToken is returned once so the operator can register the Meta
+	// subscription; afterwards only its hint is shown.
+	VerifyToken string
 }
 
 func (s *Service) Connect(ctx context.Context, in ConnectInput) (*ConnectResult, error) {
@@ -50,12 +54,11 @@ func (s *Service) Connect(ctx context.Context, in ConnectInput) (*ConnectResult,
 	if err := validateConnect(in); err != nil {
 		return nil, err
 	}
+	if s.secrets == nil {
+		return nil, errSecretsUnconfigured
+	}
 
 	cfg := buildConfig(in)
-	raw, err := json.Marshal(cfg)
-	if err != nil {
-		return nil, err
-	}
 	name := strings.TrimSpace(in.DisplayName)
 	if name == "" {
 		name = defaultDisplayName(in.Provider)
@@ -64,35 +67,47 @@ func (s *Service) Connect(ctx context.Context, in ConnectInput) (*ConnectResult,
 	if verify == "" {
 		verify = uuid.NewString()
 		cfg["verify_token"] = verify
-		raw, _ = json.Marshal(cfg)
+	}
+	public, secrets := shared.PartitionSecrets(cfg)
+	raw, err := json.Marshal(public)
+	if err != nil {
+		return nil, err
 	}
 
 	now := s.now()
 	acc := &domain.IntegrationAccount{
-		ID:          uuid.New(),
-		BranchID:    in.BranchID,
-		Provider:    in.Provider,
-		DisplayName: name,
-		Status:      domain.AccountConnected,
-		ConfigJSON:  raw,
-		Connected:   true,
-		LastOKAt:    &now,
-		UpdatedAt:   now,
-		PublicMeta:  publicMeta(in.Provider, cfg),
-		WebhookPath: "/v1/webhooks/" + string(in.Provider),
+		ID:              uuid.New(),
+		BranchID:        in.BranchID,
+		Provider:        in.Provider,
+		DisplayName:     name,
+		Status:          domain.AccountConnected,
+		ConfigJSON:      raw,
+		VerifyTokenHash: s.secrets.verifyTokenHash(verify),
+		Connected:       true,
+		LastOKAt:        &now,
+		UpdatedAt:       now,
+		PublicMeta:      publicMeta(in.Provider, cfg),
+		WebhookPath:     "/v1/webhooks/" + string(in.Provider),
 	}
 
-	existing, _ := s.repo.GetAccount(ctx, in.BranchID, in.Provider)
+	existing, err := s.repo.GetAccount(ctx, in.BranchID, in.Provider)
+	if err != nil {
+		return nil, err
+	}
 	if existing != nil {
 		acc.ID = existing.ID
+	}
+	if acc.SecretsEnc, err = s.secrets.vault.Seal(secretcfg.Config{Secrets: secrets}, accountBinding(acc)); err != nil {
+		return nil, err
 	}
 	if err := s.repo.UpsertAccount(ctx, acc); err != nil {
 		return nil, err
 	}
-	acc.ConfigJSON = nil // strip secrets from response path
+	acc.ConfigJSON, acc.SecretsEnc, acc.VerifyTokenHash = nil, "", ""
 	return &ConnectResult{
-		Account:    acc,
-		WebhookURL: acc.WebhookPath,
+		Account:     acc,
+		WebhookURL:  acc.WebhookPath,
+		VerifyToken: verify,
 	}, nil
 }
 
@@ -114,6 +129,7 @@ func (s *Service) Disconnect(ctx context.Context, branchID uuid.UUID, provider d
 	acc.Status = domain.AccountDisconnected
 	acc.Connected = false
 	acc.ConfigJSON = []byte(`{}`)
+	acc.SecretsEnc, acc.VerifyTokenHash = "", ""
 	acc.PublicMeta = map[string]string{}
 	acc.LastError = ""
 	acc.LastOKAt = nil
@@ -135,7 +151,9 @@ func (s *Service) IntegrationHealth(ctx context.Context, branchID uuid.UUID) ([]
 	by := map[domain.Channel]*domain.IntegrationAccount{}
 	for i := range accounts {
 		a := &accounts[i]
-		enrichAccount(a)
+		if err := s.enrichAccount(a); err != nil {
+			return nil, nil, err
+		}
 		by[a.Provider] = a
 	}
 	var out []domain.IntegrationAccount
@@ -261,23 +279,30 @@ func publicMeta(provider domain.Channel, cfg map[string]string) map[string]strin
 		}
 	}
 	if tok := cfg["access_token"]; len(tok) > 4 {
-		out["access_token_hint"] = "••••" + tok[len(tok)-4:]
+		out["access_token_hint"] = shared.SecretHint(tok)
 	}
 	if cfg["refresh_token"] != "" {
 		out["has_refresh_token"] = "true"
 	}
-	if cfg["verify_token"] != "" {
-		out["verify_token"] = cfg["verify_token"]
+	if tok := cfg["verify_token"]; tok != "" {
+		out["verify_token_hint"] = shared.SecretHint(tok)
 	}
 	out["provider"] = string(provider)
 	return out
 }
 
-func enrichAccount(a *domain.IntegrationAccount) {
+func (s *Service) enrichAccount(a *domain.IntegrationAccount) error {
 	a.Connected = a.Status == domain.AccountConnected || a.Status == domain.AccountOK || a.Status == domain.AccountDegraded
-	if len(a.ConfigJSON) > 0 && string(a.ConfigJSON) != "{}" && string(a.ConfigJSON) != "null" {
+	if hasConfig(a) {
+		if s.secrets == nil {
+			return errSecretsUnconfigured
+		}
+		loaded, err := s.secrets.load(a)
+		if err != nil {
+			return err
+		}
 		var cfg map[string]string
-		if json.Unmarshal(a.ConfigJSON, &cfg) == nil {
+		if json.Unmarshal(loaded.Merged(), &cfg) == nil {
 			if cfg["access_token"] != "" || cfg["refresh_token"] != "" {
 				a.Connected = true
 				if a.Status == domain.AccountDisconnected || a.Status == "" {
@@ -291,7 +316,16 @@ func enrichAccount(a *domain.IntegrationAccount) {
 		a.PublicMeta = map[string]string{}
 	}
 	a.WebhookPath = "/v1/webhooks/" + string(a.Provider)
-	a.ConfigJSON = nil
+	a.ConfigJSON, a.SecretsEnc, a.VerifyTokenHash = nil, "", ""
+	return nil
+}
+
+func hasConfig(a *domain.IntegrationAccount) bool {
+	if a.SecretsEnc != "" {
+		return true
+	}
+	c := string(a.ConfigJSON)
+	return len(c) > 0 && c != "{}" && c != "null"
 }
 
 func defaultDisplayName(p domain.Channel) string {

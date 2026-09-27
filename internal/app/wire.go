@@ -32,6 +32,7 @@ import (
 	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
+	privacyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/privacy"
 	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
 	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
@@ -61,6 +62,7 @@ import (
 	pglead "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/lead"
 	pgnotification "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/notification"
 	pgpayment "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/payment"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
 	pgreport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/report"
 	pgrevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/revenuetarget"
 	pgrooming "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/rooming"
@@ -135,18 +137,20 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	}
 	store := storage.NewMinIO(cfg.Storage)
 	q := queue.NewAsynqClient(cfg.Redis, log)
-	keyring, err := crypto.NewKeyring(cfg.Auth.EncryptionKeyID, cfg.Auth.EncryptionKey, cfg.Auth.PreviousEncryptionKeys)
+	keyring, err := NewKeyring(cfg.Auth)
 	if err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("encryption keyring: %w", err)
 	}
+	secretBox := crypto.NewSecretBox(keyring)
+	passports := pgpii.NewPassports(keyring)
 	limiter, rdb := newRateLimiter(cfg.Redis, log)
 
 	identityRepo := pgidentity.NewRepository(pool)
 	auditRepo := pgaudit.NewRepository(pool)
-	customerRepo := pgcustomer.NewRepository(pool)
+	customerRepo := pgcustomer.NewRepository(pool, passports)
 	leadRepo := pglead.NewRepository(pool)
-	bookingRepo := pgbooking.NewRepository(pool)
+	bookingRepo := pgbooking.NewRepository(pool, passports)
 	paymentRepo := pgpayment.NewRepository(pool)
 	taskRepo := pgtask.NewRepository(pool)
 	pkgRepo := pkgpg.NewRepository(pool)
@@ -165,7 +169,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	)
 
 	auditSvc := appaudit.NewService(auditRepo)
-	auditor := systemAuditor{svc: auditSvc, repo: auditRepo}
+	auditor := auditSvc
 	securityRepo := pgidentity.NewSecurityRepository(identityRepo)
 	sessionCheck := sessioncache.New(securityRepo, cfg.Auth.SessionCheckCacheTTL, sessioncache.DefaultMaxEntries)
 	authSvc := newAuthService(cfg, identityRepo, securityRepo, auditor, tokens, txm, keyring, limiter, sessionCheck)
@@ -192,9 +196,11 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	targetReactor := apprevenuetarget.NewReactor(targetSvc, bookingRepo)
 	targetReactor.Register(bus)
 	pkgSvc := apppkg.NewService(pkgRepo, txm)
+	pkgSvc.SetAuditor(auditSvc)
 	pkgSvc.SetBookingReader(bookingRepo)
 	dashSvc := appdashboard.NewService(dashAgg)
 	docSvc := appdocument.NewService(docRepo, store, txm)
+	docSvc.SetAuditor(auditSvc)
 	docSvc.SetBookingContext(bookingDocsBridge{repo: bookingRepo})
 	docSvc.SetEnqueuer(q)
 	bookingSvc.SetDocReadiness(docSvc)
@@ -215,7 +221,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		aiprovider.NewAnthropic(),
 		aiprovider.NewGemini(),
 	)
-	aiSvc := appai.NewService(aiRepo, aiReg)
+	aiSvc := appai.NewService(aiRepo, aiReg, secretBox)
+	aiSvc.SetAuditor(auditSvc)
 	aiSvc.SetLeadPriorityWriter(aiRepo)
 	aiSvc.SetDashboardReader(aiDashBridge{dash: dashSvc})
 	aiSvc.SetConversationReader(aiInboxBridge{repo: inboxRepo})
@@ -226,25 +233,29 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		filesyncprovider.NewOneDrive(),
 		filesyncprovider.NewSharePoint(),
 	)
-	fileSyncSvc := appfilesync.NewService(fileSyncRepo, fileSyncReg)
+	fileSyncSvc := appfilesync.NewService(fileSyncRepo, fileSyncReg, secretBox)
 	extIntRepo := pgextint.NewRepository(pool)
 	extIntReg := extintadapter.DefaultRegistry()
-	extIntSvc := appextint.NewService(extIntRepo, extIntReg, extintadapter.Catalog())
+	extIntSvc := appextint.NewService(extIntRepo, extIntReg, extintadapter.Catalog(), secretBox)
 	inboxSvc := appinbox.NewService(inboxRepo, providers, txm, bus)
+	inboxSvc.SetSecrets(secretBox, keyring)
 	inboxSvc.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
 	inboxSvc.SetLeadShellCreator(inboxLeadBridge{svc: leadSvc})
 
 	adminConfigRepo := pgadminconfig.NewRepository(pool)
 	adminConfigSvc := appadminconfig.NewService(adminConfigRepo, txm)
-	roomingRepo := pgrooming.NewRepository(pool)
+	adminConfigSvc.SetAuditor(auditSvc)
+	roomingRepo := pgrooming.NewRepository(pool, passports)
 	roomingSvc := approoming.NewService(roomingRepo)
-	searchRepo := pgsearch.NewRepository(pool)
+	searchRepo := pgsearch.NewRepository(pool, passports)
 	searchSvc := appsearch.NewService(searchRepo)
 
-	importRepo := pgimportexport.NewRepository(pool)
+	importRepo := pgimportexport.NewRepository(pool, passports)
 	importSvc := appimportexport.NewService(importRepo, customerRepo, txm)
 	importSvc.SetEnqueuer(q)
 	importSvc.SetQueueMode(q)
+	backfillSvc := newEncryptBackfill(pool, keyring, auditSvc)
+	privacySvc := newPrivacyService(pool, customerRepo, bookingRepo, txm, auditSvc, limiter)
 
 	taskSeeder.Register(bus)
 	taskReactor := apptask.NewReactor(taskRepo, bookingRepo, txm)
@@ -271,7 +282,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Visa:         visahttp.Handler{Svc: visaSvc},
 		Supplier:     supplierhttp.Handler{Svc: supplierSvc},
 		Package:      pkghttp.Handler{Svc: pkgSvc},
-		Ops:          opshttp.Handler{Queue: q, Cleanup: retentionSvc},
+		Ops:          opshttp.Handler{Queue: q, Cleanup: retentionSvc, Backfill: backfillSvc},
 		Inbox:        inboxhttp.Handler{Svc: inboxSvc},
 		Import:       importhttp.Handler{Svc: importSvc},
 		Notification: notificationhttp.Handler{Svc: notifSvc},
@@ -282,7 +293,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		AdminConfig:  adminconfighttp.Handler{Svc: adminConfigSvc},
 		Rooming:      roominghttp.Handler{Svc: roomingSvc},
 		Search:       searchhttp.Handler{Svc: searchSvc},
-		Webhook:      newWebhookHandler(cfg, log, pool, inboxRepo, inboxSvc, auditor, limiter),
+		Privacy:      privacyhttp.Handler{Svc: privacySvc},
+		Webhook:      newWebhookHandler(cfg, log, pool, appinbox.NewWebhookAccounts(inboxRepo, secretBox, keyring), inboxSvc, auditor, limiter),
 	}
 
 	router := httpadapter.NewRouter(cfg, tokens, sessionCheck, handlers)

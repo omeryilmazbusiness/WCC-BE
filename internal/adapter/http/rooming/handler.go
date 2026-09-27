@@ -14,6 +14,7 @@ import (
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/rooming"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/rooming"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
 
 type Handler struct {
@@ -198,7 +199,7 @@ func (h Handler) GroupList(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid departure id"))
 		return
 	}
-	items, err := h.Svc.GroupList(r.Context(), depID)
+	items, err := h.Svc.GroupList(r.Context(), depID, false)
 	if err != nil {
 		response.Error(w, err)
 		return
@@ -207,7 +208,8 @@ func (h Handler) GroupList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) GroupListCSV(w http.ResponseWriter, r *http.Request) {
-	if _, ok := middleware.ClaimsFrom(r.Context()); !ok {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
@@ -216,7 +218,8 @@ func (h Handler) GroupListCSV(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid departure id"))
 		return
 	}
-	items, err := h.Svc.GroupList(r.Context(), depID)
+	reveal := platformauth.HasPermission(claims.Role, platformauth.PermPIIRead)
+	items, err := h.Svc.GroupList(r.Context(), depID, reveal)
 	if err != nil {
 		response.Error(w, err)
 		return

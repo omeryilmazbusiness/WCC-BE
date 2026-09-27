@@ -28,9 +28,13 @@ func mapConn(c *domain.Connection) map[string]any {
 		"entity_type": c.EntityType, "source_of_truth": c.SourceOfTruth,
 		"conflict_policy": c.ConflictPolicy, "enabled": c.Enabled,
 		"status": c.Status, "last_error": c.LastError,
-		"config_json": c.ConfigJSON,
-		"created_at":  c.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updated_at":  c.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		"config_json":  c.ConfigJSON,
+		"secret_hints": c.SecretHints,
+		"created_at":   c.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"updated_at":   c.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	if c.SecretHints == nil {
+		m["secret_hints"] = map[string]string{}
 	}
 	if c.LastSyncAt != nil {
 		m["last_sync_at"] = c.LastSyncAt.UTC().Format(time.RFC3339Nano)

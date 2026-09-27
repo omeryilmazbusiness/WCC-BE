@@ -104,11 +104,16 @@ type Connection struct {
 	Status         ConnStatus
 	LastSyncAt     *time.Time
 	LastError      string
-	ConfigJSON     json.RawMessage
+	ConfigJSON     json.RawMessage // non-secret config
+	SecretsEnc     string          // sealed credentials (T-259)
+	SecretHints    map[string]string
 	CreatedBy      *uuid.UUID
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 }
+
+// SecretsTable binds sealed file sync credentials to their table.
+const SecretsTable = "file_sync_connections"
 
 func (c *Connection) Normalize() error {
 	c.DisplayName = strings.TrimSpace(c.DisplayName)

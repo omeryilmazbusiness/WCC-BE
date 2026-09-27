@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 )
 
 // Event is a domain occurrence published after a successful unit of work.
@@ -47,7 +48,7 @@ func (b *Bus) Publish(ctx context.Context, event Event) {
 
 	// Reactors are trusted system work: they act on behalf of the platform,
 	// not the caller, so they run with system scope.
-	hctx := access.WithScope(ctx, access.System())
+	hctx := audit.AsSystem(access.WithScope(ctx, access.System()))
 	for _, h := range hs {
 		if err := h(hctx, event); err != nil {
 			b.log.Error("domain event handler failed",

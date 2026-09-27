@@ -18,6 +18,29 @@ func TestNormalizeAndMask(t *testing.T) {
 	}
 }
 
+func TestPassportUpdate(t *testing.T) {
+	masked := "••••5678"
+	blank := ""
+	fresh := " ab 123456 "
+	cases := []struct {
+		name string
+		in   *string
+		want string
+		ok   bool
+	}{
+		{"omitted keeps", nil, "", false},
+		{"masked echo keeps", &masked, "", false},
+		{"blank clears", &blank, "", true},
+		{"new value normalized", &fresh, "AB123456", true},
+	}
+	for _, c := range cases {
+		got, ok := PassportUpdate(c.in)
+		if got != c.want || ok != c.ok {
+			t.Fatalf("%s: got (%q,%v) want (%q,%v)", c.name, got, ok, c.want, c.ok)
+		}
+	}
+}
+
 func TestNameSimilarity(t *testing.T) {
 	if NameSimilarity("Ahmed Al Rashid", "Ahmed Al-Rashid") < 50 {
 		t.Fatal("expected fuzzy match")

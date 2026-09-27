@@ -10,6 +10,7 @@ import (
 
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
@@ -19,6 +20,9 @@ type ProcessFunc func(ctx context.Context, importJobID string) error
 // CleanupFunc runs the idempotent security retention purge.
 type CleanupFunc func(ctx context.Context) error
 
+// EncryptBackfillFunc runs the idempotent encrypt backfill.
+type EncryptBackfillFunc func(ctx context.Context, rehash bool) error
+
 // Server wraps Asynq worker with retry + archived (DLQ) visibility.
 type Server struct {
 	log             *slog.Logger
@@ -26,6 +30,7 @@ type Server struct {
 	mux             *asynq.ServeMux
 	importProcess   ProcessFunc
 	securityCleanup CleanupFunc
+	encryptBackfill EncryptBackfillFunc
 }
 
 func NewServer(cfg config.RedisConfig, log *slog.Logger) (*Server, error) {
@@ -71,11 +76,16 @@ func (s *Server) SetSecurityCleanup(fn CleanupFunc) {
 	s.securityCleanup = fn
 }
 
+// SetEncryptBackfill wires the security.encrypt_backfill job handler.
+func (s *Server) SetEncryptBackfill(fn EncryptBackfillFunc) {
+	s.encryptBackfill = fn
+}
+
 // systemScope runs every job with the system access scope: jobs carry no
 // caller, and branch-bound work narrows the scope itself.
 func systemScope(next asynq.Handler) asynq.Handler {
 	return asynq.HandlerFunc(func(ctx context.Context, t *asynq.Task) error {
-		return next.ProcessTask(access.WithScope(ctx, access.System()), t)
+		return next.ProcessTask(audit.AsSystem(access.WithScope(ctx, access.System())), t)
 	})
 }
 
@@ -87,6 +97,7 @@ func (s *Server) registerHandlers() {
 	s.mux.HandleFunc(string(shared.JobReportGenerate), s.handleReport)
 	s.mux.HandleFunc(string(shared.JobAISummaryDaily), s.handleAISummary)
 	s.mux.HandleFunc(string(shared.JobSecurityCleanup), s.handleSecurityCleanup)
+	s.mux.HandleFunc(string(shared.JobEncryptBackfill), s.handleEncryptBackfill)
 }
 
 func (s *Server) Run() error {
@@ -162,5 +173,26 @@ func (s *Server) handleSecurityCleanup(ctx context.Context, _ *asynq.Task) error
 		return err
 	}
 	s.log.Info("processed security cleanup job")
+	return nil
+}
+
+type EncryptBackfillPayload struct {
+	Rehash bool `json:"rehash"`
+}
+
+func (s *Server) handleEncryptBackfill(ctx context.Context, t *asynq.Task) error {
+	if s.encryptBackfill == nil {
+		return fmt.Errorf("encrypt backfill not wired")
+	}
+	var p EncryptBackfillPayload
+	if len(t.Payload()) > 0 {
+		if err := json.Unmarshal(t.Payload(), &p); err != nil {
+			return fmt.Errorf("decode encrypt backfill: %w", err)
+		}
+	}
+	if err := s.encryptBackfill(ctx, p.Rehash); err != nil {
+		return err
+	}
+	s.log.Info("processed encrypt backfill job", "rehash", p.Rehash)
 	return nil
 }

@@ -56,12 +56,17 @@ type Integration struct {
 	DisplayName   string
 	Status        Status
 	Health        Health
-	ConfigJSON    json.RawMessage
+	ConfigJSON    json.RawMessage // non-secret config
+	SecretsEnc    string          // sealed credentials (T-259)
+	SecretHints   map[string]string
 	LastCheckedAt *time.Time
 	LastError     string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
+
+// SecretsTable binds sealed integration credentials to their table.
+const SecretsTable = "external_integrations"
 
 func (i *Integration) Normalize() error {
 	i.ProviderKey = strings.ToLower(strings.TrimSpace(i.ProviderKey))

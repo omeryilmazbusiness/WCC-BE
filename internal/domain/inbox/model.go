@@ -67,14 +67,21 @@ type IntegrationAccount struct {
 	Provider    Channel
 	DisplayName string
 	Status      string // disconnected|pending|connected|ok|degraded|down
-	ConfigJSON  []byte // secrets — never expose raw in list APIs
-	PublicMeta  map[string]string
-	Connected   bool
-	LastOKAt    *time.Time
-	LastError   string
-	UpdatedAt   time.Time
-	WebhookPath string // relative hint for FE
+	ConfigJSON  []byte // non-secret ids; legacy rows may still hold secrets until backfilled
+	SecretsEnc  string // sealed credentials (T-259)
+	// VerifyTokenHash is the blind index of the Meta verify_token, used for
+	// the unauthenticated subscription handshake lookup.
+	VerifyTokenHash string
+	PublicMeta      map[string]string
+	Connected       bool
+	LastOKAt        *time.Time
+	LastError       string
+	UpdatedAt       time.Time
+	WebhookPath     string // relative hint for FE
 }
+
+// AccountSecretsTable binds sealed integration account credentials to their table.
+const AccountSecretsTable = "integration_accounts"
 
 type ChannelIdentity struct {
 	ID          uuid.UUID

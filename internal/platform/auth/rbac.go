@@ -53,6 +53,8 @@ const (
 	PermFileSyncWrite       Permission = "filesync.write"
 	PermSettingsRead        Permission = "settings.read"
 	PermSettingsWrite       Permission = "settings.write"
+	// PermPrivacyManage serves KVKK data subject requests (export, anonymize).
+	PermPrivacyManage Permission = "privacy.manage"
 )
 
 const (
@@ -96,6 +98,7 @@ func PermissionsFor(role Role) []Permission {
 			PermAIRead, PermAIWrite, PermAISetup,
 			PermFileSyncRead, PermFileSyncWrite,
 			PermSettingsRead, PermSettingsWrite,
+			PermPrivacyManage,
 		}
 	case RoleAdmin:
 		return []Permission{
@@ -106,6 +109,7 @@ func PermissionsFor(role Role) []Permission {
 			PermAIRead, PermAIWrite, PermAISetup,
 			PermFileSyncRead, PermFileSyncWrite,
 			PermSettingsRead, PermSettingsWrite,
+			PermPrivacyManage,
 		}
 	case RoleManager:
 		return []Permission{

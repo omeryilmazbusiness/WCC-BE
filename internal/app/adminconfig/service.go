@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/adminconfig"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/lead"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/notification"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -15,9 +16,10 @@ import (
 )
 
 type Service struct {
-	repo domain.Repository
-	tx   tx.Runner
-	now  func() time.Time
+	repo  domain.Repository
+	tx    tx.Runner
+	audit audit.Recorder
+	now   func() time.Time
 }
 
 func NewService(repo domain.Repository, txm tx.Runner) *Service {
@@ -42,6 +44,10 @@ func (s *Service) PutSLA(ctx context.Context, branchID uuid.UUID, items []Upsert
 	}
 	out := make([]domain.SLAPolicy, 0, len(items))
 	err := s.tx.WithinTransaction(ctx, func(txCtx context.Context) error {
+		before, err := s.repo.ListSLA(txCtx, branchID)
+		if err != nil {
+			return err
+		}
 		for _, in := range items {
 			p := domain.SLAPolicy{
 				BranchID: branchID, Channel: in.Channel, FirstResponseSeconds: in.FirstResponseSeconds,
@@ -54,7 +60,8 @@ func (s *Service) PutSLA(ctx context.Context, branchID uuid.UUID, items []Upsert
 			}
 			out = append(out, p)
 		}
-		return nil
+		return s.recordSettings(txCtx, "settings.sla_updated", "sla", branchID,
+			map[string]any{"policies": before}, map[string]any{"policies": out}, nil)
 	})
 	if err != nil {
 		return nil, err
@@ -135,17 +142,49 @@ func (s *Service) UpsertEscalation(ctx context.Context, branchID uuid.UUID, kind
 		EscalateToRoles:      append([]string(nil), in.EscalateToRoles...),
 		Enabled:              enabled, UpdatedAt: s.now(),
 	}
-	if err := s.repo.UpsertEscalationOverride(ctx, o); err != nil {
+	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		before, err := s.escalationOverride(ctx, branchID, kind)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.UpsertEscalationOverride(ctx, o); err != nil {
+			return err
+		}
+		return s.recordSettings(ctx, "settings.escalation_updated", "escalation", branchID, before, o,
+			map[string]any{"kind": kind})
+	})
+	if err != nil {
 		return nil, err
 	}
 	return o, nil
 }
 
 func (s *Service) DeleteEscalation(ctx context.Context, branchID uuid.UUID, kind string) error {
-	if err := s.repo.DeleteEscalationOverride(ctx, branchID, strings.TrimSpace(kind)); err != nil {
-		return shared.NewNotFound("escalation_override")
+	kind = strings.TrimSpace(kind)
+	return s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		before, err := s.escalationOverride(ctx, branchID, kind)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.DeleteEscalationOverride(ctx, branchID, kind); err != nil {
+			return shared.NewNotFound("escalation_override")
+		}
+		return s.recordSettings(ctx, "settings.escalation_deleted", "escalation", branchID, before, nil,
+			map[string]any{"kind": kind})
+	})
+}
+
+func (s *Service) escalationOverride(ctx context.Context, branchID uuid.UUID, kind string) (*domain.EscalationOverride, error) {
+	items, err := s.repo.ListEscalationOverrides(ctx, branchID)
+	if err != nil {
+		return nil, err
 	}
-	return nil
+	for i := range items {
+		if items[i].Kind == kind {
+			return &items[i], nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *Service) GetLostReasons(ctx context.Context, branchID uuid.UUID, activeOnly bool) ([]domain.LostReason, error) {
@@ -344,7 +383,16 @@ func (s *Service) PutFields(ctx context.Context, branchID uuid.UUID, entity stri
 		rows[i].UpdatedAt = now
 	}
 	if err := s.tx.WithinTransaction(ctx, func(txCtx context.Context) error {
-		return s.repo.ReplaceFieldConfigs(txCtx, branchID, entity, rows)
+		before, err := s.repo.ListFieldConfigs(txCtx, branchID, entity)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.ReplaceFieldConfigs(txCtx, branchID, entity, rows); err != nil {
+			return err
+		}
+		return s.recordSettings(txCtx, "settings.fields_updated", "fields", branchID,
+			map[string]any{"fields": before}, map[string]any{"fields": rows},
+			map[string]any{"entity": entity})
 	}); err != nil {
 		return nil, err
 	}
@@ -369,7 +417,17 @@ func (s *Service) PutThresholds(ctx context.Context, branchID uuid.UUID, in doma
 	if err := in.Normalize(); err != nil {
 		return nil, err
 	}
-	if err := s.repo.UpsertAlertThresholds(ctx, &in); err != nil {
+	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		before, err := s.repo.GetAlertThresholds(ctx, branchID)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.UpsertAlertThresholds(ctx, &in); err != nil {
+			return err
+		}
+		return s.recordSettings(ctx, "settings.thresholds_updated", "thresholds", branchID, before, in, nil)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &in, nil

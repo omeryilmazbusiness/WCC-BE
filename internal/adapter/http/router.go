@@ -26,6 +26,7 @@ import (
 	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
+	privacyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/privacy"
 	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
 	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
@@ -69,6 +70,7 @@ type Handlers struct {
 	AdminConfig  adminconfighttp.Handler
 	Rooming      roominghttp.Handler
 	Search       searchhttp.Handler
+	Privacy      privacyhttp.Handler
 }
 
 // NewRouter wires every route. Authenticated routes verify the access token
@@ -84,6 +86,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 
 	r.Use(middleware.RequestID)
 	r.Use(middleware.TrustedRealIP(trusted))
+	r.Use(middleware.AuditContext)
 	r.Use(middleware.SecurityHeaders(!cfg.IsLocal()))
 	r.Use(middleware.MaxBody(cfg.HTTP.MaxBodyBytes))
 	r.Use(chimw.Logger)
@@ -143,6 +146,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			})
 
 			r.With(middleware.RequirePermission(platformauth.PermAuditRead)).Get("/audit-events", h.Audit.List)
+			r.With(middleware.RequirePermission(platformauth.PermAuditRead)).Get("/audit-events/export.csv", h.Audit.ExportCSV)
+			r.With(middleware.RequirePermission(platformauth.PermAuditRead)).Get("/audit-events/actions", h.Audit.Actions)
 
 			r.Route("/customers", func(r chi.Router) {
 				read := middleware.RequirePermission(platformauth.PermCustomersRead)
@@ -157,6 +162,11 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(read).Get("/{id}/companions", h.Customer.ListCompanions)
 				r.With(write).Post("/{id}/companions", h.Customer.LinkCompanion)
 				r.With(write).Delete("/{id}/companions/{companionId}", h.Customer.UnlinkCompanion)
+				piiRead := middleware.RequirePermission(platformauth.PermPIIRead)
+				privacy := middleware.RequirePermission(platformauth.PermPrivacyManage)
+				r.With(read, piiRead).Post("/{id}/reveal-passport", h.Privacy.RevealCustomerPassport)
+				r.With(privacy).Get("/{id}/export", h.Privacy.Export)
+				r.With(privacy).Post("/{id}/anonymize", h.Privacy.Anonymize)
 			})
 
 			r.Route("/leads", func(r chi.Router) {
@@ -186,6 +196,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/participants", h.Booking.AddParticipant)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Patch("/{id}/participants/{participantId}", h.Booking.UpdateParticipant)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Delete("/{id}/participants/{participantId}", h.Booking.DeleteParticipant)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsRead), middleware.RequirePermission(platformauth.PermPIIRead)).
+					Post("/{id}/participants/{participantId}/reveal-passport", h.Privacy.RevealParticipantPassport)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/line-items", h.Booking.ListLineItems)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Put("/{id}/line-items", h.Booking.SetLineItems)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/checklist", h.Booking.ListChecklist)
@@ -257,6 +269,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermOpsRead)).Get("/queue", h.Ops.QueueStats)
 				r.With(middleware.RequirePermission(platformauth.PermOpsRead)).Get("/jobs/{id}", h.Ops.JobStatus)
 				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/security-cleanup", h.Ops.SecurityCleanup)
+				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/encrypt-backfill", h.Ops.EncryptBackfill)
 			})
 
 			r.Route("/documents", func(r chi.Router) {
@@ -459,8 +472,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 		})
 
 		// Provider webhooks: signature-verified, branch resolved from the integration account.
-		r.Get("/webhooks/{provider}", h.Webhook.Verify)
-		r.Post("/webhooks/{provider}", h.Webhook.Ingest)
+		r.With(middleware.WebhookActor).Get("/webhooks/{provider}", h.Webhook.Verify)
+		r.With(middleware.WebhookActor).Post("/webhooks/{provider}", h.Webhook.Ingest)
 	})
 
 	return r

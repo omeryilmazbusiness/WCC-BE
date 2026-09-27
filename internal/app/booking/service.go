@@ -45,8 +45,9 @@ type AddParticipantInput struct {
 }
 
 type UpdateParticipantInput struct {
-	FullName    string
-	PassportNo  string
+	FullName string
+	// PassportNo nil or masked keeps the stored passport.
+	PassportNo  *string
 	Nationality string
 	DateOfBirth *time.Time
 }
@@ -157,7 +158,10 @@ func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Book
 		if err := s.repo.Create(ctx, b); err != nil {
 			return err
 		}
-		return s.repo.SeedChecklist(ctx, checklist)
+		if err := s.repo.SeedChecklist(ctx, checklist); err != nil {
+			return err
+		}
+		return s.recordBooking(ctx, "booking.created", b, nil, bookingSnapshot(b), nil)
 	}); err != nil {
 		return nil, err
 	}
@@ -199,11 +203,23 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*do
 		if err != nil {
 			return shared.NewNotFound("booking")
 		}
+		before := bookingSnapshot(b)
+		prevDiscount := b.DiscountAmt
 		if err := b.ApplyUpdate(in.PaxCount, in.TotalAmount, in.Currency, in.DiscountAmt, in.Notes); err != nil {
 			return err
 		}
 		if err := s.repo.Update(ctx, b); err != nil {
 			return err
+		}
+		if err := s.recordBooking(ctx, "booking.updated", b, before, bookingSnapshot(b), nil); err != nil {
+			return err
+		}
+		if b.DiscountAmt != prevDiscount {
+			if err := s.recordBooking(ctx, "booking.discount_changed", b,
+				map[string]any{"discount_amt": prevDiscount}, map[string]any{"discount_amt": b.DiscountAmt},
+				map[string]any{"currency": b.Currency}); err != nil {
+				return err
+			}
 		}
 		out = b
 		return nil
@@ -243,6 +259,7 @@ func (s *Service) Confirm(ctx context.Context, bookingID uuid.UUID) (*domain.Boo
 		if !check.CanSell(b.PaxCount) {
 			return shared.NewConflict("departure capacity exceeded")
 		}
+		from := b.Status
 		if err := b.TransitionTo(domain.StatusConfirmed); err != nil {
 			return err
 		}
@@ -256,18 +273,14 @@ func (s *Service) Confirm(ctx context.Context, bookingID uuid.UUID) (*domain.Boo
 		if err := s.departures.UpdateDepartureCapacitySold(ctx, b.DepartureID, soldAfter); err != nil {
 			return err
 		}
+		if err := s.recordStatusChange(ctx, b, from, soldBefore, soldAfter); err != nil {
+			return err
+		}
 		out = b
 		return nil
 	})
 	if err != nil {
 		return nil, err
-	}
-	if s.audit != nil && out != nil {
-		id := out.ID
-		_ = s.audit.Record(ctx, audit.RecordInput{
-			ActorID: out.OwnerID, Action: "booking.status_changed", EntityType: "booking", EntityID: &id, BranchID: &out.BranchID,
-			After: map[string]any{"status": out.Status},
-		})
 	}
 	s.bus.Publish(ctx, events.Event{Name: events.BookingConfirmed, Payload: out})
 	return out, nil
@@ -295,13 +308,19 @@ func (s *Service) Cancel(ctx context.Context, bookingID uuid.UUID) (*domain.Book
 			return shared.NewNotFound("booking")
 		}
 		wasConfirmed = b.Status == domain.StatusConfirmed
+		from := b.Status
 		if err := b.TransitionTo(domain.StatusCancelled); err != nil {
 			return err
 		}
 		if err := s.repo.Update(ctx, b); err != nil {
 			return err
 		}
+		soldBefore, soldAfter := -1, -1
 		if wasConfirmed {
+			dep, err := s.departures.FindDeparture(ctx, b.DepartureID)
+			if err == nil {
+				soldBefore = dep.CapacitySold
+			}
 			sold, err := s.repo.CountConfirmedPaxByDeparture(ctx, b.DepartureID)
 			if err != nil {
 				return err
@@ -309,19 +328,16 @@ func (s *Service) Cancel(ctx context.Context, bookingID uuid.UUID) (*domain.Book
 			if err := s.departures.UpdateDepartureCapacitySold(ctx, b.DepartureID, sold); err != nil {
 				return err
 			}
+			soldAfter = sold
+		}
+		if err := s.recordStatusChange(ctx, b, from, soldBefore, soldAfter); err != nil {
+			return err
 		}
 		out = b
 		return nil
 	})
 	if err != nil {
 		return nil, err
-	}
-	if s.audit != nil && out != nil {
-		id := out.ID
-		_ = s.audit.Record(ctx, audit.RecordInput{
-			ActorID: out.OwnerID, Action: "booking.status_changed", EntityType: "booking", EntityID: &id, BranchID: &out.BranchID,
-			After: map[string]any{"status": out.Status},
-		})
 	}
 	s.bus.Publish(ctx, events.Event{Name: events.BookingCancelled, Payload: out})
 	return out, nil
@@ -334,10 +350,14 @@ func (s *Service) complete(ctx context.Context, bookingID uuid.UUID) (*domain.Bo
 		if err != nil {
 			return shared.NewNotFound("booking")
 		}
+		from := b.Status
 		if err := b.TransitionTo(domain.StatusCompleted); err != nil {
 			return err
 		}
 		if err := s.repo.Update(ctx, b); err != nil {
+			return err
+		}
+		if err := s.recordStatusChange(ctx, b, from, -1, -1); err != nil {
 			return err
 		}
 		out = b
@@ -379,6 +399,9 @@ func (s *Service) AddParticipant(ctx context.Context, bookingID uuid.UUID, in Ad
 		if err := s.repo.AddParticipant(ctx, p); err != nil {
 			return err
 		}
+		if err := s.recordParticipant(ctx, "booking.participant_added", b, p.ID, nil, p); err != nil {
+			return err
+		}
 		out = p
 		return nil
 	})
@@ -413,11 +436,17 @@ func (s *Service) UpdateParticipant(ctx context.Context, bookingID, participantI
 		if found == nil {
 			return shared.NewNotFound("participant")
 		}
+		prev := *found
 		found.FullName = name
-		found.PassportNo = strings.TrimSpace(in.PassportNo)
+		if p, ok := shared.PassportUpdate(in.PassportNo); ok {
+			found.PassportNo = p
+		}
 		found.Nationality = strings.TrimSpace(in.Nationality)
 		found.DateOfBirth = in.DateOfBirth
 		if err := s.repo.UpdateParticipant(ctx, found); err != nil {
+			return err
+		}
+		if err := s.recordParticipant(ctx, "booking.participant_updated", b, found.ID, &prev, found); err != nil {
 			return err
 		}
 		out = found
@@ -435,7 +464,24 @@ func (s *Service) DeleteParticipant(ctx context.Context, bookingID, participantI
 		if b.Status != domain.StatusDraft {
 			return shared.NewInvalidState("participants can only be removed from draft bookings")
 		}
-		return s.repo.DeleteParticipant(ctx, bookingID, participantID)
+		var removed *domain.Participant
+		parts, err := s.repo.ListParticipants(ctx, bookingID)
+		if err != nil {
+			return err
+		}
+		for i := range parts {
+			if parts[i].ID == participantID {
+				removed = &parts[i]
+				break
+			}
+		}
+		if removed == nil {
+			return shared.NewNotFound("participant")
+		}
+		if err := s.repo.DeleteParticipant(ctx, bookingID, participantID); err != nil {
+			return err
+		}
+		return s.recordParticipant(ctx, "booking.participant_removed", b, participantID, removed, nil)
 	})
 }
 
@@ -480,11 +526,23 @@ func (s *Service) SetLineItems(ctx context.Context, bookingID uuid.UUID, items [
 		if b.Status != domain.StatusDraft {
 			return shared.NewInvalidState("only draft bookings can change line items")
 		}
+		prevLines, err := s.repo.ListLineItems(ctx, bookingID)
+		if err != nil {
+			return err
+		}
+		prevTotals := map[string]any{"total_amount": b.TotalAmount, "cost_amt": b.CostAmt, "balance_amt": b.BalanceAmt}
 		if err := s.repo.ReplaceLineItems(ctx, bookingID, lines); err != nil {
 			return err
 		}
 		b.RecalculateFromLines(lines)
 		if err := s.repo.Update(ctx, b); err != nil {
+			return err
+		}
+		if err := s.recordBooking(ctx, "booking.line_items_changed", b,
+			map[string]any{"line_items": lineItemsSnapshot(prevLines), "totals": prevTotals},
+			map[string]any{"line_items": lineItemsSnapshot(lines), "totals": map[string]any{
+				"total_amount": b.TotalAmount, "cost_amt": b.CostAmt, "balance_amt": b.BalanceAmt,
+			}}, nil); err != nil {
 			return err
 		}
 		out = b
@@ -689,15 +747,27 @@ func (s *Service) OverrideReadiness(ctx context.Context, bookingID, actorID uuid
 	if reason == "" {
 		return nil, shared.NewValidation("reason is required")
 	}
-	if _, err := s.repo.FindByID(ctx, bookingID); err != nil {
-		return nil, shared.NewNotFound("booking")
-	}
 	now := time.Now().UTC()
 	aid := actorID
 	o := &domain.ReadinessOverride{
 		ID: uuid.New(), BookingID: bookingID, Reason: reason, ActorID: &aid, CreatedAt: now,
 	}
-	if err := s.repo.UpsertReadinessOverride(ctx, o); err != nil {
+	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		b, err := s.repo.FindByID(ctx, bookingID)
+		if err != nil {
+			return shared.NewNotFound("booking")
+		}
+		var before any
+		if prev, _ := s.repo.FindReadinessOverride(ctx, bookingID); prev != nil {
+			before = map[string]any{"reason": prev.Reason, "actor_id": prev.ActorID, "created_at": prev.CreatedAt}
+		}
+		if err := s.repo.UpsertReadinessOverride(ctx, o); err != nil {
+			return err
+		}
+		return s.recordBooking(ctx, "booking.readiness_overridden", b, before,
+			map[string]any{"reason": o.Reason, "actor_id": o.ActorID, "created_at": o.CreatedAt}, nil)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return o, nil

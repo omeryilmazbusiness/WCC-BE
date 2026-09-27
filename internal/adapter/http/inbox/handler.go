@@ -406,7 +406,7 @@ func (h Handler) Connect(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]any{
 		"provider": a.Provider, "display_name": a.DisplayName, "status": a.Status,
 		"connected": true, "public_meta": a.PublicMeta, "webhook_path": a.WebhookPath,
-		"webhook_url": res.WebhookURL,
+		"webhook_url": res.WebhookURL, "verify_token": res.VerifyToken,
 	})
 }
 

@@ -138,7 +138,11 @@ func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, 
 		if err := s.payments.Insert(ctx, p); err != nil {
 			return err
 		}
+		money := bookingMoney(b)
 		if err := s.recomputeBooking(ctx, b); err != nil {
+			return err
+		}
+		if err := s.recordPayment(ctx, in.RecordedBy, "payment.recorded", p, b, nil, money, nil); err != nil {
 			return err
 		}
 		out = p
@@ -147,7 +151,6 @@ func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, 
 	if err != nil {
 		return nil, err
 	}
-	s.auditPayment(ctx, in.RecordedBy, "payment.recorded", out)
 	s.bus.Publish(ctx, events.Event{Name: events.PaymentRecorded, Payload: out})
 	return out, nil
 }
@@ -159,18 +162,22 @@ func (s *Service) Verify(ctx context.Context, paymentID, actorID uuid.UUID) (*do
 		if err != nil || p == nil {
 			return shared.NewNotFound("payment")
 		}
-		if p.Status != domain.StatusUnverified {
-			return shared.NewInvalidState("only unverified payments can be verified")
-		}
-		if err := s.payments.UpdateStatus(ctx, paymentID, domain.StatusVerified, nil, nil); err != nil {
+		before := paymentSnapshot(p)
+		if err := p.TransitionTo(domain.StatusVerified); err != nil {
 			return err
 		}
-		p.Status = domain.StatusVerified
+		if err := s.payments.UpdateStatus(ctx, paymentID, p.Status, nil, nil); err != nil {
+			return err
+		}
 		b, err := s.bookings.FindByID(ctx, p.BookingID)
 		if err != nil {
 			return err
 		}
+		money := bookingMoney(b)
 		if err := s.recomputeBooking(ctx, b); err != nil {
+			return err
+		}
+		if err := s.recordPayment(ctx, actorID, "payment.verified", p, b, before, money, nil); err != nil {
 			return err
 		}
 		out = p
@@ -179,7 +186,6 @@ func (s *Service) Verify(ctx context.Context, paymentID, actorID uuid.UUID) (*do
 	if err != nil {
 		return nil, err
 	}
-	s.auditPayment(ctx, actorID, "payment.verified", out)
 	return out, nil
 }
 
@@ -221,7 +227,12 @@ func (s *Service) Reverse(ctx context.Context, in ReverseInput) (*domain.Payment
 		if err != nil {
 			return err
 		}
+		money := bookingMoney(b)
 		if err := s.recomputeBooking(ctx, b); err != nil {
+			return err
+		}
+		if err := s.recordPayment(ctx, in.ActorID, "payment.reversed", p, b, nil, money,
+			map[string]any{"reversed_entry": paymentSnapshot(orig)}); err != nil {
 			return err
 		}
 		out = p
@@ -230,7 +241,6 @@ func (s *Service) Reverse(ctx context.Context, in ReverseInput) (*domain.Payment
 	if err != nil {
 		return nil, err
 	}
-	s.auditPayment(ctx, in.ActorID, "payment.reversed", out)
 	return out, nil
 }
 
@@ -267,7 +277,11 @@ func (s *Service) Adjust(ctx context.Context, in AdjustInput) (*domain.Payment, 
 		if err := s.payments.Insert(ctx, p); err != nil {
 			return err
 		}
+		money := bookingMoney(b)
 		if err := s.recomputeBooking(ctx, b); err != nil {
+			return err
+		}
+		if err := s.recordPayment(ctx, in.ActorID, "payment.adjusted", p, b, nil, money, nil); err != nil {
 			return err
 		}
 		out = p
@@ -276,7 +290,6 @@ func (s *Service) Adjust(ctx context.Context, in AdjustInput) (*domain.Payment, 
 	if err != nil {
 		return nil, err
 	}
-	s.auditPayment(ctx, in.ActorID, "payment.adjusted", out)
 	return out, nil
 }
 
@@ -313,13 +326,15 @@ func (s *Service) RequestRefund(ctx context.Context, in RefundInput) (*domain.Pa
 		if err := s.payments.Insert(ctx, p); err != nil {
 			return err
 		}
+		if err := s.recordPayment(ctx, in.ActorID, "payment.refund_requested", p, b, nil, nil, nil); err != nil {
+			return err
+		}
 		out = p
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.auditPayment(ctx, in.ActorID, "payment.refund_requested", out)
 	return out, nil
 }
 
@@ -333,25 +348,33 @@ func (s *Service) ApproveRefund(ctx context.Context, paymentID, actorID uuid.UUI
 		if p.EventType != domain.EventRefund || p.Status != domain.StatusPendingApproval {
 			return shared.NewInvalidState("not a pending refund")
 		}
+		before := paymentSnapshot(p)
 		now := time.Now().UTC()
-		st := domain.StatusRejected
+		st, action := domain.StatusRejected, "payment.refund_rejected"
 		if approve {
-			st = domain.StatusApproved
+			st, action = domain.StatusApproved, "payment.refund_approved"
+		}
+		if err := p.TransitionTo(st); err != nil {
+			return err
 		}
 		if err := s.payments.UpdateStatus(ctx, paymentID, st, &actorID, &now); err != nil {
 			return err
 		}
-		p.Status = st
 		p.ApprovedBy = &actorID
 		p.ApprovedAt = &now
+		b, err := s.bookings.FindByID(ctx, p.BookingID)
+		if err != nil {
+			return err
+		}
+		var money map[string]any
 		if approve {
-			b, err := s.bookings.FindByID(ctx, p.BookingID)
-			if err != nil {
-				return err
-			}
+			money = bookingMoney(b)
 			if err := s.recomputeBooking(ctx, b); err != nil {
 				return err
 			}
+		}
+		if err := s.recordPayment(ctx, actorID, action, p, b, before, money, nil); err != nil {
+			return err
 		}
 		out = p
 		return nil
@@ -359,11 +382,6 @@ func (s *Service) ApproveRefund(ctx context.Context, paymentID, actorID uuid.UUI
 	if err != nil {
 		return nil, err
 	}
-	action := "payment.refund_rejected"
-	if approve {
-		action = "payment.refund_approved"
-	}
-	s.auditPayment(ctx, actorID, action, out)
 	return out, nil
 }
 
@@ -441,15 +459,15 @@ func (s *Service) UpsertSchedule(ctx context.Context, in ScheduleInput) (*domain
 		Currency: cur, Label: strings.TrimSpace(in.Label), Status: domain.ScheduleOpen,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	if err := s.payments.UpsertSchedule(ctx, sc); err != nil {
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.payments.UpsertSchedule(ctx, sc); err != nil {
+			return err
+		}
+		return s.record(ctx, in.ActorID, "payment.schedule_created", "payment_schedule", sc.ID, b.BranchID,
+			nil, scheduleSnapshot(sc), nil)
+	})
+	if err != nil {
 		return nil, err
-	}
-	if s.audit != nil {
-		id := sc.ID
-		_ = s.audit.Record(ctx, audit.RecordInput{
-			ActorID: in.ActorID, Action: "payment.schedule_created", EntityType: "payment_schedule", EntityID: &id,
-			After: map[string]any{"booking_id": in.BookingID, "amount": sc.Amount, "due_at": sc.DueAt},
-		})
 	}
 	return sc, nil
 }
@@ -466,10 +484,22 @@ func (s *Service) CancelSchedule(ctx context.Context, id, actorID uuid.UUID) (*d
 	if err != nil || sc == nil {
 		return nil, shared.NewNotFound("schedule")
 	}
-	if err := s.payments.UpdateScheduleStatus(ctx, id, domain.ScheduleCancelled); err != nil {
+	b, err := s.bookings.FindByID(ctx, sc.BookingID)
+	if err != nil {
+		return nil, shared.NewNotFound("booking")
+	}
+	before := scheduleSnapshot(sc)
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.payments.UpdateScheduleStatus(ctx, id, domain.ScheduleCancelled); err != nil {
+			return err
+		}
+		sc.Status = domain.ScheduleCancelled
+		return s.record(ctx, actorID, "payment.schedule_cancelled", "payment_schedule", sc.ID, b.BranchID,
+			before, scheduleSnapshot(sc), nil)
+	})
+	if err != nil {
 		return nil, err
 	}
-	sc.Status = domain.ScheduleCancelled
 	return sc, nil
 }
 
@@ -588,16 +618,17 @@ func (s *Service) SetReportingCurrency(ctx context.Context, branchID uuid.UUID, 
 	if branchID, err = scope.WriteBranch(branchID); err != nil {
 		return err
 	}
-	if err := s.payments.UpsertFinanceSettings(ctx, branchID, currency); err != nil {
-		return err
-	}
-	if s.audit != nil {
-		_ = s.audit.Record(ctx, audit.RecordInput{
-			ActorID: actorID, Action: "finance.reporting_currency_set", EntityType: "finance_settings",
-			After: map[string]any{"branch_id": branchID, "reporting_currency": currency},
-		})
-	}
-	return nil
+	return s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		var before any
+		if prev, err := s.payments.GetFinanceSettings(ctx, branchID); err == nil && prev != "" {
+			before = map[string]any{"reporting_currency": prev}
+		}
+		if err := s.payments.UpsertFinanceSettings(ctx, branchID, currency); err != nil {
+			return err
+		}
+		return s.record(ctx, actorID, "finance.reporting_currency_set", "finance_settings", branchID, branchID,
+			before, map[string]any{"reporting_currency": currency}, nil)
+	})
 }
 
 func (s *Service) recomputeBooking(ctx context.Context, b *bookingdomain.Booking) error {
@@ -609,20 +640,6 @@ func (s *Service) recomputeBooking(ctx context.Context, b *bookingdomain.Booking
 	b.RecomputeBalance()
 	b.UpdatedAt = time.Now().UTC()
 	return s.bookings.Update(ctx, b)
-}
-
-func (s *Service) auditPayment(ctx context.Context, actorID uuid.UUID, action string, p *domain.Payment) {
-	if s.audit == nil || p == nil {
-		return
-	}
-	id := p.ID
-	_ = s.audit.Record(ctx, audit.RecordInput{
-		ActorID: actorID, Action: action, EntityType: "payment", EntityID: &id,
-		After: map[string]any{
-			"booking_id": p.BookingID, "amount": p.Amount, "currency": p.Currency,
-			"event_type": p.EventType, "status": p.Status,
-		},
-	})
 }
 
 func mapPaymentsQueue(kind domain.QueueKind, ps []domain.Payment) []domain.QueueItem {

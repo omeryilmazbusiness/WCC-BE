@@ -146,8 +146,8 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*domain.Customer,
 	if in.Nationality != nil {
 		c.Nationality = strings.TrimSpace(*in.Nationality)
 	}
-	if in.PassportNo != nil {
-		c.PassportNo = shared.NormalizePassport(*in.PassportNo)
+	if p, ok := shared.PassportUpdate(in.PassportNo); ok {
+		c.PassportNo = p
 	}
 	if in.ClearDOB {
 		c.DateOfBirth = nil
@@ -227,7 +227,7 @@ func (s *Service) Search(ctx context.Context, f domain.SearchFilter) ([]domain.C
 		return nil, 0, err
 	}
 	for i := range items {
-		items[i].PassportNo = shared.MaskPassport(items[i].PassportNo)
+		items[i].PassportNo = shared.MaskedPassport(items[i].PassportNo)
 	}
 	return items, total, nil
 }
@@ -247,7 +247,7 @@ func (s *Service) FindDuplicates(ctx context.Context, branchID uuid.UUID, name, 
 		m, ok := seen[c.ID]
 		if !ok {
 			cp := *c
-			cp.PassportNo = shared.MaskPassport(cp.PassportNo)
+			cp.PassportNo = shared.MaskedPassport(cp.PassportNo)
 			m = &domain.DuplicateMatch{Customer: &cp, Score: score}
 			seen[c.ID] = m
 		}
@@ -410,7 +410,7 @@ func (s *Service) Timeline(ctx context.Context, customerID uuid.UUID, limit int)
 func snapshot(c *domain.Customer) map[string]any {
 	return map[string]any{
 		"full_name": c.FullName, "phone": c.Phone, "email": c.Email,
-		"passport_no": shared.MaskPassport(c.PassportNo), "nationality": c.Nationality,
+		"passport_no": shared.MaskedPassport(c.PassportNo), "nationality": c.Nationality,
 	}
 }
 

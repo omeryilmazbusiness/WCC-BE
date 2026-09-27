@@ -436,8 +436,7 @@ throttled: `429 rate_limited`. Refresh rotates on every call; reusing an old tok
   `MFA_ISSUER`, `WEBHOOK_SECRET_<PROVIDER>`, `WEBHOOK_VERIFY_TOKEN_<PROVIDER>`, `WEBHOOK_RATE_LIMIT`,
   `WEBHOOK_RATE_WINDOW`.
 - After deploy every user signs in once more (pre-rotation refresh tokens are invalid).
-- Deferred to later epics: encrypted storage of channel secrets on connect (T-259, env fallback today),
-  scheduling of the security cleanup job (T-279 scheduler; the job and ops endpoint exist).
+- Deferred to later epics: scheduling of the security cleanup job (T-279 scheduler; the job and ops endpoint exist).
 
 ### Session security
 
@@ -472,6 +471,127 @@ the access token's `sid` claim; the middleware checks each request against the s
   - `POST /v1/ops/security-cleanup` (`users.write`) purges sessions/refresh tokens revoked or expired > 30 days,
     expired MFA challenges and webhook events > 90 days (also worker job `security.cleanup`).
 - Migration: `00023_session_security.sql`. Existing refresh tokens are revoked; every user signs in once more.
+
+## Epic 20 Audit Trail & Immutable Ledger
+
+| Task | Status |
+|------|--------|
+| T-263 Actor from request context; before/after on booking, payment, capacity, document review, target, settings | Done |
+| T-264 Fail-closed audit inside the business transaction; append-only `audit_events` (trigger + REVOKE) | Done |
+| T-265 Immutable payment ledger (DB trigger + `payment.StatusTransitions` in Go) | Done |
+
+**Actor model.** `audit.Actor{Type, UserID, SessionID, BranchID, IP, UserAgent, RequestID}` rides on the
+request context. `AuditContext` (global) records IP/UA/request id for every request, `Authenticate` upgrades
+it to the verified user (`actor_type=user`, `session_id` = token `sid`), webhook routes set `webhook`, and
+event reactors / worker jobs run as `system` (`audit.AsSystem`, request id kept for correlation).
+`RecordInput.ActorID` is only a fallback: a verified user on the context always wins, so a service cannot
+attribute an event to someone else. Without any actor the event is `system` with a NULL `actor_id`.
+
+**Storage.** `audit_events` gains `actor_type`, `session_id`, `request_id`, dedicated `before`/`after` JSONB
+columns (`metadata` now holds only extra context) and `row_hash` (SHA-256 of the canonical row, set by a
+trigger). Tamper check: `SELECT id FROM audit_events a WHERE row_hash <> audit_event_hash(a)`.
+
+**Append-only.** Triggers reject `UPDATE`/`DELETE` (row) and `TRUNCATE` (statement); `UPDATE, DELETE,
+TRUNCATE` are revoked from `PUBLIC` and from the migrating (application) role. No code path updates or
+deletes audit rows; the security retention job never touches `audit_events`.
+
+**Fail closed.** These actions write their audit row in the same transaction as the change and roll back if
+the insert fails: `booking.created`, `booking.updated`, `booking.discount_changed`, `booking.status_changed`
+(confirm/cancel/complete, with departure `capacity_sold` before/after), `booking.participant_added|updated|removed`
+(passport never stored, only `passport_on_file`), `booking.line_items_changed`, `booking.readiness_overridden`,
+`payment.recorded|verified|reversed|adjusted|refund_requested|refund_approved|refund_rejected` (with booking
+money before/after), `payment.schedule_created|cancelled`, `finance.reporting_currency_set`,
+`departure.updated|capacity_changed|sales_closed|sales_reopened|marked_full|capacity_recomputed`,
+`document.approved|rejected`, `revenue_target.created|updated|weights_changed|shares_changed`,
+`settings.sla_updated|escalation_updated|escalation_deleted|fields_updated|thresholds_updated`, plus the existing
+user/branch/customer events and `audit.exported`. `ai.settings_updated` / `ai.disabled` (provider, model,
+enabled, `key_rotated`; never the key) and auth/webhook events stay best-effort.
+
+**Payment ledger.** `payments_ledger_guard` rejects `DELETE`/`TRUNCATE` and any change to `amount`, `currency`,
+`booking_id`, `event_type`, `reverses_payment_id`, `recorded_by`, `idempotency_key`, `created_at`, `method`,
+`reference`. `approved_by`, `approved_at` and `note` can be set once. Allowed status transitions (mirrored by
+`payment.StatusTransitions`, a test keeps both in sync):
+
+| event_type | from | to |
+|------------|------|----|
+| charge | unverified | verified |
+| refund | pending_approval | approved (needs approved_by/at) |
+| refund | pending_approval | rejected (needs approved_by/at) |
+
+Corrections are new ledger rows (`reverse`, `adjust`, `refund`), never edits.
+
+**API** (`audit.read`, branch-scoped like other reads):
+- `GET /v1/audit-events?actor_id&entity_type&entity_id&action&from&to&branch_id&limit&offset` →
+  `{"data":[{"id","actor_id","actor_name","actor_type","action","entity_type","entity_id","branch_id","before","after","extra","ip","user_agent","session_id","request_id","created_at"}],"meta":{"total","limit","offset","page","total_pages"}}`
+  (`from`/`to` accept RFC3339 or `YYYY-MM-DD`; a date-only `to` covers the whole day; `actor_name` is the
+  user's `full_name` or `""`).
+- `GET /v1/audit-events/export.csv` (same filters) streams up to 50,000 rows with header
+  `created_at,actor_name,actor_type,action,entity_type,entity_id,branch_id,ip,session_id,request_id,before,after,extra`;
+  cells starting with `= + - @` are prefixed with `'`. The export is audited (`audit.exported`) before any row is sent.
+- `GET /v1/audit-events/actions` → `{"data":["booking.status_changed", ...]}` (distinct actions in scope).
+- Migration: `00025_epic20_audit_ledger.sql` (backfills `before`/`after`/`actor_type` from `metadata`).
+
+## Epic 20 — Data protection
+
+| Task | Status |
+|------|--------|
+| T-259 Integration / AI / external-integration / file-sync secrets sealed into `secrets_enc` (AES-256-GCM, AAD = table + row + branch); UI gets hints (`••••1234`) | Done |
+| T-260 Passports encrypted (`passport_enc`), blind index (`passport_hash`) for dedupe/search, `passport_last4`; exports masked without `pii.read` | Done |
+| T-261 Audited passport reveal (`pii.revealed`); every normal read is masked | Done |
+| T-267 KVKK export bundle (`privacy.exported`) and anonymization (`privacy.anonymized`), `privacy.manage` (GM, Admin) | Done |
+
+**Secrets.** Config keys containing `secret`, `token`, `password`, `api_key`, `private_key` or `credential`
+leave `config_json` and are sealed into `secrets_enc`; the ciphertext only opens for the same table, row and
+branch. Rows not yet backfilled are still read from `config_json`. Inbox connect returns the webhook
+`verify_token` once (`{"data":{..., "verify_token":"..."}}`), stores only `verify_token_hash`, and fails closed
+when encryption is not configured. External integrations and file-sync responses carry `secret_hints`.
+
+**Passports.** New writes store `passport_no = ''` plus `passport_enc`, `passport_hash`, `passport_last4`.
+Customer, companion, participant, search and rooming JSON always return the masked value (`••••5678`) and
+`passport_last4`; the rooming CSV and customer Excel export contain the full number only with `pii.read`.
+Dedupe (`FindByPassport`) and search match the blind index exactly (no partial passport search). Masked values
+in an import never overwrite a stored passport.
+
+**API**
+- `POST /v1/customers/{id}/reveal-passport` (`customers.read` + `pii.read`) →
+  `{"data":{"passport_no":"U12345678"}}`, `Cache-Control: no-store`.
+- `POST /v1/bookings/{id}/participants/{participantId}/reveal-passport` (`bookings.read` + `pii.read`) → same shape.
+  Reveals are audited (`pii.revealed`, `extra.field = "passport"`) before the value is returned; if the audit
+  write fails nothing is revealed. Limit: 30 reveals per user per hour → `429 rate_limited` + `Retry-After`.
+- `GET /v1/customers/{id}/export` (`privacy.manage`) → JSON attachment
+  `{"data":{"generated_at","customer":{..., "passport_no"},"bookings":[{..., "participants":[{"id","full_name","nationality","date_of_birth","passport_last4"}]}],"payments_summary":[{"currency","count","total"}],"documents":[...],"conversations":[{..., "message_count"}],"companions":[...]}}`
+  (audited `privacy.exported`).
+- `POST /v1/customers/{id}/anonymize` (`privacy.manage`) `{"reason":"at least 10 characters"}` →
+  `{"data":{"customer_id","full_name":"Anonymized 1a2b3c4d","anonymized_at"}}`. Errors: `400 validation_error`
+  (reason), `404 not_found` (unknown or out of scope), `409 customer_has_active_bookings`
+  (any booking not `completed` or `cancelled`), `409 customer_already_anonymized`. One transaction clears the customer's
+  PII and passport, deactivates it, clears matching booking participants, lead contact fields, channel
+  identities and conversation subjects, deletes companion links and writes `privacy.anonymized`
+  (`extra.reason`). Payments and audit events are append-only and stay untouched.
+- `POST /v1/ops/encrypt-backfill` (`users.write`) optional `{"rehash":true}` →
+  `{"data":{"secrets":{"integration_accounts":n,"ai_settings":n,"external_integrations":n,"file_sync_connections":n},"passports":{"customers":n,"booking_participants":n}}}`
+  (audited `ops.encrypt_backfill`; also worker job `security.encrypt_backfill` with payload `{"rehash":bool}`).
+
+**Backfill procedure**
+1. Set `ENCRYPTION_KEY`, `ENCRYPTION_KEY_ID` and `ENCRYPTION_BLIND_INDEX_KEY` (all base64 32 bytes); keep the
+   blind index key fixed, otherwise it follows the active key and changes on rotation.
+2. Run migration `00024_epic20_pii_secrets.sql`, deploy API and worker.
+3. `POST /v1/ops/encrypt-backfill` (idempotent, batched, safe to rerun and to run while traffic flows; rows
+   changed concurrently are skipped and picked up next run). It moves plaintext into `secrets_enc` /
+   `passport_enc`, blanks `passport_no`, and re-seals values under a non-active key.
+4. Verify: `SELECT count(*) FROM customers WHERE passport_no <> ''` and the same for `booking_participants`
+   return 0, and secret keys are gone from `config_json` (see [`docs/SECRETS.md`](docs/SECRETS.md)).
+5. Key rotation: new key + id, old pair into `ENCRYPTION_PREVIOUS_KEYS`, deploy, rerun step 3, then drop the old
+   key. After changing the blind index key run the backfill with `{"rehash":true}`.
+
+- Migration: `00024_epic20_pii_secrets.sql` (`secrets_enc` on `integration_accounts`, `ai_settings`,
+  `external_integrations`, `file_sync_connections`; `integration_accounts.verify_token_hash`; `passport_enc`,
+  `passport_hash`, `passport_last4` on `customers` and `booking_participants`; `customers.anonymized_at`).
+- Env: `ENCRYPTION_BLIND_INDEX_KEY`.
+- Deferred: dropping `customers.passport_no` / `booking_participants.passport_no` in a follow-up migration once the
+  backfill is verified in every environment (the columns stay as the rolling-deploy fallback and are always
+  written as `''`). Message bodies, stored document files and audit history are not rewritten by anonymization
+  (retention policy); verify-token hashes are case-insensitive.
 
 ## Go-Live Backlog (Epic 19–26)
 

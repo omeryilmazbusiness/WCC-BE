@@ -7,8 +7,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/app/secretcfg"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/filesync"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/crypto"
 )
 
 // ProviderRegistry resolves cloud file adapters (DIP).
@@ -42,14 +44,56 @@ type UpdateInput struct {
 type Service struct {
 	repo     domain.Repository
 	registry ProviderRegistry
+	vault    secretcfg.Vault
 }
 
-func NewService(repo domain.Repository, registry ProviderRegistry) *Service {
-	return &Service{repo: repo, registry: registry}
+func NewService(repo domain.Repository, registry ProviderRegistry, secrets crypto.SecretSealer) *Service {
+	return &Service{repo: repo, registry: registry, vault: secretcfg.NewVault(secrets)}
+}
+
+func binding(c *domain.Connection) crypto.Binding {
+	return crypto.Binding{Table: domain.SecretsTable, RowID: c.ID, BranchID: c.BranchID}
+}
+
+func (s *Service) config(c *domain.Connection) (secretcfg.Config, error) {
+	return s.vault.Load(c.ConfigJSON, c.SecretsEnc, binding(c))
+}
+
+// store applies incoming config to c and seals its secrets for c's row.
+func (s *Service) store(c *domain.Connection, current secretcfg.Config, incoming json.RawMessage) error {
+	cfg, err := s.vault.Apply(current, incoming)
+	if err != nil {
+		return err
+	}
+	sealed, err := s.vault.Seal(cfg, binding(c))
+	if err != nil {
+		return err
+	}
+	c.ConfigJSON, c.SecretsEnc = cfg.Public, sealed
+	return nil
+}
+
+// redact strips credentials from c for API responses, leaving hints.
+func (s *Service) redact(c *domain.Connection) error {
+	cfg, err := s.config(c)
+	if err != nil {
+		return err
+	}
+	c.ConfigJSON, c.SecretsEnc, c.SecretHints = cfg.Public, "", cfg.Hints()
+	return nil
 }
 
 func (s *Service) List(ctx context.Context, branchID uuid.UUID) ([]domain.Connection, error) {
-	return s.repo.ListConnections(ctx, branchID)
+	items, err := s.repo.ListConnections(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		if err := s.redact(&items[i]); err != nil {
+			return nil, err
+		}
+	}
+	return items, nil
 }
 
 func (s *Service) Get(ctx context.Context, branchID, id uuid.UUID) (*domain.Connection, error) {
@@ -57,7 +101,7 @@ func (s *Service) Get(ctx context.Context, branchID, id uuid.UUID) (*domain.Conn
 	if err != nil {
 		return nil, shared.NewNotFound("file_sync_connection")
 	}
-	return c, nil
+	return c, s.redact(c)
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Connection, error) {
@@ -82,8 +126,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Connectio
 		ID: uuid.New(), BranchID: in.BranchID, Provider: in.Provider,
 		DisplayName: in.DisplayName, RemotePath: in.RemotePath, EntityType: in.EntityType,
 		SourceOfTruth: truth, ConflictPolicy: policy, Enabled: enabled,
-		Status: domain.StatusDisconnected, ConfigJSON: in.ConfigJSON,
+		Status:    domain.StatusDisconnected,
 		CreatedBy: &actor, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.store(c, secretcfg.Config{}, in.ConfigJSON); err != nil {
+		return nil, err
 	}
 	if err := c.Normalize(); err != nil {
 		return nil, err
@@ -91,7 +138,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Connectio
 	if err := s.repo.InsertConnection(ctx, c); err != nil {
 		return nil, err
 	}
-	return c, nil
+	return c, s.redact(c)
 }
 
 func (s *Service) Update(ctx context.Context, branchID, id uuid.UUID, in UpdateInput) (*domain.Connection, error) {
@@ -118,7 +165,13 @@ func (s *Service) Update(ctx context.Context, branchID, id uuid.UUID, in UpdateI
 		c.Enabled = *in.Enabled
 	}
 	if len(in.ConfigJSON) > 0 {
-		c.ConfigJSON = in.ConfigJSON
+		current, err := s.config(c)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.store(c, current, in.ConfigJSON); err != nil {
+			return nil, err
+		}
 	}
 	if err := c.Normalize(); err != nil {
 		return nil, err
@@ -127,7 +180,7 @@ func (s *Service) Update(ctx context.Context, branchID, id uuid.UUID, in UpdateI
 	if err := s.repo.UpdateConnection(ctx, c); err != nil {
 		return nil, err
 	}
-	return c, nil
+	return c, s.redact(c)
 }
 
 func (s *Service) Delete(ctx context.Context, branchID, id uuid.UUID) error {
@@ -147,13 +200,18 @@ func (s *Service) Connect(ctx context.Context, branchID, id, actorID uuid.UUID) 
 	if !ok {
 		return nil, shared.NewValidation("cloud provider adapter missing")
 	}
-	status, msg, probeErr := p.Probe(ctx, c.RemotePath, c.ConfigJSON)
+	cfg, err := s.config(c)
+	if err != nil {
+		return nil, err
+	}
+	status, msg, probeErr := p.Probe(ctx, c.RemotePath, cfg.Merged())
 	now := time.Now().UTC()
 	c.UpdatedAt = now
 	if probeErr != nil {
 		c.Status = domain.StatusError
 		c.LastError = msg
 		_ = s.repo.UpdateConnection(ctx, c)
+		_ = s.redact(c)
 		return c, shared.NewValidation(msg)
 	}
 	c.Status = status
@@ -166,7 +224,7 @@ func (s *Service) Connect(ctx context.Context, branchID, id, actorID uuid.UUID) 
 		return nil, err
 	}
 	_ = actorID
-	return c, nil
+	return c, s.redact(c)
 }
 
 // SyncNow pulls a sample workbook and applies conflict policy (platform DB authoritative messaging).
@@ -181,6 +239,10 @@ func (s *Service) SyncNow(ctx context.Context, branchID, id, actorID uuid.UUID) 
 	p, ok := s.registry.Get(c.Provider)
 	if !ok {
 		return nil, shared.NewValidation("cloud provider adapter missing")
+	}
+	cfg, err := s.config(c)
+	if err != nil {
+		return nil, err
 	}
 
 	now := time.Now().UTC()
@@ -198,7 +260,7 @@ func (s *Service) SyncNow(ctx context.Context, branchID, id, actorID uuid.UUID) 
 		return nil, err
 	}
 
-	rowsRead, sample, pullErr := p.PullSample(ctx, c.RemotePath, c.ConfigJSON)
+	rowsRead, sample, pullErr := p.PullSample(ctx, c.RemotePath, cfg.Merged())
 	finished := time.Now().UTC()
 	run.FinishedAt = &finished
 	run.RowsRead = rowsRead

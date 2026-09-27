@@ -25,7 +25,7 @@ func mapIntegration(i *domain.Integration) map[string]any {
 		"id": i.ID, "branch_id": i.BranchID, "kind": i.Kind,
 		"provider_key": i.ProviderKey, "display_name": i.DisplayName,
 		"status": i.Status, "health": i.Health,
-		"config_json": i.ConfigJSON, "last_error": i.LastError,
+		"config_json": i.ConfigJSON, "secret_hints": hints(i.SecretHints), "last_error": i.LastError,
 		"created_at": i.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at": i.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
@@ -33,6 +33,13 @@ func mapIntegration(i *domain.Integration) map[string]any {
 		m["last_checked_at"] = i.LastCheckedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return m
+}
+
+func hints(h map[string]string) map[string]string {
+	if h == nil {
+		return map[string]string{}
+	}
+	return h
 }
 
 func (h Handler) Catalog(w http.ResponseWriter, r *http.Request) {

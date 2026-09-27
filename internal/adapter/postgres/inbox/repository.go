@@ -2,6 +2,7 @@ package inbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -110,16 +111,26 @@ func (r *Repository) GetAccount(ctx context.Context, branchID uuid.UUID, provide
 	if err != nil {
 		return nil, err
 	}
-	var a domain.IntegrationAccount
-	var cfg []byte
-	err = q.QueryRow(ctx, `
-		SELECT id, branch_id, provider, display_name, status, COALESCE(config_json,'{}'::jsonb), last_ok_at, last_error, updated_at
-		FROM integration_accounts WHERE branch_id=$1 AND provider=$2`+clause, args...,
-	).Scan(&a.ID, &a.BranchID, &a.Provider, &a.DisplayName, &a.Status, &cfg, &a.LastOKAt, &a.LastError, &a.UpdatedAt)
-	if err == pgx.ErrNoRows {
+	a, err := scanAccount(q.QueryRow(ctx, `
+		SELECT `+accountCols+`
+		FROM integration_accounts WHERE branch_id=$1 AND provider=$2`+clause, args...))
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
+		return nil, err
+	}
+	return a, nil
+}
+
+const accountCols = `id, branch_id, provider, display_name, status, COALESCE(config_json,'{}'::jsonb),
+		secrets_enc, verify_token_hash, last_ok_at, last_error, updated_at`
+
+func scanAccount(row pgx.Row) (*domain.IntegrationAccount, error) {
+	var a domain.IntegrationAccount
+	var cfg []byte
+	if err := row.Scan(&a.ID, &a.BranchID, &a.Provider, &a.DisplayName, &a.Status, &cfg,
+		&a.SecretsEnc, &a.VerifyTokenHash, &a.LastOKAt, &a.LastError, &a.UpdatedAt); err != nil {
 		return nil, err
 	}
 	a.ConfigJSON = cfg
@@ -133,7 +144,7 @@ func (r *Repository) ListAccounts(ctx context.Context, branchID uuid.UUID) ([]do
 		return nil, err
 	}
 	rows, err := q.Query(ctx, `
-		SELECT id, branch_id, provider, display_name, status, COALESCE(config_json,'{}'::jsonb), last_ok_at, last_error, updated_at
+		SELECT `+accountCols+`
 		FROM integration_accounts WHERE branch_id=$1`+clause+` ORDER BY provider`, args...)
 	if err != nil {
 		return nil, err
@@ -141,13 +152,11 @@ func (r *Repository) ListAccounts(ctx context.Context, branchID uuid.UUID) ([]do
 	defer rows.Close()
 	var out []domain.IntegrationAccount
 	for rows.Next() {
-		var a domain.IntegrationAccount
-		var cfg []byte
-		if err := rows.Scan(&a.ID, &a.BranchID, &a.Provider, &a.DisplayName, &a.Status, &cfg, &a.LastOKAt, &a.LastError, &a.UpdatedAt); err != nil {
+		a, err := scanAccount(rows)
+		if err != nil {
 			return nil, err
 		}
-		a.ConfigJSON = cfg
-		out = append(out, a)
+		out = append(out, *a)
 	}
 	return out, rows.Err()
 }
@@ -164,19 +173,30 @@ func (r *Repository) UpsertAccount(ctx context.Context, a *domain.IntegrationAcc
 	if len(cfg) == 0 {
 		cfg = []byte(`{}`)
 	}
-	return q.QueryRow(ctx, `
-		INSERT INTO integration_accounts (id, branch_id, provider, display_name, status, config_json, last_ok_at, last_error, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,NOW(),$9)
+	// Sealed secrets are bound to the row id, so a concurrent insert under a
+	// different id must not adopt this row's ciphertext.
+	err := q.QueryRow(ctx, `
+		INSERT INTO integration_accounts (id, branch_id, provider, display_name, status, config_json,
+			secrets_enc, verify_token_hash, last_ok_at, last_error, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,NOW(),$11)
 		ON CONFLICT (branch_id, provider) DO UPDATE SET
 			display_name = EXCLUDED.display_name,
 			status = EXCLUDED.status,
 			config_json = EXCLUDED.config_json,
+			secrets_enc = EXCLUDED.secrets_enc,
+			verify_token_hash = EXCLUDED.verify_token_hash,
 			last_ok_at = EXCLUDED.last_ok_at,
 			last_error = EXCLUDED.last_error,
 			updated_at = EXCLUDED.updated_at
+		WHERE integration_accounts.id = EXCLUDED.id
 		RETURNING id`,
-		a.ID, a.BranchID, a.Provider, a.DisplayName, a.Status, string(cfg), a.LastOKAt, a.LastError, a.UpdatedAt,
+		a.ID, a.BranchID, a.Provider, a.DisplayName, a.Status, string(cfg),
+		a.SecretsEnc, a.VerifyTokenHash, a.LastOKAt, a.LastError, a.UpdatedAt,
 	).Scan(&a.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return shared.NewConflict("integration account was connected concurrently; retry")
+	}
+	return err
 }
 
 func (r *Repository) UpdateAccountHealth(ctx context.Context, id uuid.UUID, status, lastError string, ok bool) error {

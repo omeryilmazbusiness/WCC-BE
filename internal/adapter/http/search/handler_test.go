@@ -8,11 +8,11 @@ import (
 
 func TestMaskPassportsOnlyTouchesPassportHits(t *testing.T) {
 	hits := []domain.Hit{
-		{Kind: domain.KindPassport, Subtitle: "A12345678"},
+		{Kind: domain.KindPassport, Subtitle: "5678"},
 		{Kind: domain.KindCustomer, Subtitle: "+966500000000"},
 	}
 	maskPassports(hits)
-	if hits[0].Subtitle != "A1*****78" {
+	if hits[0].Subtitle != "••••5678" {
 		t.Fatalf("passport subtitle = %q", hits[0].Subtitle)
 	}
 	if hits[1].Subtitle != "+966500000000" {

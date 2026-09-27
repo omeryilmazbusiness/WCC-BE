@@ -49,6 +49,7 @@ type Service struct {
 	leads     LeadShellCreator
 	tx        tx.Runner
 	bus       *events.Bus
+	secrets   *accountSecrets
 	now       func() time.Time
 }
 

@@ -54,13 +54,16 @@ type PatchInput struct {
 
 type Service struct {
 	repo   domain.Repository
-	tx     *tx.Manager
+	tx     tx.Runner
 	audit  audit.Recorder
 	engine domain.Engine
 	tasks  RecoveryTaskCreator
 }
 
-func NewService(repo domain.Repository, txm *tx.Manager) *Service {
+func NewService(repo domain.Repository, txm tx.Runner) *Service {
+	if txm == nil {
+		txm = tx.Nop{}
+	}
 	return &Service{repo: repo, tx: txm, engine: domain.Engine{}}
 }
 
@@ -113,10 +116,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Target, e
 		PeriodStart: truncateDate(in.PeriodStart), PeriodEnd: truncateDate(in.PeriodEnd),
 		CreatedBy: &actor, CreatedAt: now, UpdatedAt: now,
 	}
-	if err := s.repo.Create(ctx, t); err != nil {
+	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.repo.Create(ctx, t); err != nil {
+			return err
+		}
+		return s.auditTarget(ctx, in.ActorID, "revenue_target.created", t, nil, targetSnapshot(t))
+	})
+	if err != nil {
 		return nil, err
 	}
-	s.auditTarget(ctx, in.ActorID, "revenue_target.created", t, nil)
 	return t, nil
 }
 
@@ -125,7 +133,8 @@ func (s *Service) Update(ctx context.Context, in PatchInput) (*domain.Target, er
 	if err != nil || t == nil {
 		return nil, shared.NewNotFound("revenue_target")
 	}
-	beforeJSON, _ := json.Marshal(targetSnapshot(t))
+	before := targetSnapshot(t)
+	beforeJSON, _ := json.Marshal(before)
 
 	if in.ClearOwner {
 		t.OwnerID = nil
@@ -180,15 +189,17 @@ func (s *Service) Update(ctx context.Context, in PatchInput) (*domain.Target, er
 		if err := s.repo.Update(ctx, t); err != nil {
 			return err
 		}
-		return s.repo.InsertRevision(ctx, &domain.Revision{
+		if err := s.repo.InsertRevision(ctx, &domain.Revision{
 			ID: uuid.New(), TargetID: t.ID, ActorID: in.ActorID, Action: "revise",
 			BeforeJSON: beforeJSON, AfterJSON: afterJSON, CreatedAt: time.Now().UTC(),
-		})
+		}); err != nil {
+			return err
+		}
+		return s.auditTarget(ctx, in.ActorID, "revenue_target.updated", t, before, targetSnapshot(t))
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.auditTarget(ctx, in.ActorID, "revenue_target.updated", t, beforeJSON)
 	return t, nil
 }
 
@@ -221,16 +232,10 @@ func (s *Service) SetWeights(ctx context.Context, targetID, actorID uuid.UUID, w
 	if err := s.engine.ValidateWeights(t.CurveType, weights); err != nil {
 		return shared.NewValidation(err.Error())
 	}
-	before, _ := json.Marshal(map[string]any{"weights": mustListWeights(ctx, s.repo, targetID)})
-	if err := s.repo.ReplaceWeights(ctx, targetID, weights); err != nil {
-		return err
-	}
-	after, _ := json.Marshal(map[string]any{"weights": weights})
-	_ = s.repo.InsertRevision(ctx, &domain.Revision{
-		ID: uuid.New(), TargetID: targetID, ActorID: actorID, Action: "set_weights",
-		BeforeJSON: before, AfterJSON: after, CreatedAt: time.Now().UTC(),
-	})
-	return nil
+	return s.revise(ctx, t, actorID, "set_weights", "revenue_target.weights_changed",
+		map[string]any{"weights": mustListWeights(ctx, s.repo, targetID)},
+		map[string]any{"weights": weights},
+		func(ctx context.Context) error { return s.repo.ReplaceWeights(ctx, targetID, weights) })
 }
 
 func (s *Service) SetShares(ctx context.Context, targetID, actorID uuid.UUID, shares []domain.Share) error {
@@ -238,20 +243,13 @@ func (s *Service) SetShares(ctx context.Context, targetID, actorID uuid.UUID, sh
 	if err != nil || t == nil {
 		return shared.NewNotFound("revenue_target")
 	}
-	_ = t
 	if err := s.engine.ValidateShares(shares); err != nil {
 		return shared.NewValidation(err.Error())
 	}
-	before, _ := json.Marshal(map[string]any{"shares": mustListShares(ctx, s.repo, targetID)})
-	if err := s.repo.ReplaceShares(ctx, targetID, shares); err != nil {
-		return err
-	}
-	after, _ := json.Marshal(map[string]any{"shares": shares})
-	_ = s.repo.InsertRevision(ctx, &domain.Revision{
-		ID: uuid.New(), TargetID: targetID, ActorID: actorID, Action: "set_shares",
-		BeforeJSON: before, AfterJSON: after, CreatedAt: time.Now().UTC(),
-	})
-	return nil
+	return s.revise(ctx, t, actorID, "set_shares", "revenue_target.shares_changed",
+		map[string]any{"shares": mustListShares(ctx, s.repo, targetID)},
+		map[string]any{"shares": shares},
+		func(ctx context.Context) error { return s.repo.ReplaceShares(ctx, targetID, shares) })
 }
 
 func (s *Service) Progress(ctx context.Context, id uuid.UUID) (*domain.Progress, error) {
@@ -439,22 +437,40 @@ func (s *Service) CheckBehindAlerts(ctx context.Context, branchID, actorID uuid.
 	return n, nil
 }
 
-func (s *Service) auditTarget(ctx context.Context, actorID uuid.UUID, action string, t *domain.Target, before []byte) {
-	if s.audit == nil || t == nil {
-		return
+// revise applies change, its revision row and audit event atomically.
+func (s *Service) revise(ctx context.Context, t *domain.Target, actorID uuid.UUID, revision, action string, before, after map[string]any, change func(context.Context) error) error {
+	beforeJSON, err := json.Marshal(before)
+	if err != nil {
+		return err
 	}
-	id := t.ID
-	after := targetSnapshot(t)
-	in := audit.RecordInput{
-		ActorID: actorID, Action: action, EntityType: "revenue_target", EntityID: &id,
-		After: after,
+	afterJSON, err := json.Marshal(after)
+	if err != nil {
+		return err
 	}
-	if before != nil {
-		var m map[string]any
-		_ = json.Unmarshal(before, &m)
-		in.Before = m
+	return s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := change(ctx); err != nil {
+			return err
+		}
+		if err := s.repo.InsertRevision(ctx, &domain.Revision{
+			ID: uuid.New(), TargetID: t.ID, ActorID: actorID, Action: revision,
+			BeforeJSON: beforeJSON, AfterJSON: afterJSON, CreatedAt: time.Now().UTC(),
+		}); err != nil {
+			return err
+		}
+		return s.auditTarget(ctx, actorID, action, t, before, after)
+	})
+}
+
+// auditTarget runs inside the caller's transaction (fail closed).
+func (s *Service) auditTarget(ctx context.Context, actorID uuid.UUID, action string, t *domain.Target, before, after map[string]any) error {
+	if s.audit == nil {
+		return nil
 	}
-	_ = s.audit.Record(ctx, in)
+	id, branch := t.ID, t.BranchID
+	return s.audit.Record(ctx, audit.RecordInput{
+		ActorID: actorID, Action: action, EntityType: "revenue_target", EntityID: &id, BranchID: &branch,
+		Before: before, After: after,
+	})
 }
 
 func targetSnapshot(t *domain.Target) map[string]any {

@@ -78,7 +78,8 @@ type GroupListRow struct {
 	ParticipantID uuid.UUID  `json:"participant_id"`
 	BookingID     uuid.UUID  `json:"booking_id"`
 	FullName      string     `json:"full_name"`
-	PassportNo    string     `json:"passport_no"`
+	PassportNo    string     `json:"passport_no"` // masked unless revealed for export
+	PassportLast4 string     `json:"passport_last4"`
 	Nationality   string     `json:"nationality"`
 	RoomID        *uuid.UUID `json:"room_id,omitempty"`
 	RoomLabel     string     `json:"room_label"`

@@ -88,3 +88,13 @@ func TestScopeLevels(t *testing.T) {
 		t.Fatal("unknown role must be denied")
 	}
 }
+
+// Epic 20 T-267 — KVKK export/anonymize is limited to GM and Admin.
+func TestPrivacyManagePermission(t *testing.T) {
+	for _, r := range AllRoles() {
+		want := r == RoleGM || r == RoleAdmin
+		if HasPermission(r, PermPrivacyManage) != want {
+			t.Fatalf("%s privacy.manage = %v, want %v", r, !want, want)
+		}
+	}
+}

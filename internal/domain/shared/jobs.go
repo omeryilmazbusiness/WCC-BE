@@ -17,6 +17,9 @@ const (
 	JobSLASweep       JobName = "inbox.sla_sweep"
 	// JobSecurityCleanup purges ended sessions, expired challenges and old webhook events.
 	JobSecurityCleanup JobName = "security.cleanup"
+	// JobEncryptBackfill encrypts legacy plaintext secrets/passports and
+	// re-encrypts ciphertexts of retired keys (payload {"rehash":bool}).
+	JobEncryptBackfill JobName = "security.encrypt_backfill"
 )
 
 // EnqueueOpts controls retry / delay / uniqueness at the port level.

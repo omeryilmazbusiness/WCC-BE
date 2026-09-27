@@ -2,11 +2,9 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
@@ -14,7 +12,6 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/signature"
 	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgidentity "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/identity"
-	pginbox "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/inbox"
 	pgwebhook "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/webhook"
 	appaudit "github.com/wodi-crm/wodi-crm-be/internal/app/audit"
 	appauth "github.com/wodi-crm/wodi-crm-be/internal/app/auth"
@@ -90,8 +87,7 @@ func newAuthService(
 // NewSecurityRetention builds the retention purge for processes outside the
 // API (worker); the API wires the same service in New.
 func NewSecurityRetention(pool *pgxpool.Pool) *retention.Service {
-	auditRepo := pgaudit.NewRepository(pool)
-	auditor := systemAuditor{svc: appaudit.NewService(auditRepo), repo: auditRepo}
+	auditor := appaudit.NewService(pgaudit.NewRepository(pool))
 	sec := pgidentity.NewSecurityRepository(pgidentity.NewRepository(pool))
 	return retention.NewService(sec, pgwebhook.NewRepository(pool), auditor, retention.DefaultPolicy)
 }
@@ -100,14 +96,14 @@ func newWebhookHandler(
 	cfg config.Config,
 	log *slog.Logger,
 	pool *pgxpool.Pool,
-	inboxRepo *pginbox.Repository,
+	accounts appwebhook.AccountLookup,
 	ingestor appwebhook.Ingestor,
 	auditor audit.Recorder,
 	limiter ratelimit.Window,
 ) webhookhttp.Handler {
 	meta, shared := signature.Meta(), signature.Shared()
 	svc := appwebhook.NewService(appwebhook.Deps{
-		Accounts: inboxRepo,
+		Accounts: accounts,
 		Events:   pgwebhook.NewRepository(pool),
 		Ingestor: ingestor,
 		Verifiers: map[domaininbox.Channel]appwebhook.SignatureVerifier{
@@ -137,26 +133,4 @@ func byChannel(m map[string]string) map[domaininbox.Channel]string {
 		out[domaininbox.Channel(k)] = v
 	}
 	return out
-}
-
-// systemAuditor records events without a user actor (e.g. rejected webhooks)
-// with a NULL actor_id; user-attributed events go through the audit service.
-type systemAuditor struct {
-	svc  *appaudit.Service
-	repo audit.Repository
-}
-
-func (a systemAuditor) Record(ctx context.Context, in audit.RecordInput) error {
-	if in.ActorID != uuid.Nil {
-		return a.svc.Record(ctx, in)
-	}
-	meta := map[string]any{}
-	for k, v := range in.Extra {
-		meta[k] = v
-	}
-	raw, _ := json.Marshal(meta)
-	return a.repo.Insert(ctx, &audit.Event{
-		ID: uuid.New(), Action: in.Action, EntityType: in.EntityType, EntityID: in.EntityID,
-		BranchID: in.BranchID, Metadata: raw, IP: in.IP, UserAgent: in.UserAgent, CreatedAt: time.Now().UTC(),
-	})
 }

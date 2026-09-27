@@ -52,6 +52,9 @@ type ExportInput struct {
 	BranchID   uuid.UUID
 	EntityType domain.EntityType
 	Limit      int
+	// RevealPII exports full passport numbers (pii.read); otherwise they
+	// are masked to "••••1234".
+	RevealPII bool
 }
 
 type Service struct {
@@ -383,7 +386,7 @@ func (s *Service) applyCustomer(ctx context.Context, j *domain.ImportJob, vals m
 			FullNameAR: strings.TrimSpace(vals["full_name_ar"]), Phone: phone,
 			Email:       shared.NormalizeEmail(vals["email"]),
 			Nationality: strings.TrimSpace(vals["nationality"]),
-			PassportNo:  shared.NormalizePassport(vals["passport_no"]),
+			PassportNo:  importedPassport(vals["passport_no"]),
 			DateOfBirth: dob, Preferences: json.RawMessage(`{}`),
 			SpecialRequirements: strings.TrimSpace(vals["special_requirements"]),
 			Notes:               strings.TrimSpace(vals["notes"]), IsActive: true,
@@ -420,7 +423,7 @@ func (s *Service) applyCustomer(ctx context.Context, j *domain.ImportJob, vals m
 			FullNameAR: strings.TrimSpace(vals["full_name_ar"]), Phone: phone,
 			Email:       shared.NormalizeEmail(vals["email"]),
 			Nationality: strings.TrimSpace(vals["nationality"]),
-			PassportNo:  shared.NormalizePassport(vals["passport_no"]),
+			PassportNo:  importedPassport(vals["passport_no"]),
 			DateOfBirth: dob, Preferences: json.RawMessage(`{}`),
 			SpecialRequirements: strings.TrimSpace(vals["special_requirements"]),
 			Notes:               strings.TrimSpace(vals["notes"]), IsActive: true,
@@ -449,7 +452,7 @@ func patchCustomer(c *customer.Customer, vals map[string]string, dob *time.Time)
 	if v, ok := vals["nationality"]; ok {
 		c.Nationality = strings.TrimSpace(v)
 	}
-	if v, ok := vals["passport_no"]; ok {
+	if v, ok := vals["passport_no"]; ok && !shared.IsMaskedPassport(v) {
 		c.PassportNo = shared.NormalizePassport(v)
 	}
 	if dob != nil {
@@ -533,6 +536,9 @@ func (s *Service) ExportCSV(ctx context.Context, in ExportInput) ([]byte, string
 	switch in.EntityType {
 	case domain.EntityCustomers:
 		rows, err = s.repo.ExportCustomers(ctx, in.BranchID, limit)
+		if err == nil && !in.RevealPII {
+			maskExportPassports(rows)
+		}
 	case domain.EntityBookings:
 		rows, err = s.repo.ExportBookings(ctx, in.BranchID, limit)
 	case domain.EntityPayments:
@@ -549,6 +555,23 @@ func (s *Service) ExportCSV(ctx context.Context, in ExportInput) ([]byte, string
 	}
 	filename := string(in.EntityType) + "-export.csv"
 	return csv, filename, nil
+}
+
+func maskExportPassports(rows []domain.ExportRow) {
+	for _, row := range rows {
+		if p, ok := row["passport_no"]; ok {
+			row["passport_no"] = shared.MaskedPassport(p)
+		}
+	}
+}
+
+// importedPassport ignores masked values so re-importing a masked export
+// cannot overwrite real passport numbers.
+func importedPassport(v string) string {
+	if shared.IsMaskedPassport(v) {
+		return ""
+	}
+	return shared.NormalizePassport(v)
 }
 
 func (s *Service) Schemas() map[string][]domain.FieldDef {

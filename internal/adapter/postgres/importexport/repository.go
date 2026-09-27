@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/importexport"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -19,10 +20,11 @@ import (
 
 type Repository struct {
 	pool *pgxpool.Pool
+	pii  *pgpii.Passports
 }
 
-func NewRepository(pool *pgxpool.Pool) *Repository {
-	return &Repository{pool: pool}
+func NewRepository(pool *pgxpool.Pool, pii *pgpii.Passports) *Repository {
+	return &Repository{pool: pool, pii: pii}
 }
 
 const jobCols = `id, branch_id, entity_type, mode, status, file_name, content_type,
@@ -294,8 +296,8 @@ func (r *Repository) ExportCustomers(ctx context.Context, branchID uuid.UUID, li
 		return nil, err
 	}
 	rows, err := q.Query(ctx, `
-		SELECT full_name, COALESCE(full_name_ar,''), phone, COALESCE(email,''),
-			COALESCE(nationality,''), COALESCE(passport_no,''),
+		SELECT id, full_name, COALESCE(full_name_ar,''), phone, COALESCE(email,''),
+			COALESCE(nationality,''), COALESCE(passport_no,''), passport_enc,
 			COALESCE(to_char(date_of_birth,'YYYY-MM-DD'),''),
 			COALESCE(notes,''), COALESCE(special_requirements,'')
 		FROM customers
@@ -307,8 +309,13 @@ func (r *Repository) ExportCustomers(ctx context.Context, branchID uuid.UUID, li
 	defer rows.Close()
 	var out []domain.ExportRow
 	for rows.Next() {
-		var fullName, fullNameAR, phone, email, nationality, passport, dob, notes, special string
-		if err := rows.Scan(&fullName, &fullNameAR, &phone, &email, &nationality, &passport, &dob, &notes, &special); err != nil {
+		var id uuid.UUID
+		var fullName, fullNameAR, phone, email, nationality, legacy, enc, dob, notes, special string
+		if err := rows.Scan(&id, &fullName, &fullNameAR, &phone, &email, &nationality, &legacy, &enc, &dob, &notes, &special); err != nil {
+			return nil, err
+		}
+		passport, err := r.pii.Open(pgpii.Customers, id, enc, legacy)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, domain.ExportRow{

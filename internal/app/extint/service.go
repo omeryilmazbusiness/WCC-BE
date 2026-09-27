@@ -7,8 +7,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/app/secretcfg"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/extint"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	"github.com/wodi-crm/wodi-crm-be/internal/platform/crypto"
 )
 
 // AdapterRegistry resolves stub probes (DIP).
@@ -36,10 +38,43 @@ type Service struct {
 	repo     domain.Repository
 	registry AdapterRegistry
 	catalog  []domain.CatalogEntry
+	vault    secretcfg.Vault
 }
 
-func NewService(repo domain.Repository, registry AdapterRegistry, catalog []domain.CatalogEntry) *Service {
-	return &Service{repo: repo, registry: registry, catalog: catalog}
+func NewService(repo domain.Repository, registry AdapterRegistry, catalog []domain.CatalogEntry, secrets crypto.SecretSealer) *Service {
+	return &Service{repo: repo, registry: registry, catalog: catalog, vault: secretcfg.NewVault(secrets)}
+}
+
+func binding(i *domain.Integration) crypto.Binding {
+	return crypto.Binding{Table: domain.SecretsTable, RowID: i.ID, BranchID: i.BranchID}
+}
+
+func (s *Service) config(i *domain.Integration) (secretcfg.Config, error) {
+	return s.vault.Load(i.ConfigJSON, i.SecretsEnc, binding(i))
+}
+
+// store applies incoming config to i and seals its secrets for i's row.
+func (s *Service) store(i *domain.Integration, current secretcfg.Config, incoming json.RawMessage) error {
+	cfg, err := s.vault.Apply(current, incoming)
+	if err != nil {
+		return err
+	}
+	sealed, err := s.vault.Seal(cfg, binding(i))
+	if err != nil {
+		return err
+	}
+	i.ConfigJSON, i.SecretsEnc = cfg.Public, sealed
+	return nil
+}
+
+// redact strips credentials from i for API responses, leaving hints.
+func (s *Service) redact(i *domain.Integration) error {
+	cfg, err := s.config(i)
+	if err != nil {
+		return err
+	}
+	i.ConfigJSON, i.SecretsEnc, i.SecretHints = cfg.Public, "", cfg.Hints()
+	return nil
 }
 
 func (s *Service) Catalog() []domain.CatalogEntry {
@@ -47,7 +82,16 @@ func (s *Service) Catalog() []domain.CatalogEntry {
 }
 
 func (s *Service) List(ctx context.Context, branchID uuid.UUID) ([]domain.Integration, error) {
-	return s.repo.List(ctx, branchID)
+	items, err := s.repo.List(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		if err := s.redact(&items[i]); err != nil {
+			return nil, err
+		}
+	}
+	return items, nil
 }
 
 func (s *Service) Get(ctx context.Context, branchID, id uuid.UUID) (*domain.Integration, error) {
@@ -55,7 +99,7 @@ func (s *Service) Get(ctx context.Context, branchID, id uuid.UUID) (*domain.Inte
 	if err != nil {
 		return nil, shared.NewNotFound("external_integration")
 	}
-	return i, nil
+	return i, s.redact(i)
 }
 
 func (s *Service) Enable(ctx context.Context, in EnableInput) (*domain.Integration, error) {
@@ -90,15 +134,38 @@ func (s *Service) Enable(ctx context.Context, in EnableInput) (*domain.Integrati
 		ID: uuid.New(), BranchID: in.BranchID, Kind: in.Kind,
 		ProviderKey: in.ProviderKey, DisplayName: in.DisplayName,
 		Status: domain.StatusStub, Health: domain.HealthUnknown,
-		ConfigJSON: in.ConfigJSON, CreatedAt: now, UpdatedAt: now,
+		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := i.Normalize(); err != nil {
+		return nil, err
+	}
+	current, err := s.existingConfig(ctx, i)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store(i, current, in.ConfigJSON); err != nil {
 		return nil, err
 	}
 	if err := s.repo.Upsert(ctx, i); err != nil {
 		return nil, err
 	}
-	return i, nil
+	return i, s.redact(i)
+}
+
+// existingConfig reuses the row (and its secrets) when a kind/provider is
+// enabled again: sealed secrets are bound to the row id.
+func (s *Service) existingConfig(ctx context.Context, i *domain.Integration) (secretcfg.Config, error) {
+	items, err := s.repo.List(ctx, i.BranchID)
+	if err != nil {
+		return secretcfg.Config{}, err
+	}
+	for k := range items {
+		if items[k].Kind == i.Kind && items[k].ProviderKey == i.ProviderKey {
+			i.ID, i.CreatedAt = items[k].ID, items[k].CreatedAt
+			return s.config(&items[k])
+		}
+	}
+	return secretcfg.Config{}, nil
 }
 
 func (s *Service) Disable(ctx context.Context, branchID, id uuid.UUID) (*domain.Integration, error) {
@@ -111,7 +178,7 @@ func (s *Service) Disable(ctx context.Context, branchID, id uuid.UUID) (*domain.
 	if err := s.repo.Update(ctx, i); err != nil {
 		return nil, err
 	}
-	return i, nil
+	return i, s.redact(i)
 }
 
 func (s *Service) Patch(ctx context.Context, branchID, id uuid.UUID, in PatchInput) (*domain.Integration, error) {
@@ -129,7 +196,13 @@ func (s *Service) Patch(ctx context.Context, branchID, id uuid.UUID, in PatchInp
 		i.Status = *in.Status
 	}
 	if len(in.ConfigJSON) > 0 {
-		i.ConfigJSON = in.ConfigJSON
+		current, err := s.config(i)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.store(i, current, in.ConfigJSON); err != nil {
+			return nil, err
+		}
 	}
 	if err := i.Normalize(); err != nil {
 		return nil, err
@@ -138,7 +211,7 @@ func (s *Service) Patch(ctx context.Context, branchID, id uuid.UUID, in PatchInp
 	if err := s.repo.Update(ctx, i); err != nil {
 		return nil, err
 	}
-	return i, nil
+	return i, s.redact(i)
 }
 
 func (s *Service) Probe(ctx context.Context, branchID, id uuid.UUID) (*domain.Integration, error) {
@@ -146,8 +219,12 @@ func (s *Service) Probe(ctx context.Context, branchID, id uuid.UUID) (*domain.In
 	if err != nil {
 		return nil, shared.NewNotFound("external_integration")
 	}
+	cfg, err := s.config(i)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
-	health, msg, probeErr := s.registry.Probe(ctx, i.Kind, i.ProviderKey, i.ConfigJSON)
+	health, msg, probeErr := s.registry.Probe(ctx, i.Kind, i.ProviderKey, cfg.Merged())
 	i.LastCheckedAt = &now
 	i.UpdatedAt = now
 	if probeErr != nil {
@@ -165,7 +242,7 @@ func (s *Service) Probe(ctx context.Context, branchID, id uuid.UUID) (*domain.In
 	if err := s.repo.Update(ctx, i); err != nil {
 		return nil, err
 	}
-	return i, nil
+	return i, s.redact(i)
 }
 
 func (s *Service) Delete(ctx context.Context, branchID, id uuid.UUID) error {

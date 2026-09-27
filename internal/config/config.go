@@ -73,9 +73,13 @@ type AuthConfig struct {
 	EncryptionKeyID string
 	// PreviousEncryptionKeys are "id:base64key" entries kept for decryption.
 	PreviousEncryptionKeys []string
-	LoginMaxAttempts       int
-	LoginLockout           time.Duration
-	LoginWindow            time.Duration
+	// BlindIndexKey (base64 32 bytes) pins the passport/verify-token blind
+	// index key; unset derives it from EncryptionKey, which changes the index
+	// on key rotation (then rerun the encrypt backfill with rehash).
+	BlindIndexKey    string
+	LoginMaxAttempts int
+	LoginLockout     time.Duration
+	LoginWindow      time.Duration
 	// LoginLockoutMax caps the doubling lockout duration.
 	LoginLockoutMax time.Duration
 	// LoginIPMaxAttempts throttles failed logins per client IP within LoginWindow.
@@ -155,6 +159,7 @@ func Load() (Config, error) {
 			EncryptionKey:          getEnv("ENCRYPTION_KEY", devEncryptionKey),
 			EncryptionKeyID:        getEnv("ENCRYPTION_KEY_ID", "k1"),
 			PreviousEncryptionKeys: splitCSV(getEnv("ENCRYPTION_PREVIOUS_KEYS", "")),
+			BlindIndexKey:          getEnv("ENCRYPTION_BLIND_INDEX_KEY", ""),
 			LoginMaxAttempts:       getInt("LOGIN_MAX_ATTEMPTS", 5),
 			LoginLockout:           getDuration("LOGIN_LOCKOUT", 15*time.Minute),
 			LoginWindow:            getDuration("LOGIN_WINDOW", 15*time.Minute),

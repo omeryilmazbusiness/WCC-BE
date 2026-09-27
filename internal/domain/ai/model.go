@@ -57,13 +57,14 @@ const (
 	KindOCRExtract      Kind = "document.ocr_extract"
 )
 
-// Settings is per-branch BYO AI configuration (secrets in ConfigJSON).
+// Settings is per-branch BYO AI configuration (secrets in SecretsEnc).
 type Settings struct {
 	BranchID         uuid.UUID
 	Provider         Provider
 	Model            string
 	Enabled          bool
-	ConfigJSON       json.RawMessage // api_key etc — never expose raw
+	ConfigJSON       json.RawMessage // legacy plaintext api_key until the encrypt backfill runs
+	SecretsEnc       string          // sealed secret bag (api_key)
 	SetupCompletedAt *time.Time
 	UpdatedBy        *uuid.UUID
 	UpdatedAt        time.Time
@@ -71,6 +72,9 @@ type Settings struct {
 	// Public view (no secrets)
 	PublicMeta map[string]any
 }
+
+// SecretsTable binds sealed AI secrets to their table (row id = branch id).
+const SecretsTable = "ai_settings"
 
 // MaskedKeyHint returns last 4 chars for UI confirmation.
 func MaskedKeyHint(apiKey string) string {

@@ -47,9 +47,14 @@ type statusRequest struct {
 
 type participantRequest struct {
 	FullName    string  `json:"full_name"`
-	PassportNo  string  `json:"passport_no"`
+	PassportNo  *string `json:"passport_no"`
 	Nationality string  `json:"nationality"`
 	DateOfBirth *string `json:"date_of_birth"`
+}
+
+func newPassport(p *string) string {
+	v, _ := shared.PassportUpdate(p)
+	return v
 }
 
 type lineItemsRequest struct {
@@ -96,26 +101,25 @@ func mapBooking(b *domain.Booking, fa fieldAccess) map[string]any {
 	}
 }
 
-func mapParticipant(p *domain.Participant, fa fieldAccess) map[string]any {
+// mapParticipant always masks the passport; the full number is only
+// disclosed through the audited reveal endpoint (T-261).
+func mapParticipant(p *domain.Participant) map[string]any {
 	if p == nil {
 		return nil
-	}
-	passport := p.PassportNo
-	if !fa.pii {
-		passport = shared.MaskPassport(passport)
 	}
 	var dob any
 	if p.DateOfBirth != nil {
 		dob = p.DateOfBirth.Format("2006-01-02")
 	}
 	return map[string]any{
-		"id":            p.ID,
-		"booking_id":    p.BookingID,
-		"full_name":     p.FullName,
-		"passport_no":   passport,
-		"nationality":   p.Nationality,
-		"date_of_birth": dob,
-		"created_at":    p.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"id":             p.ID,
+		"booking_id":     p.BookingID,
+		"full_name":      p.FullName,
+		"passport_no":    shared.MaskedPassport(p.PassportNo),
+		"passport_last4": shared.PassportLast4(p.PassportNo),
+		"nationality":    p.Nationality,
+		"date_of_birth":  dob,
+		"created_at":     p.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }
 
@@ -374,13 +378,13 @@ func (h Handler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := h.Svc.AddParticipant(r.Context(), id, appsvc.AddParticipantInput{
-		FullName: req.FullName, PassportNo: req.PassportNo, Nationality: req.Nationality, DateOfBirth: dob,
+		FullName: req.FullName, PassportNo: newPassport(req.PassportNo), Nationality: req.Nationality, DateOfBirth: dob,
 	})
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusCreated, mapParticipant(p, fieldAccessFor(r)))
+	response.JSON(w, http.StatusCreated, mapParticipant(p))
 }
 
 func (h Handler) UpdateParticipant(w http.ResponseWriter, r *http.Request) {
@@ -411,7 +415,7 @@ func (h Handler) UpdateParticipant(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapParticipant(p, fieldAccessFor(r)))
+	response.JSON(w, http.StatusOK, mapParticipant(p))
 }
 
 func (h Handler) DeleteParticipant(w http.ResponseWriter, r *http.Request) {
@@ -443,10 +447,9 @@ func (h Handler) ListParticipants(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	fa := fieldAccessFor(r)
 	out := make([]map[string]any, 0, len(items))
 	for i := range items {
-		out = append(out, mapParticipant(&items[i], fa))
+		out = append(out, mapParticipant(&items[i]))
 	}
 	response.JSON(w, http.StatusOK, out)
 }

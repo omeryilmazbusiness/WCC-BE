@@ -14,6 +14,7 @@ import (
 
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/authsec"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -102,6 +103,7 @@ func Authenticate(tokens AccessTokenParser, sessions SessionValidator) func(http
 			}
 			ctx := context.WithValue(r.Context(), claimsKey, claims)
 			ctx = access.WithScope(ctx, platformauth.ScopeFor(claims))
+			ctx = audit.WithActor(ctx, userActor(r, claims))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

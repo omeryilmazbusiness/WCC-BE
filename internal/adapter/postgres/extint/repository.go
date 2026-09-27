@@ -11,6 +11,7 @@ import (
 
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/extint"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
@@ -32,7 +33,7 @@ func (r *Repository) List(ctx context.Context, branchID uuid.UUID) ([]domain.Int
 	}
 	rows, err := q.Query(ctx, `
 		SELECT id, branch_id, kind, provider_key, display_name, status, health,
-			config_json, last_checked_at, last_error, created_at, updated_at
+			config_json, secrets_enc, last_checked_at, last_error, created_at, updated_at
 		FROM external_integrations
 		WHERE branch_id=$1`+clause+`
 		ORDER BY kind, provider_key`, args...)
@@ -59,7 +60,7 @@ func (r *Repository) Get(ctx context.Context, branchID, id uuid.UUID) (*domain.I
 	}
 	row := q.QueryRow(ctx, `
 		SELECT id, branch_id, kind, provider_key, display_name, status, health,
-			config_json, last_checked_at, last_error, created_at, updated_at
+			config_json, secrets_enc, last_checked_at, last_error, created_at, updated_at
 		FROM external_integrations
 		WHERE branch_id=$1 AND id=$2`+clause, args...)
 	i, err := scanIntegrationRow(row)
@@ -81,21 +82,27 @@ func (r *Repository) Upsert(ctx context.Context, i *domain.Integration) error {
 	err := q.QueryRow(ctx, `
 		INSERT INTO external_integrations (
 			id, branch_id, kind, provider_key, display_name, status, health,
-			config_json, last_checked_at, last_error, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+			config_json, secrets_enc, last_checked_at, last_error, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT (branch_id, kind, provider_key) DO UPDATE SET
 			display_name=EXCLUDED.display_name,
 			status=EXCLUDED.status,
 			health=EXCLUDED.health,
 			config_json=EXCLUDED.config_json,
+			secrets_enc=EXCLUDED.secrets_enc,
 			last_checked_at=EXCLUDED.last_checked_at,
 			last_error=EXCLUDED.last_error,
 			updated_at=EXCLUDED.updated_at
+		WHERE external_integrations.id = EXCLUDED.id
 		RETURNING id`,
 		i.ID, i.BranchID, string(i.Kind), i.ProviderKey, i.DisplayName,
-		string(i.Status), string(i.Health), cfg, i.LastCheckedAt, i.LastError,
+		string(i.Status), string(i.Health), cfg, i.SecretsEnc, i.LastCheckedAt, i.LastError,
 		i.CreatedAt, i.UpdatedAt,
 	).Scan(&i.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// secrets_enc is bound to the row id it was sealed for.
+		return shared.NewConflict("integration was enabled concurrently; retry")
+	}
 	return err
 }
 
@@ -107,7 +114,7 @@ func (r *Repository) Update(ctx context.Context, i *domain.Integration) error {
 	}
 	clause, args, err := pgscope.Clause(ctx, branchScope, []any{
 		i.BranchID, i.ID, i.DisplayName, string(i.Status), string(i.Health),
-		cfg, i.LastCheckedAt, i.LastError, i.UpdatedAt,
+		cfg, i.LastCheckedAt, i.LastError, i.UpdatedAt, i.SecretsEnc,
 	})
 	if err != nil {
 		return err
@@ -115,7 +122,7 @@ func (r *Repository) Update(ctx context.Context, i *domain.Integration) error {
 	ct, err := q.Exec(ctx, `
 		UPDATE external_integrations SET
 			display_name=$3, status=$4, health=$5, config_json=$6,
-			last_checked_at=$7, last_error=$8, updated_at=$9
+			last_checked_at=$7, last_error=$8, updated_at=$9, secrets_enc=$10
 		WHERE branch_id=$1 AND id=$2`+clause, args...)
 	if err != nil {
 		return err
@@ -148,7 +155,7 @@ func scanIntegrationRow(row pgx.Row) (*domain.Integration, error) {
 	var cfg []byte
 	err := row.Scan(
 		&i.ID, &i.BranchID, &kind, &i.ProviderKey, &i.DisplayName, &status, &health,
-		&cfg, &i.LastCheckedAt, &i.LastError, &i.CreatedAt, &i.UpdatedAt,
+		&cfg, &i.SecretsEnc, &i.LastCheckedAt, &i.LastError, &i.CreatedAt, &i.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -166,7 +173,7 @@ func scanIntegration(rows pgx.Rows) (*domain.Integration, error) {
 	var cfg []byte
 	err := rows.Scan(
 		&i.ID, &i.BranchID, &kind, &i.ProviderKey, &i.DisplayName, &status, &health,
-		&cfg, &i.LastCheckedAt, &i.LastError, &i.CreatedAt, &i.UpdatedAt,
+		&cfg, &i.SecretsEnc, &i.LastCheckedAt, &i.LastError, &i.CreatedAt, &i.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err

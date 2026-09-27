@@ -16,7 +16,7 @@ type Customer struct {
 	Phone               string
 	Email               string
 	Nationality         string
-	PassportNo          string
+	PassportNo          string // plaintext inside the app; encrypted at rest
 	DateOfBirth         *time.Time
 	Preferences         json.RawMessage
 	SpecialRequirements string
@@ -26,6 +26,8 @@ type Customer struct {
 	CreatedBy           uuid.UUID
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+	// AnonymizedAt is set once the customer is irreversibly anonymized (KVKK).
+	AnonymizedAt *time.Time
 }
 
 type CompanionLink struct {

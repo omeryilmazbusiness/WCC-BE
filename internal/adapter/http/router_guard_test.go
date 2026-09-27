@@ -82,7 +82,13 @@ func accessToken(t *testing.T, tokens *platformauth.TokenService, role platforma
 func TestEveryBusinessRouteRequiresPermission(t *testing.T) {
 	router, tokens := testRouter(t)
 	token := accessToken(t, tokens, platformauth.Role("nobody"))
-	mustGuard := map[string]bool{"POST /v1/users/{id}/sessions/revoke": false, "POST /v1/ops/security-cleanup": false}
+	mustGuard := map[string]bool{
+		"POST /v1/users/{id}/sessions/revoke": false, "POST /v1/ops/security-cleanup": false,
+		"GET /v1/audit-events": false, "GET /v1/audit-events/export.csv": false, "GET /v1/audit-events/actions": false,
+		"POST /v1/ops/encrypt-backfill": false, "POST /v1/customers/{id}/reveal-passport": false,
+		"GET /v1/customers/{id}/export": false, "POST /v1/customers/{id}/anonymize": false,
+		"POST /v1/bookings/{id}/participants/{participantId}/reveal-passport": false,
+	}
 
 	routes, ok := router.(chi.Routes)
 	if !ok {
@@ -215,6 +221,36 @@ func TestSecurityHeaders(t *testing.T) {
 	for _, h := range []string{"X-Content-Type-Options", "X-Frame-Options", "Content-Security-Policy", "Strict-Transport-Security"} {
 		if rec.Header().Get(h) == "" {
 			t.Errorf("missing security header %s", h)
+		}
+	}
+}
+
+// TestDataProtectionRoutesRequireTheirPermission covers roles that hold the
+// neighbouring permissions but not the one guarding Epic 20 routes: reveals
+// need pii.read on top of read access, KVKK requests need privacy.manage.
+func TestDataProtectionRoutesRequireTheirPermission(t *testing.T) {
+	router, tokens := testRouter(t)
+	id, pid := uuid.NewString(), uuid.NewString()
+	cases := []struct {
+		role         platformauth.Role
+		method, path string
+	}{
+		{platformauth.RoleEmployee, http.MethodPost, "/v1/customers/" + id + "/reveal-passport"},
+		{platformauth.RoleFinance, http.MethodPost, "/v1/customers/" + id + "/reveal-passport"},
+		{platformauth.RoleEmployee, http.MethodPost, "/v1/bookings/" + id + "/participants/" + pid + "/reveal-passport"},
+		{platformauth.RoleAdmin, http.MethodPost, "/v1/customers/" + id + "/reveal-passport"},
+		{platformauth.RoleManager, http.MethodGet, "/v1/customers/" + id + "/export"},
+		{platformauth.RoleManager, http.MethodPost, "/v1/customers/" + id + "/anonymize"},
+		{platformauth.RoleOperations, http.MethodPost, "/v1/customers/" + id + "/anonymize"},
+		{platformauth.RoleManager, http.MethodPost, "/v1/ops/encrypt-backfill"},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(c.method, c.path, strings.NewReader(`{"reason":"customer request by email"}`))
+		req.Header.Set("Authorization", "Bearer "+accessToken(t, tokens, c.role))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("%s %s as %s: want 403, got %d", c.method, c.path, c.role, rec.Code)
 		}
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/customer"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -36,16 +37,20 @@ func customerVisible(ctx context.Context, col string, args []any) (string, []any
 
 type Repository struct {
 	pool *pgxpool.Pool
+	pii  *pgpii.Passports
 }
 
-func NewRepository(pool *pgxpool.Pool) *Repository {
-	return &Repository{pool: pool}
+func NewRepository(pool *pgxpool.Pool, pii *pgpii.Passports) *Repository {
+	return &Repository{pool: pool, pii: pii}
 }
 
+// Passport numbers are stored encrypted; passport_no is only read as a
+// fallback for rows the encrypt backfill has not reached and always written
+// blank.
 const customerCols = `id, branch_id, full_name, full_name_ar, phone, email, nationality,
-	COALESCE(passport_no,''), date_of_birth, COALESCE(preferences,'{}'::jsonb),
+	COALESCE(passport_no,''), passport_enc, date_of_birth, COALESCE(preferences,'{}'::jsonb),
 	COALESCE(special_requirements,''), notes, merged_into_id, COALESCE(is_active,true),
-	created_by, created_at, updated_at`
+	created_by, created_at, updated_at, anonymized_at`
 
 func (r *Repository) Create(ctx context.Context, c *domain.Customer) error {
 	if err := pgscope.EnsureBranch(ctx, c.BranchID); err != nil {
@@ -54,15 +59,21 @@ func (r *Repository) Create(ctx context.Context, c *domain.Customer) error {
 	if c.Preferences == nil {
 		c.Preferences = json.RawMessage(`{}`)
 	}
+	pp, err := r.pii.Seal(pgpii.Customers, c.ID, c.PassportNo)
+	if err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		INSERT INTO customers (
 			id, branch_id, full_name, full_name_ar, phone, email, nationality,
-			passport_no, date_of_birth, preferences, special_requirements, notes,
+			passport_no, passport_enc, passport_hash, passport_last4,
+			date_of_birth, preferences, special_requirements, notes,
 			merged_into_id, is_active, created_by, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,'',$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		c.ID, c.BranchID, c.FullName, c.FullNameAR, c.Phone, c.Email, c.Nationality,
-		c.PassportNo, c.DateOfBirth, c.Preferences, c.SpecialRequirements, c.Notes,
+		pp.Enc, pp.Hash, pp.Last4,
+		c.DateOfBirth, c.Preferences, c.SpecialRequirements, c.Notes,
 		c.MergedIntoID, c.IsActive, c.CreatedBy, c.CreatedAt, c.UpdatedAt,
 	)
 	return err
@@ -72,10 +83,14 @@ func (r *Repository) Update(ctx context.Context, c *domain.Customer) error {
 	if c.Preferences == nil {
 		c.Preferences = json.RawMessage(`{}`)
 	}
+	pp, err := r.pii.Seal(pgpii.Customers, c.ID, c.PassportNo)
+	if err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	scope, args, err := pgscope.Clause(ctx, scopeCustomers, []any{
 		c.ID, c.FullName, c.FullNameAR, c.Phone, c.Email, c.Nationality,
-		c.PassportNo, c.DateOfBirth, c.Preferences, c.SpecialRequirements,
+		pp.Enc, pp.Hash, pp.Last4, c.DateOfBirth, c.Preferences, c.SpecialRequirements,
 		c.Notes, c.IsActive, c.UpdatedAt,
 	})
 	if err != nil {
@@ -84,8 +99,9 @@ func (r *Repository) Update(ctx context.Context, c *domain.Customer) error {
 	tag, err := q.Exec(ctx, `
 		UPDATE customers SET
 			full_name=$2, full_name_ar=$3, phone=$4, email=$5, nationality=$6,
-			passport_no=$7, date_of_birth=$8, preferences=$9, special_requirements=$10,
-			notes=$11, is_active=$12, updated_at=$13
+			passport_no='', passport_enc=$7, passport_hash=$8, passport_last4=$9,
+			date_of_birth=$10, preferences=$11, special_requirements=$12,
+			notes=$13, is_active=$14, updated_at=$15
 		WHERE id=$1`+scope, args...)
 	if err != nil {
 		return err
@@ -110,9 +126,16 @@ func (r *Repository) FindByEmail(ctx context.Context, email string, branchID uui
 		  AND lower(email) = lower($1) AND email <> ''`, email, branchID)
 }
 
+// FindByPassport matches the blind index exactly; the plaintext comparison
+// covers rows not yet backfilled.
 func (r *Repository) FindByPassport(ctx context.Context, passport string, branchID uuid.UUID) (*domain.Customer, error) {
+	hash := r.pii.Hash(passport)
+	if hash == "" {
+		return nil, nil
+	}
 	return r.findOne(ctx, `branch_id=$2 AND is_active=true AND merged_into_id IS NULL
-		  AND upper(replace(passport_no,' ','')) = upper(replace($1,' ','')) AND passport_no <> ''`, passport, branchID)
+		  AND (passport_hash = $1 OR (passport_no <> '' AND upper(replace(passport_no,' ','')) = $3))`,
+		hash, branchID, shared.NormalizePassport(passport))
 }
 
 // findOne returns the first customer matching where (bound to args) within
@@ -123,7 +146,7 @@ func (r *Repository) findOne(ctx context.Context, where string, args ...any) (*d
 	if err != nil {
 		return nil, err
 	}
-	return scan(q.QueryRow(ctx, `SELECT `+customerCols+` FROM customers WHERE `+where+scope+` LIMIT 1`, args...))
+	return r.scan(q.QueryRow(ctx, `SELECT `+customerCols+` FROM customers WHERE `+where+scope+` LIMIT 1`, args...))
 }
 
 func (r *Repository) FindNameCandidates(ctx context.Context, name string, branchID uuid.UUID, limit int) ([]domain.Customer, error) {
@@ -145,7 +168,7 @@ func (r *Repository) FindNameCandidates(ctx context.Context, name string, branch
 		return nil, err
 	}
 	defer rows.Close()
-	return scanAll(rows)
+	return r.scanAll(rows)
 }
 
 func (r *Repository) Search(ctx context.Context, f domain.SearchFilter) ([]domain.Customer, int, error) {
@@ -155,11 +178,15 @@ func (r *Repository) Search(ctx context.Context, f domain.SearchFilter) ([]domai
 	if f.IncludeMerged {
 		activeClause = ""
 	}
-	scope, args, err := pgscope.Clause(ctx, scopeCustomers, []any{f.Query, pattern, f.BranchID})
+	passport := shared.NormalizePassport(f.Query)
+	scope, args, err := pgscope.Clause(ctx, scopeCustomers, []any{f.Query, pattern, f.BranchID, r.pii.Hash(f.Query), passport})
 	if err != nil {
 		return nil, 0, err
 	}
-	where := `($1 = '' OR full_name ILIKE $2 OR phone ILIKE $2 OR full_name_ar ILIKE $2 OR passport_no ILIKE $2 OR email ILIKE $2)
+	// Passports match exactly (blind index), never by substring.
+	where := `($1 = '' OR full_name ILIKE $2 OR phone ILIKE $2 OR full_name_ar ILIKE $2 OR email ILIKE $2
+			OR ($4 <> '' AND passport_hash = $4)
+			OR ($5 <> '' AND passport_no <> '' AND upper(replace(passport_no,' ','')) = $5))
 		AND ($3::uuid IS NULL OR branch_id = $3) ` + activeClause + scope
 	var total int
 	if err := q.QueryRow(ctx, `SELECT COUNT(*) FROM customers WHERE `+where, args...).Scan(&total); err != nil {
@@ -177,7 +204,7 @@ func (r *Repository) Search(ctx context.Context, f domain.SearchFilter) ([]domai
 		return nil, 0, err
 	}
 	defer rows.Close()
-	items, err := scanAll(rows)
+	items, err := r.scanAll(rows)
 	return items, total, err
 }
 
@@ -232,9 +259,9 @@ func (r *Repository) ListCompanions(ctx context.Context, customerID uuid.UUID) (
 	rows, err := q.Query(ctx, `
 		SELECT cc.id, cc.customer_id, cc.companion_id, cc.relation, cc.notes, cc.created_at,
 			c.id, c.branch_id, c.full_name, c.full_name_ar, c.phone, c.email, c.nationality,
-			COALESCE(c.passport_no,''), c.date_of_birth, COALESCE(c.preferences,'{}'::jsonb),
+			COALESCE(c.passport_no,''), c.passport_enc, c.date_of_birth, COALESCE(c.preferences,'{}'::jsonb),
 			COALESCE(c.special_requirements,''), c.notes, c.merged_into_id, COALESCE(c.is_active,true),
-			c.created_by, c.created_at, c.updated_at
+			c.created_by, c.created_at, c.updated_at, c.anonymized_at
 		FROM customer_companions cc
 		JOIN customers c ON c.id = cc.companion_id
 		WHERE cc.customer_id=$1`+scope+parentScope+`
@@ -247,12 +274,16 @@ func (r *Repository) ListCompanions(ctx context.Context, customerID uuid.UUID) (
 	for rows.Next() {
 		var link domain.CompanionLink
 		var comp domain.Customer
+		var legacy, enc string
 		if err := rows.Scan(
 			&link.ID, &link.CustomerID, &link.CompanionID, &link.Relation, &link.Notes, &link.CreatedAt,
 			&comp.ID, &comp.BranchID, &comp.FullName, &comp.FullNameAR, &comp.Phone, &comp.Email, &comp.Nationality,
-			&comp.PassportNo, &comp.DateOfBirth, &comp.Preferences, &comp.SpecialRequirements, &comp.Notes,
-			&comp.MergedIntoID, &comp.IsActive, &comp.CreatedBy, &comp.CreatedAt, &comp.UpdatedAt,
+			&legacy, &enc, &comp.DateOfBirth, &comp.Preferences, &comp.SpecialRequirements, &comp.Notes,
+			&comp.MergedIntoID, &comp.IsActive, &comp.CreatedBy, &comp.CreatedAt, &comp.UpdatedAt, &comp.AnonymizedAt,
 		); err != nil {
+			return nil, err
+		}
+		if comp.PassportNo, err = r.pii.Open(pgpii.Customers, comp.ID, enc, legacy); err != nil {
 			return nil, err
 		}
 		cp := comp
@@ -382,23 +413,30 @@ type scannable interface {
 	Scan(dest ...any) error
 }
 
-func scan(row scannable) (*domain.Customer, error) {
+func (r *Repository) scan(row scannable) (*domain.Customer, error) {
 	var c domain.Customer
+	var legacy, enc string
 	err := row.Scan(
 		&c.ID, &c.BranchID, &c.FullName, &c.FullNameAR, &c.Phone, &c.Email, &c.Nationality,
-		&c.PassportNo, &c.DateOfBirth, &c.Preferences, &c.SpecialRequirements, &c.Notes,
-		&c.MergedIntoID, &c.IsActive, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&legacy, &enc, &c.DateOfBirth, &c.Preferences, &c.SpecialRequirements, &c.Notes,
+		&c.MergedIntoID, &c.IsActive, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.AnonymizedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
-	return &c, err
+	if err != nil {
+		return nil, err
+	}
+	if c.PassportNo, err = r.pii.Open(pgpii.Customers, c.ID, enc, legacy); err != nil {
+		return nil, err
+	}
+	return &c, nil
 }
 
-func scanAll(rows pgx.Rows) ([]domain.Customer, error) {
+func (r *Repository) scanAll(rows pgx.Rows) ([]domain.Customer, error) {
 	var out []domain.Customer
 	for rows.Next() {
-		c, err := scan(rows)
+		c, err := r.scan(rows)
 		if err != nil {
 			return nil, err
 		}

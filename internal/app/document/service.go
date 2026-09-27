@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/document"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
@@ -124,6 +125,7 @@ type Service struct {
 	tx         tx.Runner
 	bookings   BookingContext
 	queue      shared.Enqueuer
+	audit      audit.Recorder
 	presignTTL time.Duration
 }
 
@@ -133,6 +135,7 @@ func NewService(repo domain.Repository, storage ObjectStore, txm tx.Runner) *Ser
 
 func (s *Service) SetBookingContext(b BookingContext) { s.bookings = b }
 func (s *Service) SetEnqueuer(q shared.Enqueuer)      { s.queue = q }
+func (s *Service) SetAuditor(a audit.Recorder)        { s.audit = a }
 
 func (s *Service) PresignUpload(ctx context.Context, in PresignUploadInput) (*PresignUploadResult, error) {
 	fileName, err := domain.SanitizeFileName(in.FileName)
@@ -286,33 +289,57 @@ func (s *Service) Submit(ctx context.Context, id uuid.UUID) (*DocumentDTO, error
 }
 
 func (s *Service) Approve(ctx context.Context, id, actorID uuid.UUID, note string) (*DocumentDTO, error) {
-	doc, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return nil, shared.NewNotFound("document")
-	}
-	if err := doc.Approve(actorID, note); err != nil {
-		return nil, err
-	}
-	if err := s.repo.Update(ctx, doc); err != nil {
-		return nil, err
-	}
-	dto := toDTO(doc)
-	return &dto, nil
+	return s.review(ctx, id, actorID, "document.approved", func(doc *domain.Document) error {
+		return doc.Approve(actorID, note)
+	})
 }
 
 func (s *Service) Reject(ctx context.Context, id, actorID uuid.UUID, note string) (*DocumentDTO, error) {
-	doc, err := s.repo.FindByID(ctx, id)
+	return s.review(ctx, id, actorID, "document.rejected", func(doc *domain.Document) error {
+		return doc.Reject(actorID, note)
+	})
+}
+
+// review applies a review decision and its audit event atomically (fail closed).
+func (s *Service) review(ctx context.Context, id, actorID uuid.UUID, action string, decide func(*domain.Document) error) (*DocumentDTO, error) {
+	var out *domain.Document
+	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		doc, err := s.repo.FindByID(ctx, id)
+		if err != nil {
+			return shared.NewNotFound("document")
+		}
+		before := reviewSnapshot(doc)
+		if err := decide(doc); err != nil {
+			return err
+		}
+		if err := s.repo.Update(ctx, doc); err != nil {
+			return err
+		}
+		out = doc
+		if s.audit == nil {
+			return nil
+		}
+		docID, branchID := doc.ID, doc.BranchID
+		return s.audit.Record(ctx, audit.RecordInput{
+			ActorID: actorID, Action: action, EntityType: "document", EntityID: &docID, BranchID: &branchID,
+			Before: before, After: reviewSnapshot(doc),
+			Extra: map[string]any{
+				"related_type": doc.RelatedType, "related_id": doc.RelatedID, "kind": doc.Kind,
+				"file_name": doc.FileName, "version": doc.Version,
+			},
+		})
+	})
 	if err != nil {
-		return nil, shared.NewNotFound("document")
-	}
-	if err := doc.Reject(actorID, note); err != nil {
 		return nil, err
 	}
-	if err := s.repo.Update(ctx, doc); err != nil {
-		return nil, err
-	}
-	dto := toDTO(doc)
+	dto := toDTO(out)
 	return &dto, nil
+}
+
+func reviewSnapshot(d *domain.Document) map[string]any {
+	return map[string]any{
+		"status": d.Status(), "review_note": d.ReviewNote, "reviewed_by": d.ReviewedBy, "reviewed_at": d.ReviewedAt,
+	}
 }
 
 type ReplaceInput struct {

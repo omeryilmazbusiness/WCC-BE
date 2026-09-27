@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -52,10 +53,11 @@ func (r *Repository) requireVisible(ctx context.Context, bookingID uuid.UUID) er
 
 type Repository struct {
 	pool *pgxpool.Pool
+	pii  *pgpii.Passports
 }
 
-func NewRepository(pool *pgxpool.Pool) *Repository {
-	return &Repository{pool: pool}
+func NewRepository(pool *pgxpool.Pool, pii *pgpii.Passports) *Repository {
+	return &Repository{pool: pool, pii: pii}
 }
 
 const bookingCols = `id, branch_id, customer_id, departure_id, lead_id, status, pax_count,
@@ -195,25 +197,35 @@ func (r *Repository) AddParticipant(ctx context.Context, p *domain.Participant) 
 	if err := r.requireVisible(ctx, p.BookingID); err != nil {
 		return err
 	}
+	pp, err := r.pii.Seal(pgpii.BookingParticipants, p.ID, p.PassportNo)
+	if err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		INSERT INTO booking_participants (id, booking_id, full_name, passport_no, nationality, date_of_birth, created_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-		p.ID, p.BookingID, p.FullName, p.PassportNo, p.Nationality, p.DateOfBirth, p.CreatedAt,
+	_, err = q.Exec(ctx, `
+		INSERT INTO booking_participants (id, booking_id, full_name, passport_no, passport_enc, passport_hash, passport_last4,
+			nationality, date_of_birth, created_at)
+		VALUES ($1,$2,$3,'',$4,$5,$6,$7,$8,$9)`,
+		p.ID, p.BookingID, p.FullName, pp.Enc, pp.Hash, pp.Last4, p.Nationality, p.DateOfBirth, p.CreatedAt,
 	)
 	return err
 }
 
 func (r *Repository) UpdateParticipant(ctx context.Context, p *domain.Participant) error {
+	pp, err := r.pii.Seal(pgpii.BookingParticipants, p.ID, p.PassportNo)
+	if err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	scope, args, err := parentVisible(ctx, "booking_participants.booking_id", []any{
-		p.ID, p.BookingID, p.FullName, p.PassportNo, p.Nationality, p.DateOfBirth,
+		p.ID, p.BookingID, p.FullName, pp.Enc, pp.Hash, pp.Last4, p.Nationality, p.DateOfBirth,
 	})
 	if err != nil {
 		return err
 	}
 	tag, err := q.Exec(ctx, `
-		UPDATE booking_participants SET full_name=$3, passport_no=$4, nationality=$5, date_of_birth=$6
+		UPDATE booking_participants SET full_name=$3, passport_no='', passport_enc=$4, passport_hash=$5,
+			passport_last4=$6, nationality=$7, date_of_birth=$8
 		WHERE id=$1 AND booking_id=$2`+scope, args...)
 	if err != nil {
 		return err
@@ -247,7 +259,8 @@ func (r *Repository) ListParticipants(ctx context.Context, bookingID uuid.UUID) 
 		return nil, err
 	}
 	rows, err := q.Query(ctx, `
-		SELECT p.id, p.booking_id, p.full_name, p.passport_no, p.nationality, p.date_of_birth, p.created_at
+		SELECT p.id, p.booking_id, p.full_name, COALESCE(p.passport_no,''), p.passport_enc,
+			p.nationality, p.date_of_birth, p.created_at
 		FROM booking_participants p WHERE p.booking_id=$1`+scope+` ORDER BY p.created_at`, args...)
 	if err != nil {
 		return nil, err
@@ -256,7 +269,11 @@ func (r *Repository) ListParticipants(ctx context.Context, bookingID uuid.UUID) 
 	var out []domain.Participant
 	for rows.Next() {
 		var p domain.Participant
-		if err := rows.Scan(&p.ID, &p.BookingID, &p.FullName, &p.PassportNo, &p.Nationality, &p.DateOfBirth, &p.CreatedAt); err != nil {
+		var legacy, enc string
+		if err := rows.Scan(&p.ID, &p.BookingID, &p.FullName, &legacy, &enc, &p.Nationality, &p.DateOfBirth, &p.CreatedAt); err != nil {
+			return nil, err
+		}
+		if p.PassportNo, err = r.pii.Open(pgpii.BookingParticipants, p.ID, enc, legacy); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

@@ -33,7 +33,7 @@ func (r *Repository) ListConnections(ctx context.Context, branchID uuid.UUID) ([
 	rows, err := q.Query(ctx, `
 		SELECT id, branch_id, provider, display_name, remote_path, entity_type,
 			source_of_truth, conflict_policy, enabled, status, last_sync_at, last_error,
-			config_json, created_by, created_at, updated_at
+			config_json, secrets_enc, created_by, created_at, updated_at
 		FROM file_sync_connections
 		WHERE branch_id=$1`+clause+`
 		ORDER BY created_at DESC`, args...)
@@ -53,7 +53,7 @@ func (r *Repository) GetConnection(ctx context.Context, branchID, id uuid.UUID) 
 	row := q.QueryRow(ctx, `
 		SELECT id, branch_id, provider, display_name, remote_path, entity_type,
 			source_of_truth, conflict_policy, enabled, status, last_sync_at, last_error,
-			config_json, created_by, created_at, updated_at
+			config_json, secrets_enc, created_by, created_at, updated_at
 		FROM file_sync_connections
 		WHERE branch_id=$1 AND id=$2`+clause, args...)
 	c, err := scanConnection(row)
@@ -76,11 +76,11 @@ func (r *Repository) InsertConnection(ctx context.Context, c *domain.Connection)
 		INSERT INTO file_sync_connections (
 			id, branch_id, provider, display_name, remote_path, entity_type,
 			source_of_truth, conflict_policy, enabled, status, last_sync_at, last_error,
-			config_json, created_by, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+			config_json, secrets_enc, created_by, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
 		c.ID, c.BranchID, string(c.Provider), c.DisplayName, c.RemotePath, c.EntityType,
 		string(c.SourceOfTruth), string(c.ConflictPolicy), c.Enabled, string(c.Status),
-		c.LastSyncAt, c.LastError, cfg, c.CreatedBy, c.CreatedAt, c.UpdatedAt,
+		c.LastSyncAt, c.LastError, cfg, c.SecretsEnc, c.CreatedBy, c.CreatedAt, c.UpdatedAt,
 	)
 	return err
 }
@@ -94,7 +94,7 @@ func (r *Repository) UpdateConnection(ctx context.Context, c *domain.Connection)
 	clause, args, err := pgscope.Clause(ctx, branchScope, []any{
 		c.BranchID, c.ID, c.DisplayName, c.RemotePath, c.EntityType, string(c.SourceOfTruth),
 		string(c.ConflictPolicy), c.Enabled, string(c.Status), c.LastSyncAt, c.LastError,
-		cfg, c.UpdatedAt,
+		cfg, c.UpdatedAt, c.SecretsEnc,
 	})
 	if err != nil {
 		return err
@@ -103,7 +103,7 @@ func (r *Repository) UpdateConnection(ctx context.Context, c *domain.Connection)
 		UPDATE file_sync_connections SET
 			display_name=$3, remote_path=$4, entity_type=$5, source_of_truth=$6,
 			conflict_policy=$7, enabled=$8, status=$9, last_sync_at=$10, last_error=$11,
-			config_json=$12, updated_at=$13
+			config_json=$12, updated_at=$13, secrets_enc=$14
 		WHERE branch_id=$1 AND id=$2`+clause, args...)
 	if err != nil {
 		return err
@@ -227,7 +227,7 @@ func scanConnection(row pgx.Row) (*domain.Connection, error) {
 	err := row.Scan(
 		&c.ID, &c.BranchID, &provider, &c.DisplayName, &c.RemotePath, &c.EntityType,
 		&truth, &policy, &c.Enabled, &status, &c.LastSyncAt, &c.LastError,
-		&cfg, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+		&cfg, &c.SecretsEnc, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -249,7 +249,7 @@ func scanConnections(rows pgx.Rows) ([]domain.Connection, error) {
 		if err := rows.Scan(
 			&c.ID, &c.BranchID, &provider, &c.DisplayName, &c.RemotePath, &c.EntityType,
 			&truth, &policy, &c.Enabled, &status, &c.LastSyncAt, &c.LastError,
-			&cfg, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
+			&cfg, &c.SecretsEnc, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}

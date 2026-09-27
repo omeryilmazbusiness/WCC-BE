@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/tourpackage"
@@ -89,6 +90,7 @@ type Service struct {
 	repo     domain.Repository
 	tx       tx.Runner
 	bookings BookingReader
+	audit    audit.Recorder
 }
 
 func NewService(repo domain.Repository, txm tx.Runner) *Service {
@@ -263,6 +265,7 @@ func (s *Service) UpdateDeparture(ctx context.Context, in UpdateDepartureInput) 
 	if err != nil {
 		return nil, shared.NewNotFound("departure")
 	}
+	prev := *d
 	if in.Code != nil {
 		d.Code = strings.TrimSpace(*in.Code)
 	}
@@ -302,8 +305,15 @@ func (s *Service) UpdateDeparture(ctx context.Context, in UpdateDepartureInput) 
 		d.AllowOversell = *in.AllowOversell
 	}
 	d.UpdatedAt = time.Now().UTC()
+	action := "departure.updated"
+	if capacityChanged(&prev, d) {
+		action = "departure.capacity_changed"
+	}
 	if err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		return s.repo.UpdateDeparture(ctx, d)
+		if err := s.repo.UpdateDeparture(ctx, d); err != nil {
+			return err
+		}
+		return s.recordDeparture(ctx, action, d, departureSnapshot(&prev), departureSnapshot(d))
 	}); err != nil {
 		return nil, err
 	}
@@ -360,10 +370,18 @@ func (s *Service) CloseSales(ctx context.Context, departureID uuid.UUID, closed 
 	if err != nil {
 		return nil, shared.NewNotFound("departure")
 	}
+	before := map[string]any{"sales_closed": d.SalesClosed}
 	d.SalesClosed = closed
 	d.UpdatedAt = time.Now().UTC()
+	action := "departure.sales_reopened"
+	if closed {
+		action = "departure.sales_closed"
+	}
 	if err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		return s.repo.UpdateDeparture(ctx, d)
+		if err := s.repo.UpdateDeparture(ctx, d); err != nil {
+			return err
+		}
+		return s.recordDeparture(ctx, action, d, before, map[string]any{"sales_closed": d.SalesClosed})
 	}); err != nil {
 		return nil, err
 	}
@@ -375,10 +393,15 @@ func (s *Service) MarkFull(ctx context.Context, departureID uuid.UUID) (*domain.
 	if err != nil {
 		return nil, shared.NewNotFound("departure")
 	}
+	before := map[string]any{"sales_closed": d.SalesClosed}
 	d.SalesClosed = true
 	d.UpdatedAt = time.Now().UTC()
 	if err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		return s.repo.UpdateDeparture(ctx, d)
+		if err := s.repo.UpdateDeparture(ctx, d); err != nil {
+			return err
+		}
+		return s.recordDeparture(ctx, "departure.marked_full", d, before,
+			map[string]any{"sales_closed": true, "capacity_total": d.CapacityTotal, "capacity_sold": d.CapacitySold})
 	}); err != nil {
 		return nil, err
 	}
@@ -390,11 +413,27 @@ func (s *Service) RecomputeCapacity(ctx context.Context, departureID uuid.UUID) 
 	if s.bookings == nil {
 		return nil, shared.NewValidation("booking reader not configured")
 	}
-	sold, err := s.bookings.CountConfirmedPaxByDeparture(ctx, departureID)
+	d, err := s.GetDeparture(ctx, departureID)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.repo.UpdateDepartureCapacitySold(ctx, departureID, sold); err != nil {
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		sold, err := s.bookings.CountConfirmedPaxByDeparture(ctx, departureID)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.UpdateDepartureCapacitySold(ctx, departureID, sold); err != nil {
+			return err
+		}
+		if sold == d.CapacitySold {
+			return nil
+		}
+		before := map[string]any{"capacity_sold": d.CapacitySold}
+		d.CapacitySold = sold
+		return s.recordDeparture(ctx, "departure.capacity_recomputed", d, before,
+			map[string]any{"capacity_sold": sold, "capacity_total": d.CapacityTotal})
+	})
+	if err != nil {
 		return nil, err
 	}
 	return s.GetDeparture(ctx, departureID)

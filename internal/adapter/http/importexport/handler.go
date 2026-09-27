@@ -15,6 +15,7 @@ import (
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/importexport"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/importexport"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
 
 type Handler struct {
@@ -325,7 +326,7 @@ func (h Handler) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h Handler) Export(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.ClaimsFrom(r.Context())
+	claims, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
@@ -349,6 +350,7 @@ func (h Handler) Export(w http.ResponseWriter, r *http.Request) {
 	}
 	csv, filename, err := h.Svc.ExportCSV(r.Context(), appsvc.ExportInput{
 		BranchID: branchID, EntityType: domain.EntityType(body.EntityType),
+		RevealPII: platformauth.HasPermission(claims.Role, platformauth.PermPIIRead),
 	})
 	if err != nil {
 		response.Error(w, err)

@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/rooming"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -17,10 +18,11 @@ import (
 
 type Repository struct {
 	pool *pgxpool.Pool
+	pii  *pgpii.Passports
 }
 
-func NewRepository(pool *pgxpool.Pool) *Repository {
-	return &Repository{pool: pool}
+func NewRepository(pool *pgxpool.Pool, pii *pgpii.Passports) *Repository {
+	return &Repository{pool: pool, pii: pii}
 }
 
 var (
@@ -210,7 +212,7 @@ func (r *Repository) ListAssignments(ctx context.Context, departureID uuid.UUID)
 	}
 	rows, err := q.Query(ctx, `
 		SELECT a.id, a.room_id, a.participant_id, a.booking_id, a.assigned_at, a.assigned_by,
-			COALESCE(p.full_name,''), COALESCE(p.passport_no,'')
+			COALESCE(p.full_name,''), COALESCE(p.passport_no,''), p.passport_enc
 		FROM room_assignments a
 		JOIN departure_rooms r ON r.id = a.room_id
 		JOIN booking_participants p ON p.id = a.participant_id
@@ -224,10 +226,14 @@ func (r *Repository) ListAssignments(ctx context.Context, departureID uuid.UUID)
 	var out []domain.Assignment
 	for rows.Next() {
 		var a domain.Assignment
+		var legacy, enc string
 		if err := rows.Scan(
 			&a.ID, &a.RoomID, &a.ParticipantID, &a.BookingID, &a.AssignedAt, &a.AssignedBy,
-			&a.ParticipantName, &a.PassportNo,
+			&a.ParticipantName, &legacy, &enc,
 		); err != nil {
+			return nil, err
+		}
+		if a.PassportNo, err = r.pii.Open(pgpii.BookingParticipants, a.ParticipantID, enc, legacy); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -242,7 +248,7 @@ func (r *Repository) GroupList(ctx context.Context, departureID uuid.UUID) ([]do
 		return nil, err
 	}
 	rows, err := q.Query(ctx, `
-		SELECT p.id, b.id, p.full_name, COALESCE(p.passport_no,''), COALESCE(p.nationality,''),
+		SELECT p.id, b.id, p.full_name, COALESCE(p.passport_no,''), p.passport_enc, COALESCE(p.nationality,''),
 			a.room_id, COALESCE(r.label,''), (a.room_id IS NULL) AS unassigned
 		FROM booking_participants p
 		JOIN bookings b ON b.id = p.booking_id
@@ -257,10 +263,14 @@ func (r *Repository) GroupList(ctx context.Context, departureID uuid.UUID) ([]do
 	var out []domain.GroupListRow
 	for rows.Next() {
 		var row domain.GroupListRow
+		var legacy, enc string
 		if err := rows.Scan(
-			&row.ParticipantID, &row.BookingID, &row.FullName, &row.PassportNo, &row.Nationality,
+			&row.ParticipantID, &row.BookingID, &row.FullName, &legacy, &enc, &row.Nationality,
 			&row.RoomID, &row.RoomLabel, &row.Unassigned,
 		); err != nil {
+			return nil, err
+		}
+		if row.PassportNo, err = r.pii.Open(pgpii.BookingParticipants, row.ParticipantID, enc, legacy); err != nil {
 			return nil, err
 		}
 		out = append(out, row)

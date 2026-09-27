@@ -84,6 +84,52 @@ func minInt(a, b int) int {
 	return b
 }
 
+// PassportLast4 is the suffix stored in clear for masked display; numbers
+// too short to hide anything keep none.
+func PassportLast4(p string) string {
+	p = NormalizePassport(p)
+	if len(p) <= 4 {
+		return ""
+	}
+	return p[len(p)-4:]
+}
+
+// MaskPassportLast4 is the masked passport shown by every read API.
+func MaskPassportLast4(last4 string) string {
+	if last4 == "" {
+		return ""
+	}
+	return "••••" + last4
+}
+
+// IsMaskedPassport reports whether p is a masked display value (e.g. from a
+// masked export) rather than a real passport number.
+func IsMaskedPassport(p string) bool {
+	return strings.Contains(p, "•")
+}
+
+// PassportUpdate resolves an optional passport field of an update request.
+// ok is false when the stored value must be kept: the field was omitted or
+// the client echoed back the masked display value.
+func PassportUpdate(p *string) (value string, ok bool) {
+	if p == nil || IsMaskedPassport(*p) {
+		return "", false
+	}
+	return NormalizePassport(*p), true
+}
+
+// MaskedPassport masks a full passport number for display; masking an
+// already masked value is a no-op.
+func MaskedPassport(p string) string {
+	if strings.TrimSpace(p) == "" {
+		return ""
+	}
+	if last4 := PassportLast4(p); last4 != "" {
+		return MaskPassportLast4(last4)
+	}
+	return "••••"
+}
+
 // MaskPassport redacts middle characters for list responses (PII minimize).
 func MaskPassport(p string) string {
 	p = strings.TrimSpace(p)

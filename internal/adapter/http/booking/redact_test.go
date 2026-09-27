@@ -11,14 +11,13 @@ func TestFieldAccessForRole(t *testing.T) {
 	cases := []struct {
 		role       platformauth.Role
 		financials bool
-		pii        bool
 	}{
-		{platformauth.RoleGM, true, true},
-		{platformauth.RoleEmployee, false, false},
+		{platformauth.RoleGM, true},
+		{platformauth.RoleEmployee, false},
 	}
 	for _, tc := range cases {
 		fa := fieldAccessForRole(tc.role)
-		if fa.financials != tc.financials || fa.pii != tc.pii {
+		if fa.financials != tc.financials {
 			t.Fatalf("%s: got %+v", tc.role, fa)
 		}
 	}
@@ -61,12 +60,13 @@ func TestMapLineRedactsCost(t *testing.T) {
 	}
 }
 
-func TestMapParticipantMasksPassport(t *testing.T) {
+func TestMapParticipantAlwaysMasksPassport(t *testing.T) {
 	p := &domain.Participant{PassportNo: "A12345678"}
-	if got := mapParticipant(p, fieldAccess{})["passport_no"]; got != "A1*****78" {
+	m := mapParticipant(p)
+	if got := m["passport_no"]; got != "••••5678" {
 		t.Fatalf("masked passport = %v", got)
 	}
-	if got := mapParticipant(p, fieldAccess{pii: true})["passport_no"]; got != "A12345678" {
-		t.Fatalf("full passport = %v", got)
+	if got := m["passport_last4"]; got != "5678" {
+		t.Fatalf("passport_last4 = %v", got)
 	}
 }
