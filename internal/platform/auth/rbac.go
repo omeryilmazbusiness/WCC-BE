@@ -17,9 +17,12 @@ const (
 	PermLeadsWrite          Permission = "leads.write"
 	PermBookingsRead        Permission = "bookings.read"
 	PermBookingsWrite       Permission = "bookings.write"
+	PermBookingsOverride    Permission = "bookings.override"
+	PermBookingsDiscount    Permission = "bookings.discount"
 	PermPaymentsWrite       Permission = "payments.write"
 	PermPaymentsRead        Permission = "payments.read"
 	PermPaymentsApprove     Permission = "payments.approve"
+	PermFXManage            Permission = "fx.manage"
 	PermDocsRead            Permission = "documents.read"
 	PermDocsWrite           Permission = "documents.write"
 	PermDocsReview          Permission = "documents.review"
@@ -99,6 +102,8 @@ func PermissionsFor(role Role) []Permission {
 			PermFileSyncRead, PermFileSyncWrite,
 			PermSettingsRead, PermSettingsWrite,
 			PermPrivacyManage,
+			PermFXManage,
+			PermBookingsOverride, PermBookingsDiscount,
 		}
 	case RoleAdmin:
 		return []Permission{
@@ -126,6 +131,7 @@ func PermissionsFor(role Role) []Permission {
 			PermAIRead, PermAIWrite, PermAISetup,
 			PermFileSyncRead, PermFileSyncWrite,
 			PermSettingsRead, PermSettingsWrite,
+			PermBookingsOverride, PermBookingsDiscount,
 		}
 	case RoleEmployee:
 		return []Permission{
@@ -148,6 +154,7 @@ func PermissionsFor(role Role) []Permission {
 			PermAIRead,
 			PermFileSyncRead,
 			PermSettingsRead,
+			PermFXManage,
 		}
 	case RoleOperations:
 		return []Permission{

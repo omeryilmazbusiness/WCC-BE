@@ -560,6 +560,20 @@ func (s *Seeder) EnsurePaymentDueTask(ctx context.Context, branchID, bookingID, 
 	})
 }
 
+// EnsureHoldExpiredTask asks the booking owner to follow up on a lapsed
+// option hold (T-269); one task per hold expiry.
+func (s *Seeder) EnsureHoldExpiredTask(ctx context.Context, branchID, bookingID, ownerID uuid.UUID, expiredAt time.Time) error {
+	now := time.Now().UTC()
+	due := now.Add(24 * time.Hour)
+	return s.ensureTask(ctx, domain.Task{
+		ID: uuid.New(), BranchID: branchID, Title: "Option hold expired: follow up with customer",
+		Kind: domain.KindFollowUp, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+		AssigneeID: ownerID, RelatedType: "booking", RelatedID: bookingID, DueAt: &due,
+		IdempotencyKey: fmt.Sprintf("booking:%s:hold-expired:%s", bookingID, expiredAt.UTC().Format(time.RFC3339)),
+		CreatedAt:      now, UpdatedAt: now,
+	})
+}
+
 // EnsureTargetRecoveryTask creates a once-per-day recovery task when a target is behind pace.
 func (s *Seeder) EnsureTargetRecoveryTask(ctx context.Context, branchID, targetID, assigneeID uuid.UUID, label string, deficit int64) error {
 	now := time.Now().UTC()

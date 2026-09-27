@@ -2,7 +2,8 @@ package payment
 
 import (
 	"context"
-	"fmt"
+	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
@@ -26,7 +28,11 @@ type RecordInput struct {
 	Note           string
 	RecordedBy     uuid.UUID
 	IdempotencyKey string
-	AutoVerify     bool // managers may auto-verify
+	AutoVerify     bool
+	// MayApprove is true when the caller holds payments.approve.
+	MayApprove bool
+	// ReceivedAt is the calendar date the money arrived (today when nil).
+	ReceivedAt *time.Time
 }
 
 type ReverseInput struct {
@@ -68,31 +74,51 @@ type PaymentDueTaskCreator interface {
 	EnsurePaymentDueTask(ctx context.Context, branchID, bookingID, actorID uuid.UUID, dueAt time.Time, amount int64, currency string) error
 }
 
+// PromiseSummarizer aggregates a booking's open payment promises.
+type PromiseSummarizer interface {
+	Summary(ctx context.Context, bookingID uuid.UUID) (domain.PromiseSummary, error)
+}
+
+// FinanceDeps are the Epic 21 collaborators. Without a Converter no
+// reporting snapshot is taken (every entry is fx_missing).
+type FinanceDeps struct {
+	Converter fx.Converter
+	Bookings  domain.BookingFinance
+	Promises  PromiseSummarizer
+	Clock     Clock
+	Log       *slog.Logger
+}
+
 type Service struct {
 	payments domain.Repository
 	bookings bookingdomain.Repository
-	tx       *tx.Manager
+	tx       tx.Runner
 	bus      *events.Bus
 	audit    audit.Recorder
-	fx       domain.ReportingCurrencyPolicy
 	tasks    PaymentDueTaskCreator
+	fin      FinanceDeps
 }
 
 func NewService(
 	payments domain.Repository,
 	bookings bookingdomain.Repository,
-	txm *tx.Manager,
+	txm tx.Runner,
 	bus *events.Bus,
 ) *Service {
 	return &Service{
 		payments: payments, bookings: bookings, tx: txm, bus: bus,
-		fx: domain.IdentityFX{DefaultCurrency: "SAR"},
+		fin: FinanceDeps{Log: slog.Default()},
 	}
 }
 
 func (s *Service) SetAuditor(a audit.Recorder)            { s.audit = a }
-func (s *Service) SetFX(p domain.ReportingCurrencyPolicy) { s.fx = p }
 func (s *Service) SetTaskCreator(t PaymentDueTaskCreator) { s.tasks = t }
+func (s *Service) SetFinance(d FinanceDeps) {
+	if d.Log == nil {
+		d.Log = slog.Default()
+	}
+	s.fin = d
+}
 
 func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, error) {
 	if in.Amount <= 0 {
@@ -104,12 +130,25 @@ func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, 
 	if in.BookingID == uuid.Nil {
 		return nil, shared.NewValidation("booking_id is required")
 	}
+	status, err := domain.InitialChargeStatus(in.AutoVerify, in.MayApprove)
+	if err != nil {
+		return nil, err
+	}
+	receivedAt, err := domain.ResolveReceivedAt(in.ReceivedAt, s.fin.Clock.Today())
+	if err != nil {
+		return nil, err
+	}
+	if in.Currency != "" {
+		if in.Currency, err = fx.NormalizeCurrency(in.Currency); err != nil {
+			return nil, err
+		}
+	}
 	if existing, err := s.payments.FindByIdempotencyKey(ctx, in.IdempotencyKey); err == nil && existing != nil {
 		return existing, nil
 	}
 
 	var out *domain.Payment
-	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		if existing, err := s.payments.FindByIdempotencyKey(ctx, in.IdempotencyKey); err == nil && existing != nil {
 			out = existing
 			return nil
@@ -125,15 +164,14 @@ func (s *Service) Record(ctx context.Context, in RecordInput) (*domain.Payment, 
 		if currency == "" {
 			currency = b.Currency
 		}
-		status := domain.StatusUnverified
-		if in.AutoVerify {
-			status = domain.StatusVerified
-		}
 		p := &domain.Payment{
 			ID: uuid.New(), BookingID: in.BookingID, Amount: in.Amount, Currency: currency,
 			Method: in.Method, Reference: in.Reference, RecordedBy: in.RecordedBy,
 			IdempotencyKey: in.IdempotencyKey, EventType: domain.EventCharge, Status: status,
-			Note: in.Note, CreatedAt: time.Now().UTC(),
+			Note: in.Note, ReceivedAt: receivedAt, CreatedAt: time.Now().UTC(),
+		}
+		if p.Reporting, err = s.reportingSnapshot(ctx, b.BranchID, p.Amount, p.Currency, receivedAt); err != nil {
+			return err
 		}
 		if err := s.payments.Insert(ctx, p); err != nil {
 			return err
@@ -218,7 +256,7 @@ func (s *Service) Reverse(ctx context.Context, in ReverseInput) (*domain.Payment
 			Method: orig.Method, Reference: orig.Reference, RecordedBy: in.ActorID,
 			IdempotencyKey: in.IdempotencyKey, EventType: domain.EventReverse,
 			ReversesPaymentID: &revID, Status: domain.StatusVerified, Note: in.Note,
-			CreatedAt: time.Now().UTC(),
+			ReceivedAt: s.fin.Clock.Today(), Reporting: negated(orig.Reporting), CreatedAt: time.Now().UTC(),
 		}
 		if err := s.payments.Insert(ctx, p); err != nil {
 			return err
@@ -268,11 +306,15 @@ func (s *Service) Adjust(ctx context.Context, in AdjustInput) (*domain.Payment, 
 		if cur == "" {
 			cur = b.Currency
 		}
+		today := s.fin.Clock.Today()
 		p := &domain.Payment{
 			ID: uuid.New(), BookingID: in.BookingID, Amount: in.Amount, Currency: cur,
 			RecordedBy: in.ActorID, IdempotencyKey: in.IdempotencyKey,
 			EventType: domain.EventAdjust, Status: domain.StatusVerified, Note: in.Note,
-			CreatedAt: time.Now().UTC(),
+			ReceivedAt: today, CreatedAt: time.Now().UTC(),
+		}
+		if p.Reporting, err = s.reportingSnapshot(ctx, b.BranchID, p.Amount, p.Currency, today); err != nil {
+			return err
 		}
 		if err := s.payments.Insert(ctx, p); err != nil {
 			return err
@@ -317,11 +359,15 @@ func (s *Service) RequestRefund(ctx context.Context, in RefundInput) (*domain.Pa
 		if cur == "" {
 			cur = b.Currency
 		}
+		today := s.fin.Clock.Today()
 		p := &domain.Payment{
 			ID: uuid.New(), BookingID: in.BookingID, Amount: -in.Amount, Currency: cur,
 			RecordedBy: in.ActorID, IdempotencyKey: in.IdempotencyKey,
 			EventType: domain.EventRefund, Status: domain.StatusPendingApproval, Note: in.Note,
-			CreatedAt: time.Now().UTC(),
+			ReceivedAt: today, CreatedAt: time.Now().UTC(),
+		}
+		if p.Reporting, err = s.reportingSnapshot(ctx, b.BranchID, p.Amount, p.Currency, today); err != nil {
+			return err
 		}
 		if err := s.payments.Insert(ctx, p); err != nil {
 			return err
@@ -338,6 +384,8 @@ func (s *Service) RequestRefund(ctx context.Context, in RefundInput) (*domain.Pa
 	return out, nil
 }
 
+// ApproveRefund approves or rejects a pending refund. Approval is subject to
+// segregation of duties; the requester may still reject (withdraw) it.
 func (s *Service) ApproveRefund(ctx context.Context, paymentID, actorID uuid.UUID, approve bool) (*domain.Payment, error) {
 	var out *domain.Payment
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
@@ -347,6 +395,11 @@ func (s *Service) ApproveRefund(ctx context.Context, paymentID, actorID uuid.UUI
 		}
 		if p.EventType != domain.EventRefund || p.Status != domain.StatusPendingApproval {
 			return shared.NewInvalidState("not a pending refund")
+		}
+		if approve {
+			if err := domain.CheckRefundApprover(p, actorID); err != nil {
+				return err
+			}
 		}
 		before := paymentSnapshot(p)
 		now := time.Now().UTC()
@@ -401,41 +454,110 @@ func (s *Service) FinancialSummary(ctx context.Context, bookingID uuid.UUID) (*d
 	if err != nil {
 		return nil, err
 	}
-	unverified, _ := s.payments.SumByBookingStatus(ctx, bookingID, domain.StatusUnverified)
-	pending, _ := s.payments.SumByBookingStatus(ctx, bookingID, domain.StatusPendingApproval)
-	schedules, _ := s.payments.ListSchedules(ctx, bookingID)
-	var openSched int64
-	for _, sc := range schedules {
-		if sc.Status == domain.ScheduleOpen || sc.Status == domain.ScheduleOverdue {
-			openSched += sc.Amount
+	pending, err := s.payments.SumByBookingStatus(ctx, bookingID, domain.StatusUnverified)
+	if err != nil {
+		return nil, err
+	}
+	var comp domain.Components
+	if s.fin.Bookings != nil {
+		if comp, err = s.fin.Bookings.Components(ctx, bookingID); err != nil {
+			return nil, err
 		}
 	}
-	balance := b.TotalAmount - collected
-	credit := int64(0)
-	if balance < 0 {
-		credit = -balance
-		balance = 0
+	sum := &domain.FinancialSummary{
+		BookingID: bookingID, Currency: b.Currency,
+		Subtotal: comp.Subtotal(b.TotalAmount, b.DiscountAmt), Discount: b.DiscountAmt,
+		Tax: comp.Tax, Fees: comp.Fees, Total: b.TotalAmount,
+		Cost: b.CostAmt, Margin: b.Margin(),
+		Collected: collected, Pending: pending, Balance: b.TotalAmount - collected,
 	}
-	recognized := int64(0)
-	if b.Status == bookingdomain.StatusConfirmed || b.Status == bookingdomain.StatusCompleted {
-		recognized = collected
-		if recognized < 0 {
-			recognized = 0
+	if sum.Reporting, err = s.reportingSummary(ctx, b, collected); err != nil {
+		return nil, err
+	}
+	if s.fin.Promises != nil {
+		if sum.Promises, err = s.fin.Promises.Summary(ctx, bookingID); err != nil {
+			return nil, err
 		}
 	}
-	repCur, _ := s.fx.ReportingCurrency(ctx, b.BranchID)
-	bookedR, _, _ := s.fx.Convert(ctx, b.BranchID, b.TotalAmount, b.Currency)
-	collR, _, _ := s.fx.Convert(ctx, b.BranchID, collected, b.Currency)
-	recR, _, _ := s.fx.Convert(ctx, b.BranchID, recognized, b.Currency)
-	marR, _, _ := s.fx.Convert(ctx, b.BranchID, b.Margin(), b.Currency)
-	balR, _, _ := s.fx.Convert(ctx, b.BranchID, balance, b.Currency)
-	credR, _, _ := s.fx.Convert(ctx, b.BranchID, credit, b.Currency)
-	return &domain.FinancialSummary{
-		BookingID: bookingID, Currency: b.Currency, ReportingCurrency: repCur,
-		Booked: bookedR, Collected: collR, Recognized: recR, Margin: marR,
-		Balance: balR, Credit: credR, UnverifiedAmt: unverified, PendingRefundAmt: pending,
-		ScheduleOpenAmt: openSched,
+	return sum, nil
+}
+
+// reportingSummary uses the confirmation snapshot rate when the booking has
+// one, otherwise today's rate; nil when no rate exists.
+func (s *Service) reportingSummary(ctx context.Context, b *bookingdomain.Booking, collected int64) (*domain.ReportingSummary, error) {
+	var snap *domain.ReportingSnapshot
+	var err error
+	if s.fin.Bookings != nil {
+		if snap, err = s.fin.Bookings.ReportingSnapshot(ctx, b.ID); err != nil {
+			return nil, err
+		}
+	}
+	if snap == nil {
+		if snap, err = s.reportingSnapshot(ctx, b.BranchID, b.TotalAmount, b.Currency, s.fin.Clock.Today()); err != nil || snap == nil {
+			return nil, err
+		}
+	}
+	total, errT := fx.Apply(b.TotalAmount, snap.RateScaled)
+	coll, errC := fx.Apply(collected, snap.RateScaled)
+	if errT != nil || errC != nil {
+		return nil, nil
+	}
+	return &domain.ReportingSummary{
+		Currency: snap.Currency, Total: total, Collected: coll, Balance: total - coll,
+		RateScaled: snap.RateScaled, EffectiveDate: snap.EffectiveDate,
 	}, nil
+}
+
+// reportingSnapshot converts amount into the branch reporting currency as of
+// on. A missing rate (or an amount/currency the converter rejects) yields nil
+// so cash collection is never blocked; storage errors propagate.
+func (s *Service) reportingSnapshot(ctx context.Context, branchID uuid.UUID, amount int64, currency string, on time.Time) (*domain.ReportingSnapshot, error) {
+	if s.fin.Converter == nil {
+		return nil, nil
+	}
+	rep, err := s.payments.GetFinanceSettings(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	c, err := s.fin.Converter.Convert(ctx, amount, currency, rep, on)
+	switch {
+	case errors.Is(err, fx.ErrRateNotFound), errors.Is(err, fx.ErrOverflow), errors.Is(err, shared.ErrValidation):
+		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	return domain.NewReportingSnapshot(c.Rate.Quote, c), nil
+}
+
+// RegisterReactors subscribes the booking reporting snapshot to confirmations.
+func (s *Service) RegisterReactors(bus *events.Bus) {
+	bus.Subscribe(events.BookingConfirmed, s.onBookingConfirmed)
+}
+
+func (s *Service) onBookingConfirmed(ctx context.Context, ev events.Event) error {
+	b, ok := ev.Payload.(*bookingdomain.Booking)
+	if !ok || b == nil {
+		return nil
+	}
+	return s.SnapshotBookingFX(ctx, b)
+}
+
+// SnapshotBookingFX freezes the booking total in reporting currency at
+// today's rate. Without a rate nothing is stored and the financial summary
+// falls back to the live rate.
+func (s *Service) SnapshotBookingFX(ctx context.Context, b *bookingdomain.Booking) error {
+	if s.fin.Bookings == nil {
+		return nil
+	}
+	snap, err := s.reportingSnapshot(ctx, b.BranchID, b.TotalAmount, b.Currency, s.fin.Clock.Today())
+	if err != nil {
+		return err
+	}
+	if snap == nil {
+		s.fin.Log.WarnContext(ctx, "booking confirmed without fx rate", "booking_id", b.ID, "currency", b.Currency)
+		return nil
+	}
+	return s.fin.Bookings.SetReportingSnapshot(ctx, b.ID, *snap)
 }
 
 func (s *Service) UpsertSchedule(ctx context.Context, in ScheduleInput) (*domain.Schedule, error) {
@@ -503,24 +625,60 @@ func (s *Service) CancelSchedule(ctx context.Context, id, actorID uuid.UUID) (*d
 	return sc, nil
 }
 
+// MarkOverdueSchedules flips open schedules past due_at to overdue in
+// batches (T-277). Each batch and its audit rows commit together; rerunning
+// is a no-op once nothing is left.
+func (s *Service) MarkOverdueSchedules(ctx context.Context, batch int) (int, error) {
+	if batch <= 0 {
+		batch = 200
+	}
+	total := 0
+	for {
+		var marked []domain.Schedule
+		err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+			var err error
+			if marked, err = s.payments.MarkSchedulesOverdue(ctx, time.Now().UTC(), batch); err != nil {
+				return err
+			}
+			for i := range marked {
+				sc := &marked[i]
+				before := scheduleSnapshot(sc)
+				before["status"] = domain.ScheduleOpen
+				if err := s.record(ctx, uuid.Nil, "payment.schedule_overdue", "payment_schedule", sc.ID, sc.BranchID,
+					before, scheduleSnapshot(sc), nil); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return total, err
+		}
+		total += len(marked)
+		if len(marked) < batch {
+			return total, nil
+		}
+	}
+}
+
 // FinanceQueue lists queue items visible to the caller; requested nil means
-// all branches for global callers and the caller's branch otherwise.
+// all branches for global callers and the caller's branch otherwise. It never
+// writes: overdue status is maintained by MarkOverdueSchedules.
 func (s *Service) FinanceQueue(ctx context.Context, requested *uuid.UUID, kind domain.QueueKind, limit int) ([]domain.QueueItem, error) {
-	scope, err := access.Require(ctx)
+	branchID, err := resolveBranch(ctx, requested)
 	if err != nil {
 		return nil, err
 	}
-	branchID, err := scope.ResolveBranch(requested)
-	if err != nil {
-		return nil, err
-	}
+	return s.queue(ctx, branchID, kind, limit)
+}
+
+func (s *Service) queue(ctx context.Context, branchID *uuid.UUID, kind domain.QueueKind, limit int) ([]domain.QueueItem, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	now := time.Now().UTC()
 	switch kind {
 	case domain.QueueOverdue:
-		items, err := s.payments.ListOverdueSchedules(ctx, branchID, now, limit)
+		items, err := s.payments.ListOverdueSchedules(ctx, branchID, time.Now().UTC(), limit)
 		if err != nil {
 			return nil, err
 		}
@@ -529,10 +687,6 @@ func (s *Service) FinanceQueue(ctx context.Context, requested *uuid.UUID, kind d
 			sc := items[i]
 			id := sc.ID
 			due := sc.DueAt
-			if sc.Status == domain.ScheduleOpen {
-				_ = s.payments.UpdateScheduleStatus(ctx, sc.ID, domain.ScheduleOverdue)
-				sc.Status = domain.ScheduleOverdue
-			}
 			out = append(out, domain.QueueItem{
 				Kind: domain.QueueOverdue, BookingID: sc.BookingID, ScheduleID: &id,
 				Amount: sc.Amount, Currency: sc.Currency, DueAt: &due, Status: string(sc.Status),
@@ -560,23 +714,34 @@ func (s *Service) FinanceQueue(ctx context.Context, requested *uuid.UUID, kind d
 	}
 }
 
-func (s *Service) ExportQueueCSV(ctx context.Context, requested *uuid.UUID, kind domain.QueueKind) (string, error) {
-	items, err := s.FinanceQueue(ctx, requested, kind, 500)
+// ExportQueueCSV builds the queue CSV and audits the export (fail closed)
+// before any byte is returned to the caller.
+func (s *Service) ExportQueueCSV(ctx context.Context, requested *uuid.UUID, kind domain.QueueKind) ([]byte, error) {
+	branchID, err := resolveBranch(ctx, requested)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	var b strings.Builder
-	b.WriteString("kind,booking_id,booking_ref,customer_name,amount,currency,status,due_at,note\n")
-	for _, it := range items {
-		due := ""
-		if it.DueAt != nil {
-			due = it.DueAt.UTC().Format(time.RFC3339)
+	items, err := s.queue(ctx, branchID, kind, 500)
+	if err != nil {
+		return nil, err
+	}
+	out, err := domain.BuildQueueCSV(items)
+	if err != nil {
+		return nil, err
+	}
+	filters := map[string]any{"kind": kind}
+	if branchID != nil {
+		filters["branch_id"] = *branchID
+	}
+	if s.audit != nil {
+		if err := s.audit.Record(ctx, audit.RecordInput{
+			Action: "finance.exported", EntityType: "finance_export", BranchID: branchID,
+			Extra: map[string]any{"filters": filters, "rows": len(items), "format": "csv"},
+		}); err != nil {
+			return nil, err
 		}
-		b.WriteString(fmt.Sprintf("%s,%s,%s,%s,%d,%s,%s,%s,%s\n",
-			it.Kind, it.BookingID, csvEscape(it.BookingRef), csvEscape(it.CustomerName),
-			it.Amount, it.Currency, it.Status, due, csvEscape(it.Note)))
 	}
-	return b.String(), nil
+	return out, nil
 }
 
 // ProcessPaymentDueReminders marks due schedules and creates tasks (T-123).
@@ -607,9 +772,9 @@ func (s *Service) ProcessPaymentDueReminders(ctx context.Context, within time.Du
 // SetReportingCurrency updates branchID's setting (the caller's branch when
 // zero); only global callers may target another branch.
 func (s *Service) SetReportingCurrency(ctx context.Context, branchID uuid.UUID, currency string, actorID uuid.UUID) error {
-	currency = strings.ToUpper(strings.TrimSpace(currency))
-	if len(currency) != 3 {
-		return shared.NewValidation("currency must be ISO-4217 (3 letters)")
+	currency, err := fx.NormalizeCurrency(currency)
+	if err != nil {
+		return err
 	}
 	scope, err := access.Require(ctx)
 	if err != nil {
@@ -642,6 +807,23 @@ func (s *Service) recomputeBooking(ctx context.Context, b *bookingdomain.Booking
 	return s.bookings.Update(ctx, b)
 }
 
+func resolveBranch(ctx context.Context, requested *uuid.UUID) (*uuid.UUID, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return scope.ResolveBranch(requested)
+}
+
+func negated(s *domain.ReportingSnapshot) *domain.ReportingSnapshot {
+	if s == nil {
+		return nil
+	}
+	n := *s
+	n.Amount = -n.Amount
+	return &n
+}
+
 func mapPaymentsQueue(kind domain.QueueKind, ps []domain.Payment) []domain.QueueItem {
 	out := make([]domain.QueueItem, 0, len(ps))
 	for i := range ps {
@@ -660,13 +842,6 @@ func shortID(id uuid.UUID) string {
 	s := id.String()
 	if len(s) >= 8 {
 		return s[:8]
-	}
-	return s
-}
-
-func csvEscape(s string) string {
-	if strings.ContainsAny(s, ",\"\n") {
-		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 	}
 	return s
 }

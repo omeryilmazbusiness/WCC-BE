@@ -213,7 +213,7 @@ func (r *Repository) ReadinessRows(ctx context.Context, f domain.Filter) ([]doma
 		FROM bookings b
 		LEFT JOIN customers c ON c.id = b.customer_id
 		WHERE b.branch_id=$1
-		  AND b.status IN ('draft','confirmed')
+		  AND b.status IN ('draft','quoted','option_hold','confirmed','partially_paid','ready')
 		  AND ($2::uuid IS NULL OR b.departure_id=$2)
 		  AND b.created_at >= $3 AND b.created_at < $4`+owned.and("b.owner_id")+`
 		ORDER BY b.balance_amt DESC, b.updated_at DESC
@@ -356,7 +356,7 @@ func (r *Repository) FinanceRows(ctx context.Context, f domain.Filter) ([]domain
 			COALESCE(SUM(total_amount),0),
 			COALESCE(SUM(collected_amt),0),
 			COALESCE(SUM(balance_amt),0),
-			COUNT(*) FILTER (WHERE balance_amt > 0 AND status='confirmed')
+			COUNT(*) FILTER (WHERE balance_amt > 0 AND status IN ('confirmed','partially_paid','ready','travelled'))
 		FROM bookings
 		WHERE branch_id=$1 AND created_at >= $2 AND created_at < $3`+owned.and("owner_id")+`
 		GROUP BY COALESCE(currency,'SAR')
@@ -413,7 +413,7 @@ func (r *Repository) FinanceRows(ctx context.Context, f domain.Filter) ([]domain
 		SELECT b.id::text, COALESCE(c.full_name, b.id::text), b.balance_amt, b.currency
 		FROM bookings b
 		LEFT JOIN customers c ON c.id=b.customer_id
-		WHERE b.branch_id=$1 AND b.status='confirmed' AND b.balance_amt > 0
+		WHERE b.branch_id=$1 AND b.status IN ('confirmed','partially_paid','ready','travelled') AND b.balance_amt > 0
 		  AND b.created_at >= $2 AND b.created_at < $3`+owned.and("b.owner_id")+`
 		ORDER BY b.balance_amt DESC
 		LIMIT 25`, args...)

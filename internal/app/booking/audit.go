@@ -33,7 +33,7 @@ func (s *Service) recordParticipant(ctx context.Context, action string, b *domai
 func bookingSnapshot(b *domain.Booking) map[string]any {
 	return map[string]any{
 		"status": b.Status, "pax_count": b.PaxCount, "total_amount": b.TotalAmount,
-		"discount_amt": b.DiscountAmt, "cost_amt": b.CostAmt, "collected_amt": b.CollectedAmt,
+		"discount_amt": b.DiscountAmt, "tax_amt": b.TaxAmt, "fee_amt": b.FeeAmt, "cost_amt": b.CostAmt, "collected_amt": b.CollectedAmt,
 		"balance_amt": b.BalanceAmt, "currency": b.Currency, "notes": b.Notes, "owner_id": b.OwnerID,
 		"departure_id": b.DepartureID, "customer_id": b.CustomerID,
 	}
@@ -58,21 +58,43 @@ func lineItemsSnapshot(items []domain.LineItem) []map[string]any {
 	for i := range items {
 		it := items[i]
 		out = append(out, map[string]any{
-			"kind": it.Kind, "label": it.Label, "quantity": it.Quantity,
+			"kind": it.Kind, "category": it.Category, "label": it.Label, "quantity": it.Quantity,
 			"unit_price": it.UnitPrice, "unit_cost": it.UnitCost,
 		})
 	}
 	return out
 }
 
-// recordStatusChange audits a lifecycle transition; soldBefore/soldAfter < 0
-// mean departure capacity was not touched.
-func (s *Service) recordStatusChange(ctx context.Context, b *domain.Booking, from domain.Status, soldBefore, soldAfter int) error {
-	extra := map[string]any{"departure_id": b.DepartureID, "pax_count": b.PaxCount}
+func totalsSnapshot(b *domain.Booking) map[string]any {
+	return map[string]any{
+		"subtotal": b.Subtotal(), "discount_amt": b.DiscountAmt, "tax_amt": b.TaxAmt, "fee_amt": b.FeeAmt,
+		"total_amount": b.TotalAmount, "cost_amt": b.CostAmt, "balance_amt": b.BalanceAmt,
+	}
+}
+
+// recordTransition audits a lifecycle transition as booking.status_changed,
+// or booking.status_overridden with the bypassed guards. soldBefore/soldAfter
+// < 0 mean departure capacity was not touched.
+func (s *Service) recordTransition(ctx context.Context, b *domain.Booking, res domain.TransitionResult, soldBefore, soldAfter int, more map[string]any) error {
+	extra := map[string]any{"departure_id": b.DepartureID, "pax_count": b.PaxCount, "actor_kind": res.Actor}
+	for k, v := range more {
+		extra[k] = v
+	}
 	if soldBefore >= 0 || soldAfter >= 0 {
 		extra["capacity_sold_before"] = soldBefore
 		extra["capacity_sold_after"] = soldAfter
 	}
-	return s.recordBooking(ctx, "booking.status_changed", b,
-		map[string]any{"status": from}, map[string]any{"status": b.Status}, extra)
+	action := "booking.status_changed"
+	if res.Actor == domain.ActorOverride {
+		action = "booking.status_overridden"
+		bypassed := make([]string, len(res.Bypassed))
+		for i, g := range res.Bypassed {
+			bypassed[i] = string(g)
+		}
+		extra["guards_bypassed"] = bypassed
+	}
+	return s.recordBooking(ctx, action, b,
+		map[string]any{"status": res.From, "hold_expires_at": res.PrevHold},
+		map[string]any{"status": res.To, "hold_expires_at": b.HoldExpiresAt, "status_reason": b.StatusReason},
+		extra)
 }

@@ -381,14 +381,14 @@ func (r *Repository) SumActual(ctx context.Context, t *domain.Target, from, to t
 			err = q.QueryRow(ctx, `
 				SELECT COALESCE(SUM(total_amount),0) FROM bookings
 				WHERE branch_id=$1 AND owner_id=$2
-				  AND status IN ('confirmed','completed')
+				  AND status IN ('confirmed','partially_paid','ready','travelled','completed')
 				  AND created_at >= $3 AND created_at < $4`,
 				t.BranchID, ownerID, from, toExclusive).Scan(&sum)
 		} else {
 			err = q.QueryRow(ctx, `
 				SELECT COALESCE(SUM(total_amount),0) FROM bookings
 				WHERE branch_id=$1
-				  AND status IN ('confirmed','completed')
+				  AND status IN ('confirmed','partially_paid','ready','travelled','completed')
 				  AND created_at >= $2 AND created_at < $3`,
 				t.BranchID, from, toExclusive).Scan(&sum)
 		}
@@ -434,7 +434,7 @@ func (r *Repository) SumActualByOwner(ctx context.Context, t *domain.Target, fro
 				FROM bookings b
 				LEFT JOIN users u ON u.id = b.owner_id
 				WHERE b.branch_id=$1 AND b.owner_id=$2
-				  AND b.status IN ('confirmed','completed')
+				  AND b.status IN ('confirmed','partially_paid','ready','travelled','completed')
 				  AND b.created_at >= $3 AND b.created_at < $4
 				GROUP BY b.owner_id, u.full_name
 				ORDER BY SUM(b.total_amount) DESC`, t.BranchID, ownerID, from, toExclusive)
@@ -444,7 +444,7 @@ func (r *Repository) SumActualByOwner(ctx context.Context, t *domain.Target, fro
 				FROM bookings b
 				LEFT JOIN users u ON u.id = b.owner_id
 				WHERE b.branch_id=$1
-				  AND b.status IN ('confirmed','completed')
+				  AND b.status IN ('confirmed','partially_paid','ready','travelled','completed')
 				  AND b.created_at >= $2 AND b.created_at < $3
 				GROUP BY b.owner_id, u.full_name
 				ORDER BY SUM(b.total_amount) DESC`, t.BranchID, from, toExclusive)
@@ -506,7 +506,7 @@ func (r *Repository) ListSources(ctx context.Context, t *domain.Target, from, to
 			FROM bookings b
 			LEFT JOIN users u ON u.id = b.owner_id
 			WHERE b.branch_id=$1
-			  AND b.status IN ('confirmed','completed')
+			  AND b.status IN ('confirmed','partially_paid','ready','travelled','completed')
 			  AND b.created_at >= $2 AND b.created_at < $3
 			UNION ALL
 			SELECT 'payment'::text, p.id, p.booking_id, p.amount, p.currency,
@@ -530,7 +530,7 @@ func (r *Repository) ListSources(ctx context.Context, t *domain.Target, from, to
 			FROM bookings b
 			LEFT JOIN users u ON u.id = b.owner_id
 			WHERE b.branch_id=$1 AND b.owner_id=$2
-			  AND b.status IN ('confirmed','completed')
+			  AND b.status IN ('confirmed','partially_paid','ready','travelled','completed')
 			  AND b.created_at >= $3 AND b.created_at < $4
 			UNION ALL
 			SELECT 'payment'::text, p.id, p.booking_id, p.amount, p.currency,

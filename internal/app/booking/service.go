@@ -27,6 +27,8 @@ type CreateInput struct {
 	Currency    string
 	Notes       string
 	OwnerID     uuid.UUID
+	// CanDiscount is set for callers holding bookings.discount.
+	CanDiscount bool
 }
 
 type UpdateInput struct {
@@ -35,6 +37,8 @@ type UpdateInput struct {
 	Currency    string
 	DiscountAmt *int64
 	Notes       *string
+	// CanDiscount is set for callers holding bookings.discount.
+	CanDiscount bool
 }
 
 type AddParticipantInput struct {
@@ -54,6 +58,7 @@ type UpdateParticipantInput struct {
 
 type LineItemInput struct {
 	Kind      string
+	Category  string
 	Label     string
 	Quantity  int
 	UnitPrice int64
@@ -78,33 +83,58 @@ type ListInput struct {
 
 type Service struct {
 	repo       domain.Repository
+	store      domain.LifecycleStore
 	departures pkgdomain.Repository
 	tx         tx.Runner
 	bus        *events.Bus
 	audit      audit.Recorder
 	docs       DocReadiness
+	now        func() time.Time
+	loc        *time.Location
 }
 
-// DocReadiness evaluates policy-required documents for confirm gates (Epic 12).
+// DocReadiness evaluates policy-required documents for the readiness gate (Epic 12).
 type DocReadiness interface {
 	MissingRequiredKinds(ctx context.Context, bookingID uuid.UUID) ([]string, error)
 }
 
 func NewService(
 	repo domain.Repository,
+	store domain.LifecycleStore,
 	departures pkgdomain.Repository,
 	txm tx.Runner,
 	bus *events.Bus,
 ) *Service {
-	return &Service{repo: repo, departures: departures, tx: txm, bus: bus}
+	return &Service{
+		repo: repo, store: store, departures: departures, tx: txm, bus: bus,
+		now: func() time.Time { return time.Now().UTC() }, loc: time.UTC,
+	}
 }
 
 func (s *Service) SetAuditor(a audit.Recorder)    { s.audit = a }
 func (s *Service) SetDocReadiness(d DocReadiness) { s.docs = d }
 
+// SetClock replaces the time source (tests).
+func (s *Service) SetClock(now func() time.Time) { s.now = now }
+
+// SetTimeZone sets the business time zone that decides the local
+// departure date for the travelled transition.
+func (s *Service) SetTimeZone(loc *time.Location) {
+	if loc != nil {
+		s.loc = loc
+	}
+}
+
+func errDiscountForbidden() error {
+	return shared.NewForbidden("bookings.discount permission required to change discount")
+}
+
 func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Booking, error) {
 	if in.PaxCount <= 0 {
 		return nil, shared.NewValidation("pax_count must be > 0")
+	}
+	if in.DiscountAmt != 0 && !in.CanDiscount {
+		return nil, errDiscountForbidden()
 	}
 	if in.CustomerID == uuid.Nil || in.DepartureID == uuid.Nil {
 		return nil, shared.NewValidation("customer_id and departure_id are required")
@@ -134,22 +164,23 @@ func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Book
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now().UTC()
+	now := s.now()
 	b := &domain.Booking{
-		ID:          uuid.New(),
-		BranchID:    branchID,
-		CustomerID:  in.CustomerID,
-		DepartureID: in.DepartureID,
-		LeadID:      in.LeadID,
-		Status:      domain.StatusDraft,
-		PaxCount:    in.PaxCount,
-		TotalAmount: in.TotalAmount,
-		DiscountAmt: in.DiscountAmt,
-		Currency:    in.Currency,
-		Notes:       strings.TrimSpace(in.Notes),
-		OwnerID:     ownerID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:              uuid.New(),
+		BranchID:        branchID,
+		CustomerID:      in.CustomerID,
+		DepartureID:     in.DepartureID,
+		LeadID:          in.LeadID,
+		Status:          domain.StatusDraft,
+		PaxCount:        in.PaxCount,
+		TotalAmount:     in.TotalAmount,
+		DiscountAmt:     in.DiscountAmt,
+		Currency:        in.Currency,
+		Notes:           strings.TrimSpace(in.Notes),
+		OwnerID:         ownerID,
+		StatusChangedAt: now,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	b.RecomputeBalance()
 
@@ -205,7 +236,17 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*do
 		}
 		before := bookingSnapshot(b)
 		prevDiscount := b.DiscountAmt
-		if err := b.ApplyUpdate(in.PaxCount, in.TotalAmount, in.Currency, in.DiscountAmt, in.Notes); err != nil {
+		if in.DiscountAmt != nil && *in.DiscountAmt != prevDiscount && !in.CanDiscount {
+			return errDiscountForbidden()
+		}
+		lines, err := s.repo.ListLineItems(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := b.ApplyUpdate(domain.UpdateFields{
+			PaxCount: in.PaxCount, TotalAmount: in.TotalAmount, Currency: in.Currency,
+			DiscountAmt: in.DiscountAmt, Notes: in.Notes,
+		}, lines, s.now()); err != nil {
 			return err
 		}
 		if err := s.repo.Update(ctx, b); err != nil {
@@ -227,158 +268,20 @@ func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*do
 	return out, err
 }
 
-func (s *Service) Confirm(ctx context.Context, bookingID uuid.UUID) (*domain.Booking, error) {
-	ready, err := s.Readiness(ctx, bookingID)
-	if err != nil {
-		return nil, err
-	}
-	if !ready.CanConfirm {
-		msg := "booking not ready to confirm"
-		if len(ready.Blocking) > 0 {
-			msg = strings.Join(ready.Blocking, "; ")
-		}
-		return nil, shared.NewInvalidState(msg)
-	}
-
-	var out *domain.Booking
-	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		b, err := s.repo.FindByID(ctx, bookingID)
-		if err != nil {
-			return shared.NewNotFound("booking")
-		}
-		dep, err := s.departures.FindDeparture(ctx, b.DepartureID)
-		if err != nil {
-			return shared.NewNotFound("departure")
-		}
-		soldBefore, err := s.repo.CountConfirmedPaxByDeparture(ctx, b.DepartureID)
-		if err != nil {
-			return err
-		}
-		check := *dep
-		check.CapacitySold = soldBefore
-		if !check.CanSell(b.PaxCount) {
-			return shared.NewConflict("departure capacity exceeded")
-		}
-		from := b.Status
-		if err := b.TransitionTo(domain.StatusConfirmed); err != nil {
-			return err
-		}
-		if err := s.repo.Update(ctx, b); err != nil {
-			return err
-		}
-		soldAfter, err := s.repo.CountConfirmedPaxByDeparture(ctx, b.DepartureID)
-		if err != nil {
-			return err
-		}
-		if err := s.departures.UpdateDepartureCapacitySold(ctx, b.DepartureID, soldAfter); err != nil {
-			return err
-		}
-		if err := s.recordStatusChange(ctx, b, from, soldBefore, soldAfter); err != nil {
-			return err
-		}
-		out = b
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	s.bus.Publish(ctx, events.Event{Name: events.BookingConfirmed, Payload: out})
-	return out, nil
-}
-
-func (s *Service) Transition(ctx context.Context, bookingID uuid.UUID, to domain.Status) (*domain.Booking, error) {
-	switch to {
-	case domain.StatusConfirmed:
-		return s.Confirm(ctx, bookingID)
-	case domain.StatusCancelled:
-		return s.Cancel(ctx, bookingID)
-	case domain.StatusCompleted:
-		return s.complete(ctx, bookingID)
-	default:
-		return nil, shared.NewValidation("unsupported status")
-	}
-}
-
-func (s *Service) Cancel(ctx context.Context, bookingID uuid.UUID) (*domain.Booking, error) {
-	var out *domain.Booking
-	var wasConfirmed bool
-	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		b, err := s.repo.FindByID(ctx, bookingID)
-		if err != nil {
-			return shared.NewNotFound("booking")
-		}
-		wasConfirmed = b.Status == domain.StatusConfirmed
-		from := b.Status
-		if err := b.TransitionTo(domain.StatusCancelled); err != nil {
-			return err
-		}
-		if err := s.repo.Update(ctx, b); err != nil {
-			return err
-		}
-		soldBefore, soldAfter := -1, -1
-		if wasConfirmed {
-			dep, err := s.departures.FindDeparture(ctx, b.DepartureID)
-			if err == nil {
-				soldBefore = dep.CapacitySold
-			}
-			sold, err := s.repo.CountConfirmedPaxByDeparture(ctx, b.DepartureID)
-			if err != nil {
-				return err
-			}
-			if err := s.departures.UpdateDepartureCapacitySold(ctx, b.DepartureID, sold); err != nil {
-				return err
-			}
-			soldAfter = sold
-		}
-		if err := s.recordStatusChange(ctx, b, from, soldBefore, soldAfter); err != nil {
-			return err
-		}
-		out = b
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	s.bus.Publish(ctx, events.Event{Name: events.BookingCancelled, Payload: out})
-	return out, nil
-}
-
-func (s *Service) complete(ctx context.Context, bookingID uuid.UUID) (*domain.Booking, error) {
-	var out *domain.Booking
-	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		b, err := s.repo.FindByID(ctx, bookingID)
-		if err != nil {
-			return shared.NewNotFound("booking")
-		}
-		from := b.Status
-		if err := b.TransitionTo(domain.StatusCompleted); err != nil {
-			return err
-		}
-		if err := s.repo.Update(ctx, b); err != nil {
-			return err
-		}
-		if err := s.recordStatusChange(ctx, b, from, -1, -1); err != nil {
-			return err
-		}
-		out = b
-		return nil
-	})
-	return out, err
-}
-
 func (s *Service) AddParticipant(ctx context.Context, bookingID uuid.UUID, in AddParticipantInput) (*domain.Participant, error) {
 	name := strings.TrimSpace(in.FullName)
 	if name == "" {
 		return nil, shared.NewValidation("full_name is required")
 	}
 	var out *domain.Participant
+	var evs []events.Event
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		b, err := s.repo.FindByID(ctx, bookingID)
 		if err != nil {
 			return shared.NewNotFound("booking")
 		}
-		if b.Status == domain.StatusCancelled {
-			return shared.NewInvalidState("cannot add participants to cancelled booking")
+		if b.Status.Terminal() {
+			return shared.NewInvalidState("cannot add participants to a " + string(b.Status) + " booking")
 		}
 		existing, err := s.repo.ListParticipants(ctx, bookingID)
 		if err != nil {
@@ -394,7 +297,7 @@ func (s *Service) AddParticipant(ctx context.Context, bookingID uuid.UUID, in Ad
 			PassportNo:  strings.TrimSpace(in.PassportNo),
 			Nationality: strings.TrimSpace(in.Nationality),
 			DateOfBirth: in.DateOfBirth,
-			CreatedAt:   time.Now().UTC(),
+			CreatedAt:   s.now(),
 		}
 		if err := s.repo.AddParticipant(ctx, p); err != nil {
 			return err
@@ -403,9 +306,13 @@ func (s *Service) AddParticipant(ctx context.Context, bookingID uuid.UUID, in Ad
 			return err
 		}
 		out = p
-		return nil
+		return s.recomputeLocked(ctx, bookingID, &evs)
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	s.publish(ctx, evs)
+	return out, nil
 }
 
 func (s *Service) UpdateParticipant(ctx context.Context, bookingID, participantID uuid.UUID, in UpdateParticipantInput) (*domain.Participant, error) {
@@ -414,13 +321,14 @@ func (s *Service) UpdateParticipant(ctx context.Context, bookingID, participantI
 		return nil, shared.NewValidation("full_name is required")
 	}
 	var out *domain.Participant
+	var evs []events.Event
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		b, err := s.repo.FindByID(ctx, bookingID)
 		if err != nil {
 			return shared.NewNotFound("booking")
 		}
-		if b.Status == domain.StatusCancelled {
-			return shared.NewInvalidState("cannot update participants on cancelled booking")
+		if b.Status.Terminal() {
+			return shared.NewInvalidState("cannot update participants on a " + string(b.Status) + " booking")
 		}
 		parts, err := s.repo.ListParticipants(ctx, bookingID)
 		if err != nil {
@@ -450,9 +358,13 @@ func (s *Service) UpdateParticipant(ctx context.Context, bookingID, participantI
 			return err
 		}
 		out = found
-		return nil
+		return s.recomputeLocked(ctx, bookingID, &evs)
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	s.publish(ctx, evs)
+	return out, nil
 }
 
 func (s *Service) DeleteParticipant(ctx context.Context, bookingID, participantID uuid.UUID) error {
@@ -461,8 +373,8 @@ func (s *Service) DeleteParticipant(ctx context.Context, bookingID, participantI
 		if err != nil {
 			return shared.NewNotFound("booking")
 		}
-		if b.Status != domain.StatusDraft {
-			return shared.NewInvalidState("participants can only be removed from draft bookings")
+		if !b.Status.Editable() {
+			return shared.NewInvalidState("participants can only be removed from draft or quoted bookings")
 		}
 		var removed *domain.Participant
 		parts, err := s.repo.ListParticipants(ctx, bookingID)
@@ -492,12 +404,35 @@ func (s *Service) ListParticipants(ctx context.Context, bookingID uuid.UUID) ([]
 	return s.repo.ListParticipants(ctx, bookingID)
 }
 
+// normalizeLine accepts the legacy request shape where kind carried the
+// category (package, hotel, ...) and treats it as an item line.
+func normalizeLine(it LineItemInput) (kind, category string, err error) {
+	kind, category = strings.TrimSpace(it.Kind), strings.TrimSpace(it.Category)
+	if domain.ValidLineCategory(kind) && category == "" {
+		kind, category = domain.KindItem, kind
+	}
+	if kind == "" {
+		kind = domain.KindItem
+	}
+	if !domain.ValidLineKind(kind) {
+		return "", "", shared.NewValidation("invalid line kind: " + kind + " (item|tax|fee)")
+	}
+	if kind == domain.KindItem && !domain.ValidLineCategory(category) {
+		return "", "", shared.NewValidation("item lines need a category (package|hotel|room|transport|flight|extras)")
+	}
+	if kind != domain.KindItem && category != "" {
+		return "", "", shared.NewValidation(kind + " lines cannot have a category")
+	}
+	return kind, category, nil
+}
+
 func (s *Service) SetLineItems(ctx context.Context, bookingID uuid.UUID, items []LineItemInput) (*domain.Booking, []domain.LineItem, error) {
 	lines := make([]domain.LineItem, 0, len(items))
-	now := time.Now().UTC()
+	now := s.now()
 	for i, it := range items {
-		if !domain.ValidLineKind(it.Kind) {
-			return nil, nil, shared.NewValidation("invalid line kind: " + it.Kind)
+		kind, category, err := normalizeLine(it)
+		if err != nil {
+			return nil, nil, err
 		}
 		qty := it.Quantity
 		if qty <= 0 {
@@ -505,13 +440,16 @@ func (s *Service) SetLineItems(ctx context.Context, bookingID uuid.UUID, items [
 		}
 		label := strings.TrimSpace(it.Label)
 		if label == "" {
-			label = it.Kind
+			label = category
+			if label == "" {
+				label = kind
+			}
 		}
 		if it.UnitPrice < 0 || it.UnitCost < 0 {
 			return nil, nil, shared.NewValidation("unit_price and unit_cost must be >= 0")
 		}
 		lines = append(lines, domain.LineItem{
-			ID: uuid.New(), BookingID: bookingID, Kind: it.Kind, Label: label,
+			ID: uuid.New(), BookingID: bookingID, Kind: kind, Category: category, Label: label,
 			Quantity: qty, UnitPrice: it.UnitPrice, UnitCost: it.UnitCost, SortOrder: i,
 			CreatedAt: now, UpdatedAt: now,
 		})
@@ -519,30 +457,30 @@ func (s *Service) SetLineItems(ctx context.Context, bookingID uuid.UUID, items [
 
 	var out *domain.Booking
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		b, err := s.repo.FindByID(ctx, bookingID)
+		b, err := s.store.FindForUpdate(ctx, bookingID)
 		if err != nil {
-			return shared.NewNotFound("booking")
+			return err
 		}
-		if b.Status != domain.StatusDraft {
-			return shared.NewInvalidState("only draft bookings can change line items")
+		if !b.Status.Editable() {
+			return shared.NewInvalidState("only draft or quoted bookings can change line items")
 		}
 		prevLines, err := s.repo.ListLineItems(ctx, bookingID)
 		if err != nil {
 			return err
 		}
-		prevTotals := map[string]any{"total_amount": b.TotalAmount, "cost_amt": b.CostAmt, "balance_amt": b.BalanceAmt}
+		prevTotals := totalsSnapshot(b)
+		if err := b.RecalculateFromLines(lines, now); err != nil {
+			return err
+		}
 		if err := s.repo.ReplaceLineItems(ctx, bookingID, lines); err != nil {
 			return err
 		}
-		b.RecalculateFromLines(lines)
 		if err := s.repo.Update(ctx, b); err != nil {
 			return err
 		}
 		if err := s.recordBooking(ctx, "booking.line_items_changed", b,
 			map[string]any{"line_items": lineItemsSnapshot(prevLines), "totals": prevTotals},
-			map[string]any{"line_items": lineItemsSnapshot(lines), "totals": map[string]any{
-				"total_amount": b.TotalAmount, "cost_amt": b.CostAmt, "balance_amt": b.BalanceAmt,
-			}}, nil); err != nil {
+			map[string]any{"line_items": lineItemsSnapshot(lines), "totals": totalsSnapshot(b)}, nil); err != nil {
 			return err
 		}
 		out = b
@@ -583,6 +521,7 @@ func (s *Service) ListChecklist(ctx context.Context, bookingID uuid.UUID) ([]dom
 
 func (s *Service) UpdateChecklistItem(ctx context.Context, bookingID, itemID uuid.UUID, in ChecklistUpdateInput) (*domain.ChecklistItem, error) {
 	var out *domain.ChecklistItem
+	var evs []events.Event
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		if _, err := s.repo.FindByID(ctx, bookingID); err != nil {
 			return shared.NewNotFound("booking")
@@ -603,7 +542,7 @@ func (s *Service) UpdateChecklistItem(ctx context.Context, bookingID, itemID uui
 		}
 		found.Completed = in.Completed
 		if in.Completed {
-			now := time.Now().UTC()
+			now := s.now()
 			found.CompletedAt = &now
 		} else {
 			found.CompletedAt = nil
@@ -612,12 +551,52 @@ func (s *Service) UpdateChecklistItem(ctx context.Context, bookingID, itemID uui
 			return err
 		}
 		out = found
-		return nil
+		return s.recomputeLocked(ctx, bookingID, &evs)
 	})
-	return out, err
+	if err != nil {
+		return nil, err
+	}
+	s.publish(ctx, evs)
+	return out, nil
 }
 
-// Readiness evaluates confirm gates + travel risk alerts (T-064/T-065).
+// readinessFacts gathers the readiness gate inputs; errors fail closed.
+func (s *Service) readinessFacts(ctx context.Context, b *domain.Booking) (domain.ReadinessFacts, error) {
+	var f domain.ReadinessFacts
+	parts, err := s.repo.ListParticipants(ctx, b.ID)
+	if err != nil {
+		return f, err
+	}
+	f.ParticipantsMissing = len(parts) < b.PaxCount
+	checklist, err := s.repo.ListChecklist(ctx, b.ID)
+	if err != nil {
+		return f, err
+	}
+	if len(checklist) == 0 {
+		checklist = domain.DefaultChecklist(b.ID)
+	}
+	for _, c := range checklist {
+		if c.Required && !c.Completed {
+			f.ChecklistIncomplete++
+		}
+	}
+	if s.docs != nil {
+		missing, err := s.docs.MissingRequiredKinds(ctx, b.ID)
+		if err != nil {
+			return f, err
+		}
+		f.MissingDocs = missing
+	}
+	override, err := s.repo.FindReadinessOverride(ctx, b.ID)
+	if err != nil {
+		return f, err
+	}
+	f.OverrideActive = override != nil
+	return f, nil
+}
+
+// Readiness evaluates the readiness gate, confirm guards and travel risk
+// alerts (T-064/T-065, T-268).
 func (s *Service) Readiness(ctx context.Context, bookingID uuid.UUID) (*domain.Readiness, error) {
 	b, err := s.repo.FindByID(ctx, bookingID)
 	if err != nil {
@@ -634,72 +613,64 @@ func (s *Service) Readiness(ctx context.Context, bookingID uuid.UUID) (*domain.R
 	if len(checklist) == 0 {
 		checklist = domain.DefaultChecklist(bookingID)
 	}
+	facts, err := s.readinessFacts(ctx, b)
+	if err != nil {
+		return nil, err
+	}
 
 	r := &domain.Readiness{
 		BookingID:         b.ID,
 		PaxCount:          b.PaxCount,
 		ParticipantsCount: len(parts),
 		BalanceAmt:        b.BalanceAmt,
+		ConfirmGuards:     []domain.Guard{},
 		Blocking:          []string{},
 		Warnings:          []string{},
 		RiskAlerts:        []string{},
 		MissingDocs:       []string{},
+		ReadinessOK:       facts.OK(),
+		OverrideActive:    facts.OverrideActive,
 	}
-
-	missingPassports := 0
 	for _, p := range parts {
 		if p.PassportMissing() {
-			missingPassports++
+			r.MissingPassports++
 		}
 	}
-	r.MissingPassports = missingPassports
-
-	req, done := 0, 0
 	for _, c := range checklist {
 		if !c.Required {
 			continue
 		}
-		req++
+		r.ChecklistRequired++
 		if c.Completed {
-			done++
+			r.ChecklistCompleted++
 		}
 	}
-	r.ChecklistRequired = req
-	r.ChecklistCompleted = done
-	r.ChecklistIncomplete = req - done
-
-	if b.Status != domain.StatusDraft {
-		r.Blocking = append(r.Blocking, "booking is not in draft status")
+	r.ChecklistIncomplete = r.ChecklistRequired - r.ChecklistCompleted
+	if len(facts.MissingDocs) > 0 {
+		r.MissingDocs = facts.MissingDocs
 	}
-	if len(parts) < b.PaxCount {
+
+	if facts.ParticipantsMissing {
 		r.Blocking = append(r.Blocking, "participants incomplete for pax_count")
 	}
-	if r.ChecklistIncomplete > 0 {
-		r.Blocking = append(r.Blocking, "required checklist items incomplete")
-	}
-
-	if s.docs != nil {
-		missing, err := s.docs.MissingRequiredKinds(ctx, bookingID)
-		if err == nil && len(missing) > 0 {
-			r.MissingDocs = missing
-			r.Blocking = append(r.Blocking, "required documents not approved: "+strings.Join(missing, ", "))
+	if !facts.OverrideActive {
+		if r.ChecklistIncomplete > 0 {
+			r.Blocking = append(r.Blocking, "required checklist items incomplete")
+		}
+		if len(facts.MissingDocs) > 0 {
+			r.Blocking = append(r.Blocking, "required documents not approved: "+strings.Join(facts.MissingDocs, ", "))
 		}
 	}
 
-	override, _ := s.repo.FindReadinessOverride(ctx, bookingID)
-	if override != nil {
-		r.OverrideActive = true
-	}
-
-	dep, err := s.departures.FindDeparture(ctx, b.DepartureID)
-	if err == nil {
-		sold, _ := s.repo.CountConfirmedPaxByDeparture(ctx, b.DepartureID)
-		check := *dep
-		check.CapacitySold = sold
-		if !check.CanSell(b.PaxCount) {
-			r.Blocking = append(r.Blocking, "departure capacity exceeded or sales closed")
+	dep, depErr := s.departures.FindDeparture(ctx, b.DepartureID)
+	confirm := domain.TransitionInput{To: domain.StatusConfirmed, Actor: domain.ActorUser, Now: s.now()}
+	if depErr == nil {
+		sold, err := s.repo.CountConfirmedPaxByDeparture(ctx, b.DepartureID)
+		if err != nil {
+			return nil, err
 		}
-		days := int(dep.DepartDate.Sub(time.Now().UTC()).Hours() / 24)
+		confirm.Facts = departureFacts(dep, sold, b.PaxCount, s.now().In(s.loc))
+		days := int(dep.DepartDate.Sub(s.now()).Hours() / 24)
 		r.DaysToDeparture = &days
 		if days >= 0 && days <= 14 {
 			r.RiskAlerts = append(r.RiskAlerts, "departure within 14 days")
@@ -710,8 +681,12 @@ func (s *Service) Readiness(ctx context.Context, bookingID uuid.UUID) (*domain.R
 	} else {
 		r.Blocking = append(r.Blocking, "departure not found")
 	}
+	if domain.CanTransition(b.Status, domain.StatusConfirmed, domain.ActorUser) {
+		r.ConfirmGuards = append(r.ConfirmGuards, b.Guards(confirm)...)
+		r.CanConfirm = len(r.ConfirmGuards) == 0
+	}
 
-	if missingPassports > 0 {
+	if r.MissingPassports > 0 {
 		r.Warnings = append(r.Warnings, "passport details missing for one or more participants")
 		r.RiskAlerts = append(r.RiskAlerts, "missing passports")
 	}
@@ -722,40 +697,38 @@ func (s *Service) Readiness(ctx context.Context, bookingID uuid.UUID) (*domain.R
 		r.Warnings = append(r.Warnings, "negative margin after discount/cost")
 		r.RiskAlerts = append(r.RiskAlerts, "negative margin")
 	}
-
-	r.CanConfirm = len(r.Blocking) == 0
-	if r.OverrideActive && b.Status == domain.StatusDraft {
-		// Override lifts document (and soft) blocks but still requires draft + capacity sanity.
-		filtered := make([]string, 0, len(r.Blocking))
-		for _, msg := range r.Blocking {
-			if strings.HasPrefix(msg, "required documents not approved") ||
-				msg == "required checklist items incomplete" {
-				continue
-			}
-			filtered = append(filtered, msg)
+	if facts.OverrideActive {
+		if o, _ := s.repo.FindReadinessOverride(ctx, bookingID); o != nil {
+			r.Warnings = append(r.Warnings, "readiness override active: "+o.Reason)
 		}
-		r.Blocking = filtered
-		r.Warnings = append(r.Warnings, "readiness override active: "+override.Reason)
-		r.CanConfirm = len(r.Blocking) == 0
 	}
 	return r, nil
 }
 
-// OverrideReadiness records an explicit confirm override for missing docs (Epic 12).
+// OverrideReadiness lifts the checklist and document gates of readiness
+// (T-271); the route requires bookings.override.
 func (s *Service) OverrideReadiness(ctx context.Context, bookingID, actorID uuid.UUID, reason string) (*domain.ReadinessOverride, error) {
 	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		return nil, shared.NewValidation("reason is required")
+	if !domain.ValidOverrideReason(reason) {
+		return nil, shared.NewValidation("reason must be at least 10 characters")
 	}
-	now := time.Now().UTC()
+	now := s.now()
 	aid := actorID
 	o := &domain.ReadinessOverride{
 		ID: uuid.New(), BookingID: bookingID, Reason: reason, ActorID: &aid, CreatedAt: now,
 	}
+	var evs []events.Event
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		b, err := s.repo.FindByID(ctx, bookingID)
+		b, err := s.store.FindForUpdate(ctx, bookingID)
 		if err != nil {
-			return shared.NewNotFound("booking")
+			return err
+		}
+		if b.Status.Terminal() {
+			return shared.NewInvalidState("cannot override readiness of a " + string(b.Status) + " booking")
+		}
+		facts, err := s.readinessFacts(ctx, b)
+		if err != nil {
+			return err
 		}
 		var before any
 		if prev, _ := s.repo.FindReadinessOverride(ctx, bookingID); prev != nil {
@@ -764,11 +737,16 @@ func (s *Service) OverrideReadiness(ctx context.Context, bookingID, actorID uuid
 		if err := s.repo.UpsertReadinessOverride(ctx, o); err != nil {
 			return err
 		}
-		return s.recordBooking(ctx, "booking.readiness_overridden", b, before,
-			map[string]any{"reason": o.Reason, "actor_id": o.ActorID, "created_at": o.CreatedAt}, nil)
+		if err := s.recordBooking(ctx, "booking.readiness_overridden", b, before,
+			map[string]any{"reason": o.Reason, "actor_id": o.ActorID, "created_at": o.CreatedAt},
+			map[string]any{"checklist_incomplete": facts.ChecklistIncomplete, "missing_docs": facts.MissingDocs}); err != nil {
+			return err
+		}
+		return s.rederive(ctx, b, nil, &evs)
 	})
 	if err != nil {
 		return nil, err
 	}
+	s.publish(ctx, evs)
 	return o, nil
 }

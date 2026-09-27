@@ -5,6 +5,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
 type EventType string
@@ -42,7 +45,24 @@ type Payment struct {
 	ApprovedBy        *uuid.UUID
 	ApprovedAt        *time.Time
 	Note              string
+	ReceivedAt        time.Time // calendar date the money was received
+	Reporting         *ReportingSnapshot
 	CreatedAt         time.Time
+}
+
+// ReportingSnapshot freezes an amount in the branch reporting currency with
+// the rate that produced it. Nil means no rate was available (fx_missing).
+type ReportingSnapshot struct {
+	Currency      string
+	Amount        int64
+	RateScaled    int64
+	EffectiveDate time.Time
+}
+
+func NewReportingSnapshot(currency string, c fx.Conversion) *ReportingSnapshot {
+	return &ReportingSnapshot{
+		Currency: currency, Amount: c.Amount, RateScaled: c.Rate.Scaled, EffectiveDate: c.Rate.EffectiveDate,
+	}
 }
 
 func (p Payment) CountsTowardCollected() bool {
@@ -66,6 +86,7 @@ const (
 type Schedule struct {
 	ID             uuid.UUID
 	BookingID      uuid.UUID
+	BranchID       uuid.UUID // from the booking; only set by MarkSchedulesOverdue
 	DueAt          time.Time
 	Amount         int64
 	Currency       string
@@ -76,20 +97,51 @@ type Schedule struct {
 	UpdatedAt      time.Time
 }
 
-// FinancialSummary is the booking money snapshot (T-117 / T-121).
+// Components are a booking's line-item totals by kind (item, tax, fee).
+type Components struct {
+	Items    int64
+	Tax      int64
+	Fees     int64
+	HasLines bool
+}
+
+// FinancialSummary is the booking money breakdown (T-117 / T-274). Balance is
+// Total - Collected; a negative balance is customer credit.
 type FinancialSummary struct {
-	BookingID         uuid.UUID `json:"booking_id"`
-	Currency          string    `json:"currency"`
-	ReportingCurrency string    `json:"reporting_currency"`
-	Booked            int64     `json:"booked"`
-	Collected         int64     `json:"collected"`
-	Recognized        int64     `json:"recognized"`
-	Margin            int64     `json:"margin"`
-	Balance           int64     `json:"balance"`
-	Credit            int64     `json:"credit"`
-	UnverifiedAmt     int64     `json:"unverified_amt"`
-	PendingRefundAmt  int64     `json:"pending_refund_amt"`
-	ScheduleOpenAmt   int64     `json:"schedule_open_amt"`
+	BookingID uuid.UUID
+	Currency  string
+	Subtotal  int64
+	Discount  int64
+	Tax       int64
+	Fees      int64
+	Total     int64
+	Cost      int64
+	Margin    int64
+	Collected int64
+	Pending   int64 // unverified charges
+	Balance   int64
+	Reporting *ReportingSummary
+	Promises  PromiseSummary
+}
+
+// ReportingSummary restates the booking in reporting currency at one rate:
+// the confirmation snapshot when present, otherwise the latest rate today.
+type ReportingSummary struct {
+	Currency      string
+	Total         int64
+	Collected     int64
+	Balance       int64
+	RateScaled    int64
+	EffectiveDate time.Time
+}
+
+// Subtotal is the pre-discount item total. Bookings without line items fall
+// back to total + discount - tax - fees so the breakdown still adds up.
+func (c Components) Subtotal(total, discount int64) int64 {
+	if !c.HasLines {
+		return total + discount - c.Tax - c.Fees
+	}
+	return c.Items
 }
 
 type QueueKind string
@@ -115,32 +167,12 @@ type QueueItem struct {
 	Note         string     `json:"note,omitempty"`
 }
 
-// ReportingCurrencyPolicy converts amounts into branch reporting currency (T-120).
-type ReportingCurrencyPolicy interface {
-	ReportingCurrency(ctx context.Context, branchID uuid.UUID) (string, error)
-	// Convert returns amount in reporting currency (identity by default).
-	Convert(ctx context.Context, branchID uuid.UUID, amount int64, fromCurrency string) (int64, string, error)
-}
-
-// IdentityFX is the default no-op FX policy.
-type IdentityFX struct {
-	DefaultCurrency string
-}
-
-func (IdentityFX) ReportingCurrency(_ context.Context, _ uuid.UUID) (string, error) {
-	return "SAR", nil
-}
-
-func (p IdentityFX) Convert(_ context.Context, _ uuid.UUID, amount int64, from string) (int64, string, error) {
-	cur := from
-	if cur == "" {
-		cur = "SAR"
-	}
-	if p.DefaultCurrency != "" {
-		return amount, p.DefaultCurrency, nil
-	}
-	return amount, cur, nil
-}
+const (
+	// JobPromisesCheck resolves open payment promises (kept / broken).
+	JobPromisesCheck shared.JobName = "finance.promises_check"
+	// JobSchedulesOverdue marks open schedules past due_at as overdue.
+	JobSchedulesOverdue shared.JobName = "finance.schedules_overdue"
+)
 
 type Repository interface {
 	Insert(ctx context.Context, p *Payment) error
@@ -157,10 +189,21 @@ type Repository interface {
 	GetSchedule(ctx context.Context, id uuid.UUID) (*Schedule, error)
 	UpdateScheduleStatus(ctx context.Context, id uuid.UUID, status ScheduleStatus) error
 	ListOverdueSchedules(ctx context.Context, branchID *uuid.UUID, now time.Time, limit int) ([]Schedule, error)
+	// MarkSchedulesOverdue flips up to limit open schedules with due_at < now
+	// to overdue and returns them with BranchID set.
+	MarkSchedulesOverdue(ctx context.Context, now time.Time, limit int) ([]Schedule, error)
 	ListDueForReminder(ctx context.Context, now time.Time, within time.Duration, limit int) ([]Schedule, error)
 	MarkReminderSent(ctx context.Context, id uuid.UUID, at time.Time) error
 
 	ListCreditBookings(ctx context.Context, branchID *uuid.UUID, limit int) ([]QueueItem, error)
 	GetFinanceSettings(ctx context.Context, branchID uuid.UUID) (reportingCurrency string, err error)
 	UpsertFinanceSettings(ctx context.Context, branchID uuid.UUID, reportingCurrency string) error
+}
+
+// BookingFinance reads booking money components and stores the booking's
+// reporting snapshot (ISP: the booking module owns everything else).
+type BookingFinance interface {
+	Components(ctx context.Context, bookingID uuid.UUID) (Components, error)
+	ReportingSnapshot(ctx context.Context, bookingID uuid.UUID) (*ReportingSnapshot, error)
+	SetReportingSnapshot(ctx context.Context, bookingID uuid.UUID, s ReportingSnapshot) error
 }

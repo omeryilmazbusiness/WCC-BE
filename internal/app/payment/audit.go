@@ -2,11 +2,13 @@ package payment
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
 )
 
@@ -50,6 +52,29 @@ func paymentSnapshot(p *domain.Payment) map[string]any {
 	}
 	if p.ApprovedAt != nil {
 		m["approved_at"] = *p.ApprovedAt
+	}
+	if !p.ReceivedAt.IsZero() {
+		m["received_at"] = p.ReceivedAt.Format(time.DateOnly)
+	}
+	if r := p.Reporting; r != nil {
+		m["reporting"] = map[string]any{
+			"currency": r.Currency, "amount": r.Amount, "rate": fx.FormatRate(r.RateScaled),
+			"effective_date": r.EffectiveDate.Format(time.DateOnly),
+		}
+	}
+	return m
+}
+
+func promiseSnapshot(p *domain.Promise) map[string]any {
+	m := map[string]any{
+		"booking_id": p.BookingID, "amount": p.Amount, "currency": p.Currency,
+		"promised_on": p.PromisedOn.Format(time.DateOnly), "note": p.Note, "status": p.Status,
+	}
+	if p.TaskID != nil {
+		m["task_id"] = *p.TaskID
+	}
+	if p.ResolvedAt != nil {
+		m["resolved_at"] = *p.ResolvedAt
 	}
 	return m
 }

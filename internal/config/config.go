@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -20,6 +21,37 @@ type Config struct {
 	Webhook  WebhookConfig
 	Storage  StorageConfig
 	Log      LogConfig
+	FX       FXConfig
+}
+
+// FXConfig configures the optional generic rate provider (an empty
+// ProviderURL disables it) and the live rate board.
+type FXConfig struct {
+	ProviderURL     string
+	ProviderBase    string
+	ProviderTimeout time.Duration
+
+	LiveEnabled bool
+	// LocalCurrency is the currency live quotes are expressed in.
+	LocalCurrency  string
+	LivePinned     []string
+	LiveCurrencies []string
+	// LiveMarketMaxAge is how old a direct market quote may be before the
+	// board derives it from the market USD rate instead.
+	LiveMarketMaxAge   time.Duration
+	LiveTimeout        time.Duration
+	LiraScopeBaseURL   string
+	LiraScopeAPIKey    string
+	LiraScopeAPISecret string
+	ERAPIBaseURL       string
+	// AccountingSource (off | official | market) makes fx.rates_sync also
+	// store today's live mid of every pinned currency.
+	AccountingSource string
+}
+
+// AccountingEnabled reports whether fx.rates_sync writes live rates.
+func (f FXConfig) AccountingEnabled() bool {
+	return f.AccountingSource == "official" || f.AccountingSource == "market"
 }
 
 type AppConfig struct {
@@ -100,6 +132,8 @@ type WebhookConfig struct {
 
 type RedisConfig struct {
 	URL string
+	// SchedulerTZ is the IANA zone cron specs are evaluated in.
+	SchedulerTZ string
 }
 
 type StorageConfig struct {
@@ -174,7 +208,8 @@ func Load() (Config, error) {
 			RateWindow:   getDuration("WEBHOOK_RATE_WINDOW", time.Minute),
 		},
 		Redis: RedisConfig{
-			URL: getEnv("REDIS_URL", "redis://localhost:6379/0"),
+			URL:         getEnv("REDIS_URL", "redis://localhost:6379/0"),
+			SchedulerTZ: getEnv("SCHEDULER_TZ", "Asia/Riyadh"),
 		},
 		Storage: StorageConfig{
 			Endpoint:  getEnv("S3_ENDPOINT", "http://localhost:9000"),
@@ -188,6 +223,23 @@ func Load() (Config, error) {
 		Log: LogConfig{
 			Level:  getEnv("LOG_LEVEL", "info"),
 			Format: getEnv("LOG_FORMAT", "json"),
+		},
+		FX: FXConfig{
+			ProviderURL:     strings.TrimSpace(getEnv("FX_PROVIDER_URL", "")),
+			ProviderBase:    strings.ToUpper(getEnv("FX_PROVIDER_BASE", "USD")),
+			ProviderTimeout: getDuration("FX_PROVIDER_TIMEOUT", 10*time.Second),
+
+			LiveEnabled:        getBool("FX_LIVE_ENABLED", true),
+			LocalCurrency:      strings.ToUpper(strings.TrimSpace(getEnv("FX_LOCAL_CURRENCY", "SYP"))),
+			LivePinned:         splitCSV(strings.ToUpper(getEnv("FX_LIVE_PINNED", "USD,EUR,SAR"))),
+			LiveCurrencies:     splitCSV(strings.ToUpper(getEnv("FX_LIVE_CURRENCIES", "USD,EUR,SAR,TRY,AED,GBP,JOD,EGP,KWD,QAR,LBP,IQD"))),
+			LiveMarketMaxAge:   getDuration("FX_LIVE_MARKET_MAX_AGE", 48*time.Hour),
+			LiveTimeout:        getDuration("FX_LIVE_TIMEOUT", 10*time.Second),
+			LiraScopeBaseURL:   strings.TrimSpace(getEnv("LIRASCOPE_BASE_URL", "https://lirascope.syria-cloud.sy/api/v1")),
+			LiraScopeAPIKey:    strings.TrimSpace(os.Getenv("LIRASCOPE_API_KEY")),
+			LiraScopeAPISecret: strings.TrimSpace(os.Getenv("LIRASCOPE_API_SECRET")),
+			ERAPIBaseURL:       strings.TrimSpace(getEnv("ERAPI_BASE_URL", "https://open.er-api.com/v6")),
+			AccountingSource:   strings.ToLower(strings.TrimSpace(getEnv("FX_ACCOUNTING_SOURCE", "off"))),
 		},
 	}
 
@@ -219,6 +271,12 @@ func (c Config) Validate() error {
 		return fmt.Errorf("DATABASE_URL is required")
 	}
 	if err := c.Auth.validateSessions(); err != nil {
+		return err
+	}
+	if _, err := time.LoadLocation(c.Redis.SchedulerTZ); err != nil {
+		return fmt.Errorf("SCHEDULER_TZ: %w", err)
+	}
+	if err := c.FX.validate(); err != nil {
 		return err
 	}
 	if c.App.Env == "production" {
@@ -289,6 +347,53 @@ func (a AuthConfig) validateSessions() error {
 		return fmt.Errorf("REFRESH_REUSE_GRACE must be between 0 and %s", maxRefreshReuseGrace)
 	}
 	return nil
+}
+
+func (f FXConfig) validate() error {
+	switch f.AccountingSource {
+	case "", "off", "official", "market":
+	default:
+		return fmt.Errorf("FX_ACCOUNTING_SOURCE must be off, official or market")
+	}
+	if !f.LiveEnabled {
+		if f.AccountingEnabled() {
+			return fmt.Errorf("FX_ACCOUNTING_SOURCE requires FX_LIVE_ENABLED")
+		}
+		return nil
+	}
+	if !isCurrencyCode(f.LocalCurrency) {
+		return fmt.Errorf("FX_LOCAL_CURRENCY must be an ISO-4217 code")
+	}
+	if len(f.LivePinned)+len(f.LiveCurrencies) == 0 {
+		return fmt.Errorf("FX_LIVE_PINNED or FX_LIVE_CURRENCIES must list at least one currency")
+	}
+	for _, c := range append(append([]string{}, f.LivePinned...), f.LiveCurrencies...) {
+		if !isCurrencyCode(c) {
+			return fmt.Errorf("FX_LIVE_PINNED/FX_LIVE_CURRENCIES: %q is not an ISO-4217 code", c)
+		}
+	}
+	if f.LiveMarketMaxAge <= 0 || f.LiveTimeout <= 0 {
+		return fmt.Errorf("FX_LIVE_MARKET_MAX_AGE and FX_LIVE_TIMEOUT must be positive")
+	}
+	for key, v := range map[string]string{"LIRASCOPE_BASE_URL": f.LiraScopeBaseURL, "ERAPI_BASE_URL": f.ERAPIBaseURL} {
+		u, err := url.Parse(v)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return fmt.Errorf("%s must be an http(s) URL", key)
+		}
+	}
+	return nil
+}
+
+func isCurrencyCode(s string) bool {
+	if len(s) != 3 {
+		return false
+	}
+	for _, c := range s {
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 // devEncryptionKey is a public 32-byte key for local development only.

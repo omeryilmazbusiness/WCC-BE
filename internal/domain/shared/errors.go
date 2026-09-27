@@ -27,6 +27,8 @@ type AppError struct {
 	Err     error
 	// RetryAfter tells clients when a locked/throttled request may be retried.
 	RetryAfter time.Duration
+	// Details is machine-readable context rendered as error.details.
+	Details map[string]any
 }
 
 func (e *AppError) Error() string {

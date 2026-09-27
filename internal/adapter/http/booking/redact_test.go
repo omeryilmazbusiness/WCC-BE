@@ -27,7 +27,7 @@ func TestMapBookingRedactsFinancials(t *testing.T) {
 	b := &domain.Booking{TotalAmount: 1000, CostAmt: 600, DiscountAmt: 100}
 
 	open := mapBooking(b, fieldAccess{financials: true})
-	if open["cost_amt"] != int64(600) || open["margin"] != int64(300) {
+	if open["cost_amt"] != int64(600) || open["margin"] != int64(400) {
 		t.Fatalf("unredacted: %v %v", open["cost_amt"], open["margin"])
 	}
 
@@ -42,6 +42,53 @@ func TestMapBookingRedactsFinancials(t *testing.T) {
 	}
 	if red["total_amount"] != int64(1000) {
 		t.Fatal("total_amount must not be redacted")
+	}
+}
+
+func TestFieldAccessOverrideAndDiscount(t *testing.T) {
+	for _, r := range platformauth.AllRoles() {
+		fa := fieldAccessForRole(r)
+		want := r == platformauth.RoleGM || r == platformauth.RoleManager
+		if fa.override != want || fa.discount != want {
+			t.Fatalf("%s: %+v", r, fa)
+		}
+	}
+}
+
+func TestMapBookingAllowedTransitionsHideOverrideEdges(t *testing.T) {
+	b := &domain.Booking{Status: domain.StatusConfirmed}
+	has := func(m map[string]any, s domain.Status) bool {
+		for _, a := range m["allowed_transitions"].([]domain.AllowedTransition) {
+			if a.Status == s {
+				return true
+			}
+		}
+		return false
+	}
+	if has(mapBooking(b, fieldAccess{}), domain.StatusReady) {
+		t.Fatal("ready is an override edge and must be hidden without bookings.override")
+	}
+	m := mapBooking(b, fieldAccess{override: true})
+	if !has(m, domain.StatusReady) || !has(m, domain.StatusCancelled) {
+		t.Fatalf("override caller: %v", m["allowed_transitions"])
+	}
+	if m["hold_expires_at"] != nil {
+		t.Fatal("hold_expires_at must be null outside option_hold")
+	}
+}
+
+func TestStatusRequestInput(t *testing.T) {
+	bad := "tomorrow"
+	if _, err := (statusRequest{Status: "option_hold", HoldExpiresAt: &bad}).input(); err == nil {
+		t.Fatal("non-RFC3339 hold_expires_at must be rejected")
+	}
+	ok := "2026-10-01T12:00:00+03:00"
+	in, err := (statusRequest{Status: " option_hold ", HoldExpiresAt: &ok, Reason: "r"}).input()
+	if err != nil || in.Status != domain.StatusOptionHold || in.HoldExpiresAt.Hour() != 9 {
+		t.Fatalf("input: %+v %v", in, err)
+	}
+	if _, err := (statusRequest{}).input(); err == nil {
+		t.Fatal("status is required")
 	}
 }
 

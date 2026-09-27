@@ -18,6 +18,7 @@ import (
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
+	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
 	importhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/importexport"
 	inboxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/inbox"
@@ -71,6 +72,8 @@ type Handlers struct {
 	Rooming      roominghttp.Handler
 	Search       searchhttp.Handler
 	Privacy      privacyhttp.Handler
+	FX           fxhttp.Handler
+	FXLive       fxhttp.LiveHandler
 }
 
 // NewRouter wires every route. Authenticated routes verify the access token
@@ -191,7 +194,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/confirm", h.Booking.Confirm)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/status", h.Booking.ChangeStatus)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/readiness", h.Booking.Readiness)
-				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/readiness-override", h.Booking.OverrideReadiness)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsOverride)).Post("/{id}/readiness-override", h.Booking.OverrideReadiness)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/participants", h.Booking.ListParticipants)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/participants", h.Booking.AddParticipant)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Patch("/{id}/participants/{participantId}", h.Booking.UpdateParticipant)
@@ -206,6 +209,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/{id}/financial-summary", h.Payment.FinancialSummary)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/{id}/payment-schedules", h.Payment.ListSchedules)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/{id}/payment-schedules", h.Payment.CreateSchedule)
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/{id}/payment-promises", h.Payment.ListPromises)
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/{id}/payment-promises", h.Payment.CreatePromise)
 			})
 
 			r.Route("/tasks", func(r chi.Router) {
@@ -229,6 +234,20 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			r.With(middleware.RequirePermission(platformauth.PermPaymentsApprove)).Post("/payments/{id}/approve", h.Payment.ApproveRefund)
 			r.With(middleware.RequirePermission(platformauth.PermPaymentsApprove)).Post("/payments/{id}/reject", h.Payment.RejectRefund)
 			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payment-schedules/{id}/cancel", h.Payment.CancelSchedule)
+			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payment-promises/{id}/cancel", h.Payment.CancelPromise)
+
+			r.Route("/fx-rates", func(r chi.Router) {
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/", h.FX.List)
+				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/convert", h.FX.Convert)
+				r.With(middleware.RequirePermission(platformauth.PermFXManage)).Post("/", h.FX.Create)
+				r.With(middleware.RequirePermission(platformauth.PermFXManage)).Post("/adopt", h.FXLive.Adopt)
+				r.With(middleware.RequirePermission(platformauth.PermFXManage)).Put("/{id}", h.FX.Update)
+				r.With(middleware.RequirePermission(platformauth.PermFXManage)).Delete("/{id}", h.FX.Delete)
+			})
+
+			// Live rates are public market information: any authenticated user may read them.
+			r.Get("/fx/live", h.FXLive.Board)
+			r.With(middleware.RequirePermission(platformauth.PermFXManage)).Post("/fx/live/refresh", h.FXLive.Refresh)
 
 			r.Route("/finance", func(r chi.Router) {
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/queues/{kind}", h.Payment.Queue)

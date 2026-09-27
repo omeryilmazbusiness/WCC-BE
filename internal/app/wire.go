@@ -25,6 +25,7 @@ import (
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
+	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
 	importhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/importexport"
 	inboxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/inbox"
@@ -179,16 +180,17 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	customerSvc.SetAuditor(auditSvc)
 	leadSvc := applead.NewService(leadRepo, txm, bus)
 	leadSvc.SetAuditor(auditSvc)
-	bookingSvc := appbooking.NewService(bookingRepo, pkgRepo, txm, bus)
+	bookingSvc := appbooking.NewService(bookingRepo, bookingRepo, pkgRepo, txm, bus)
 	bookingSvc.SetAuditor(auditSvc)
+	bookingSvc.SetTimeZone(businessLocation(cfg))
 	leadSvc.SetBookingCreator(leadBookingBridge{svc: bookingSvc})
 	paymentSvc := apppayment.NewService(paymentRepo, bookingRepo, txm, bus)
 	paymentSvc.SetAuditor(auditSvc)
-	paymentSvc.SetFX(apppayment.SettingsFX{Repo: paymentRepo})
 	taskSvc := apptask.NewService(taskRepo, txm, bus)
 	taskSvc.SetConversationReader(taskConvBridge{repo: inboxRepo})
 	taskSeeder := apptask.NewSeeder(taskRepo, txm)
 	paymentSvc.SetTaskCreator(taskSeeder)
+	appbooking.NewLifecycle(bookingSvc, taskSeeder).Register(bus)
 	targetRepo := pgrevenuetarget.NewRepository(pool)
 	targetSvc := apprevenuetarget.NewService(targetRepo, txm)
 	targetSvc.SetAuditor(auditSvc)
@@ -213,6 +215,11 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 	notifSvc.SetExternal(appnotification.LogExternal{Log: log})
 	notifReactor := appnotification.NewReactor(notifSvc)
 	notifReactor.Register(bus)
+	finance := newFinanceModule(financeDeps{
+		Cfg: cfg, Log: log, Pool: pool, Tx: txm, Auditor: auditSvc, Payments: paymentSvc,
+		Repo: paymentRepo, Bookings: bookingRepo, Tasks: taskSeeder, Notifier: notifSvc,
+	})
+	paymentSvc.RegisterReactors(bus)
 	reportRepo := pgreport.NewRepository(pool)
 	reportSvc := appreport.NewService(reportRepo)
 	aiRepo := pgai.NewRepository(pool)
@@ -274,7 +281,9 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Customer:     customerhttp.Handler{Svc: customerSvc},
 		Lead:         leadhttp.Handler{Svc: leadSvc},
 		Booking:      bookinghttp.Handler{Svc: bookingSvc},
-		Payment:      paymenthttp.Handler{Svc: paymentSvc},
+		Payment:      paymenthttp.Handler{Svc: paymentSvc, Promises: finance.Promises},
+		FX:           fxhttp.Handler{Svc: finance.FX},
+		FXLive:       liveHandler(finance.Live),
 		Target:       targethttp.Handler{Svc: targetSvc},
 		Task:         taskhttp.Handler{Svc: taskSvc},
 		Dashboard:    dashboardhttp.Handler{Svc: dashSvc},

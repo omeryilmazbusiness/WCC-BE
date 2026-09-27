@@ -17,15 +17,28 @@ import (
 
 type recAudit struct {
 	events []audit.RecordInput
+	actors []audit.ActorType
 	fail   error
 }
 
-func (r *recAudit) Record(_ context.Context, in audit.RecordInput) error {
+func (r *recAudit) Record(ctx context.Context, in audit.RecordInput) error {
 	if r.fail != nil {
 		return r.fail
 	}
+	a, _ := audit.ActorFrom(ctx)
 	r.events = append(r.events, in)
+	r.actors = append(r.actors, a.Type)
 	return nil
+}
+
+func (r *recAudit) all(action string) []audit.RecordInput {
+	var out []audit.RecordInput
+	for _, e := range r.events {
+		if e.Action == action {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func (r *recAudit) find(action string) *audit.RecordInput {
@@ -63,7 +76,7 @@ func auditFixture(t *testing.T) (*appbooking.Service, *recAudit, *domain.Booking
 func TestBookingUpdateAuditsBeforeAfterAndDiscount(t *testing.T) {
 	svc, rec, b := auditFixture(t)
 	discount := int64(150)
-	if _, err := svc.Update(sysCtx(), b.ID, appbooking.UpdateInput{PaxCount: 2, TotalAmount: 1200, Currency: "USD", DiscountAmt: &discount}); err != nil {
+	if _, err := svc.Update(sysCtx(), b.ID, appbooking.UpdateInput{PaxCount: 2, TotalAmount: 1200, Currency: "USD", DiscountAmt: &discount, CanDiscount: true}); err != nil {
 		t.Fatal(err)
 	}
 	upd := rec.find("booking.updated")
@@ -120,21 +133,38 @@ func TestParticipantAuditNeverContainsPassport(t *testing.T) {
 func TestBookingChangeFailsClosedWhenAuditFails(t *testing.T) {
 	svc, rec, b := auditFixture(t)
 	rec.fail = errors.New("audit down")
-	if _, err := svc.Cancel(sysCtx(), b.ID); err == nil {
+	cancel := appbooking.TransitionInput{Status: domain.StatusCancelled, Reason: "customer withdrew"}
+	if _, err := svc.Transition(sysCtx(), b.ID, cancel); err == nil {
 		t.Fatal("cancel must fail when the audit insert fails")
 	}
-	if _, err := svc.OverrideReadiness(sysCtx(), b.ID, uuid.New(), "ok"); err == nil {
+	if _, err := svc.OverrideReadiness(sysCtx(), b.ID, uuid.New(), "documents arrive at the airport"); err == nil {
 		t.Fatal("override must fail when the audit insert fails")
 	}
 }
 
 func TestStatusChangeAuditsFromAndTo(t *testing.T) {
 	svc, rec, b := auditFixture(t)
-	if _, err := svc.Cancel(sysCtx(), b.ID); err != nil {
+	if _, err := svc.Transition(sysCtx(), b.ID, appbooking.TransitionInput{Status: domain.StatusCancelled, Reason: "customer withdrew"}); err != nil {
 		t.Fatal(err)
 	}
 	ev := rec.find("booking.status_changed")
 	if ev == nil || ev.Before.(map[string]any)["status"] != domain.StatusDraft || ev.After.(map[string]any)["status"] != domain.StatusCancelled {
 		t.Fatalf("status audit: %+v", ev)
+	}
+	if ev.Extra["actor_kind"] != domain.ActorUser || ev.After.(map[string]any)["status_reason"] != "customer withdrew" {
+		t.Fatalf("status audit extra: %+v", ev)
+	}
+}
+
+func TestOverrideReadinessNeedsReasonAndRederives(t *testing.T) {
+	svc, rec, b := auditFixture(t)
+	if _, err := svc.OverrideReadiness(sysCtx(), b.ID, uuid.New(), "too short"); !errors.Is(err, shared.ErrValidation) {
+		t.Fatalf("short reason: %v", err)
+	}
+	if _, err := svc.OverrideReadiness(sysCtx(), b.ID, uuid.New(), "documents arrive at the airport"); err != nil {
+		t.Fatal(err)
+	}
+	if rec.find("booking.readiness_overridden") == nil {
+		t.Fatal("readiness override must be audited")
 	}
 }

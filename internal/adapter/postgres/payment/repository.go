@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
+	fxdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
@@ -113,7 +114,8 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 
 const paymentCols = `p.id, p.booking_id, p.amount, p.currency, p.method, p.reference, p.recorded_by, p.idempotency_key,
 	COALESCE(p.event_type,'charge'), p.reverses_payment_id, COALESCE(p.status,'verified'),
-	p.approved_by, p.approved_at, COALESCE(p.note,''), p.created_at`
+	p.approved_by, p.approved_at, COALESCE(p.note,''), p.received_at,
+	p.amount_reporting, p.reporting_currency, p.fx_rate_scaled, p.fx_effective_date, p.created_at`
 
 const scheduleCols = `s.id, s.booking_id, s.due_at, s.amount, s.currency, s.label, s.status, s.reminder_sent_at,
 	s.created_at, s.updated_at`
@@ -121,16 +123,36 @@ const scheduleCols = `s.id, s.booking_id, s.due_at, s.amount, s.currency, s.labe
 func scanPayment(scan func(dest ...any) error) (*domain.Payment, error) {
 	var p domain.Payment
 	var eventType, status string
+	var repAmount, repRate *int64
+	var repCurrency *string
+	var repDate *time.Time
 	err := scan(
 		&p.ID, &p.BookingID, &p.Amount, &p.Currency, &p.Method, &p.Reference, &p.RecordedBy, &p.IdempotencyKey,
-		&eventType, &p.ReversesPaymentID, &status, &p.ApprovedBy, &p.ApprovedAt, &p.Note, &p.CreatedAt,
+		&eventType, &p.ReversesPaymentID, &status, &p.ApprovedBy, &p.ApprovedAt, &p.Note, &p.ReceivedAt,
+		&repAmount, &repCurrency, &repRate, &repDate, &p.CreatedAt,
 	)
 	if err != nil {
 		return nil, err
 	}
 	p.EventType = domain.EventType(eventType)
 	p.Status = domain.Status(status)
+	p.Reporting = snapshotFrom(repAmount, repCurrency, repRate, repDate)
 	return &p, nil
+}
+
+func snapshotFrom(amount *int64, currency *string, rate *int64, date *time.Time) *domain.ReportingSnapshot {
+	if amount == nil || currency == nil || rate == nil || date == nil {
+		return nil
+	}
+	return &domain.ReportingSnapshot{Currency: *currency, Amount: *amount, RateScaled: *rate, EffectiveDate: *date}
+}
+
+// snapshotArgs splits a snapshot into nullable column values.
+func snapshotArgs(s *domain.ReportingSnapshot) (amount *int64, currency *string, rate *int64, date *time.Time) {
+	if s == nil {
+		return nil, nil, nil, nil
+	}
+	return &s.Amount, &s.Currency, &s.RateScaled, &s.EffectiveDate
 }
 
 func (r *Repository) Insert(ctx context.Context, p *domain.Payment) error {
@@ -144,13 +166,19 @@ func (r *Repository) Insert(ctx context.Context, p *domain.Payment) error {
 	if p.Status == "" {
 		p.Status = domain.StatusUnverified
 	}
+	if p.ReceivedAt.IsZero() {
+		p.ReceivedAt = p.CreatedAt
+	}
+	repAmount, repCurrency, repRate, repDate := snapshotArgs(p.Reporting)
 	_, err := q.Exec(ctx, `
 		INSERT INTO payments (
 			id, booking_id, amount, currency, method, reference, recorded_by, idempotency_key,
-			event_type, reverses_payment_id, status, approved_by, approved_at, note, created_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+			event_type, reverses_payment_id, status, approved_by, approved_at, note, received_at,
+			amount_reporting, reporting_currency, fx_rate_scaled, fx_effective_date, created_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
 		p.ID, p.BookingID, p.Amount, p.Currency, p.Method, p.Reference, p.RecordedBy, p.IdempotencyKey,
-		string(p.EventType), p.ReversesPaymentID, string(p.Status), p.ApprovedBy, p.ApprovedAt, p.Note, p.CreatedAt,
+		string(p.EventType), p.ReversesPaymentID, string(p.Status), p.ApprovedBy, p.ApprovedAt, p.Note,
+		fxdomain.DateOf(p.ReceivedAt), repAmount, repCurrency, repRate, repDate, p.CreatedAt,
 	)
 	return err
 }
@@ -323,6 +351,43 @@ func (r *Repository) ListOverdueSchedules(ctx context.Context, branchID *uuid.UU
 		JOIN bookings b ON b.id = s.booking_id
 		WHERE s.status IN ('open','overdue') AND s.due_at < $1`+scope+`
 		ORDER BY s.due_at LIMIT $%d`, len(args)), args...)
+}
+
+func (r *Repository) MarkSchedulesOverdue(ctx context.Context, now time.Time, limit int) ([]domain.Schedule, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	scope, args, err := bookingFilter(ctx, nil, []any{now, limit})
+	if err != nil {
+		return nil, err
+	}
+	q := tx.QuerierFrom(ctx, r.pool)
+	rows, err := q.Query(ctx, `
+		UPDATE payment_schedules s SET status='overdue', updated_at=NOW()
+		FROM bookings b
+		WHERE b.id = s.booking_id AND s.status='open' AND s.id IN (
+			SELECT id FROM payment_schedules
+			WHERE status='open' AND due_at < $1
+			ORDER BY due_at, id LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		)`+scope+`
+		RETURNING `+scheduleCols+`, b.branch_id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Schedule
+	for rows.Next() {
+		var s domain.Schedule
+		var st string
+		if err := rows.Scan(&s.ID, &s.BookingID, &s.DueAt, &s.Amount, &s.Currency, &s.Label, &st, &s.ReminderSentAt,
+			&s.CreatedAt, &s.UpdatedAt, &s.BranchID); err != nil {
+			return nil, err
+		}
+		s.Status = domain.ScheduleStatus(st)
+		out = append(out, s)
+	}
+	return out, rows.Err()
 }
 
 func (r *Repository) ListDueForReminder(ctx context.Context, now time.Time, within time.Duration, limit int) ([]domain.Schedule, error) {

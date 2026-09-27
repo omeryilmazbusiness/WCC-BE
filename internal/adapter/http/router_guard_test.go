@@ -26,6 +26,11 @@ var permissionExempt = []string{
 	"/v1/webhooks/", // authenticated by provider signature instead
 }
 
+// Exact routes open to every authenticated caller, by design.
+var authOnly = map[string]bool{
+	"GET /v1/fx/live": true, // public market rates
+}
+
 func exempt(pattern string) bool {
 	for _, p := range permissionExempt {
 		if strings.HasPrefix(pattern, p) {
@@ -88,6 +93,12 @@ func TestEveryBusinessRouteRequiresPermission(t *testing.T) {
 		"POST /v1/ops/encrypt-backfill": false, "POST /v1/customers/{id}/reveal-passport": false,
 		"GET /v1/customers/{id}/export": false, "POST /v1/customers/{id}/anonymize": false,
 		"POST /v1/bookings/{id}/participants/{participantId}/reveal-passport": false,
+		"GET /v1/fx-rates/": false, "POST /v1/fx-rates/": false, "GET /v1/fx-rates/convert": false,
+		"PUT /v1/fx-rates/{id}": false, "DELETE /v1/fx-rates/{id}": false,
+		"POST /v1/fx-rates/adopt": false, "POST /v1/fx/live/refresh": false,
+		"GET /v1/bookings/{id}/payment-promises": false, "POST /v1/bookings/{id}/payment-promises": false,
+		"POST /v1/payment-promises/{id}/cancel": false,
+		"POST /v1/bookings/{id}/status":         false, "POST /v1/bookings/{id}/readiness-override": false,
 	}
 
 	routes, ok := router.(chi.Routes)
@@ -96,7 +107,7 @@ func TestEveryBusinessRouteRequiresPermission(t *testing.T) {
 	}
 	checked := 0
 	err := chi.Walk(routes, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		if !strings.HasPrefix(route, "/v1/") || exempt(route) || method == http.MethodOptions {
+		if !strings.HasPrefix(route, "/v1/") || exempt(route) || authOnly[method+" "+route] || method == http.MethodOptions {
 			return nil
 		}
 		path := strings.NewReplacer(
@@ -252,5 +263,64 @@ func TestDataProtectionRoutesRequireTheirPermission(t *testing.T) {
 		if rec.Code != http.StatusForbidden {
 			t.Errorf("%s %s as %s: want 403, got %d", c.method, c.path, c.role, rec.Code)
 		}
+	}
+}
+
+// Epic 21 T-271 — booking writers without bookings.override can neither hit
+// the readiness override route nor request an override status change.
+func TestBookingOverrideRequiresPermission(t *testing.T) {
+	router, tokens := testRouter(t)
+	id := uuid.NewString()
+	for _, role := range []platformauth.Role{platformauth.RoleEmployee, platformauth.RoleFinance, platformauth.RoleOperations} {
+		for _, c := range []struct{ path, body string }{
+			{"/v1/bookings/" + id + "/readiness-override", `{"reason":"documents arrive at the airport"}`},
+			{"/v1/bookings/" + id + "/status", `{"status":"ready","reason":"documents arrive at the airport","override":true}`},
+		} {
+			req := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader(c.body))
+			req.Header.Set("Authorization", "Bearer "+accessToken(t, tokens, role))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("POST %s as %s: want 403, got %d", c.path, role, rec.Code)
+			}
+		}
+	}
+}
+
+// Live rates: the board only needs authentication; refresh and adopt need
+// fx.manage, which employees and operations do not hold.
+func TestLiveFXRoutes(t *testing.T) {
+	router, tokens := testRouter(t)
+	for _, rt := range []struct{ method, path string }{
+		{http.MethodGet, "/v1/fx/live"},
+		{http.MethodPost, "/v1/fx/live/refresh"},
+		{http.MethodPost, "/v1/fx-rates/adopt"},
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(rt.method, rt.path, nil))
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s without token: want 401, got %d", rt.method, rt.path, rec.Code)
+		}
+	}
+	for _, role := range []platformauth.Role{platformauth.RoleEmployee, platformauth.RoleOperations, platformauth.Role("nobody")} {
+		for _, c := range []struct{ path, body string }{
+			{"/v1/fx/live/refresh", `{}`},
+			{"/v1/fx-rates/adopt", `{"currency":"USD","kind":"official","side":"mid"}`},
+		} {
+			req := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader(c.body))
+			req.Header.Set("Authorization", "Bearer "+accessToken(t, tokens, role))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("POST %s as %s: want 403, got %d", c.path, role, rec.Code)
+			}
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/v1/fx/live", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken(t, tokens, platformauth.Role("nobody")))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "fx_live_disabled") {
+		t.Errorf("GET /v1/fx/live for any authenticated caller reaches the handler (disabled here): %d %s", rec.Code, rec.Body)
 	}
 }

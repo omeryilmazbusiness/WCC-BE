@@ -61,15 +61,17 @@ func NewRepository(pool *pgxpool.Pool, pii *pgpii.Passports) *Repository {
 }
 
 const bookingCols = `id, branch_id, customer_id, departure_id, lead_id, status, pax_count,
-	total_amount, discount_amt, cost_amt, collected_amt, balance_amt, currency, notes, owner_id, created_at, updated_at`
+	total_amount, discount_amt, tax_amt, fee_amt, cost_amt, collected_amt, balance_amt, currency, notes, owner_id,
+	hold_expires_at, status_changed_at, status_reason, ready_forced, created_at, updated_at`
 
 func scanBooking(row pgx.Row) (*domain.Booking, error) {
 	var b domain.Booking
 	var status string
 	err := row.Scan(
 		&b.ID, &b.BranchID, &b.CustomerID, &b.DepartureID, &b.LeadID, &status, &b.PaxCount,
-		&b.TotalAmount, &b.DiscountAmt, &b.CostAmt, &b.CollectedAmt, &b.BalanceAmt, &b.Currency, &b.Notes,
-		&b.OwnerID, &b.CreatedAt, &b.UpdatedAt,
+		&b.TotalAmount, &b.DiscountAmt, &b.TaxAmt, &b.FeeAmt, &b.CostAmt, &b.CollectedAmt, &b.BalanceAmt,
+		&b.Currency, &b.Notes, &b.OwnerID,
+		&b.HoldExpiresAt, &b.StatusChangedAt, &b.StatusReason, &b.ReadyForced, &b.CreatedAt, &b.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -82,31 +84,38 @@ func (r *Repository) Create(ctx context.Context, b *domain.Booking) error {
 	if err := pgscope.EnsureBranch(ctx, b.BranchID); err != nil {
 		return err
 	}
+	changedAt := b.StatusChangedAt
+	if changedAt.IsZero() {
+		changedAt = b.CreatedAt
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO bookings (
 			id, branch_id, customer_id, departure_id, lead_id, status, pax_count,
-			total_amount, discount_amt, cost_amt, collected_amt, balance_amt, currency, notes, owner_id, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+			total_amount, discount_amt, tax_amt, fee_amt, cost_amt, collected_amt, balance_amt, currency, notes, owner_id,
+			hold_expires_at, status_changed_at, status_reason, ready_forced, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
 		b.ID, b.BranchID, b.CustomerID, b.DepartureID, b.LeadID, b.Status, b.PaxCount,
-		b.TotalAmount, b.DiscountAmt, b.CostAmt, b.CollectedAmt, b.BalanceAmt, b.Currency, b.Notes,
-		b.OwnerID, b.CreatedAt, b.UpdatedAt,
+		b.TotalAmount, b.DiscountAmt, b.TaxAmt, b.FeeAmt, b.CostAmt, b.CollectedAmt, b.BalanceAmt, b.Currency, b.Notes,
+		b.OwnerID, b.HoldExpiresAt, changedAt, b.StatusReason, b.ReadyForced, b.CreatedAt, b.UpdatedAt,
 	)
 	return err
 }
 
+// Update writes the editable and money fields; lifecycle columns are only
+// written by SaveStatus.
 func (r *Repository) Update(ctx context.Context, b *domain.Booking) error {
 	q := tx.QuerierFrom(ctx, r.pool)
 	scope, args, err := pgscope.Clause(ctx, scopeBookings, []any{
-		b.ID, b.Status, b.PaxCount, b.TotalAmount, b.DiscountAmt, b.CostAmt,
+		b.ID, b.PaxCount, b.TotalAmount, b.DiscountAmt, b.TaxAmt, b.FeeAmt, b.CostAmt,
 		b.CollectedAmt, b.BalanceAmt, b.Currency, b.Notes, b.OwnerID, b.UpdatedAt,
 	})
 	if err != nil {
 		return err
 	}
 	tag, err := q.Exec(ctx, `
-		UPDATE bookings SET status=$2, pax_count=$3, total_amount=$4, discount_amt=$5, cost_amt=$6,
-			collected_amt=$7, balance_amt=$8, currency=$9, notes=$10, owner_id=$11, updated_at=$12
+		UPDATE bookings SET pax_count=$2, total_amount=$3, discount_amt=$4, tax_amt=$5, fee_amt=$6, cost_amt=$7,
+			collected_amt=$8, balance_amt=$9, currency=$10, notes=$11, owner_id=$12, updated_at=$13
 		WHERE id=$1`+scope, args...)
 	if err != nil {
 		return err
@@ -115,6 +124,103 @@ func (r *Repository) Update(ctx context.Context, b *domain.Booking) error {
 		return shared.NewNotFound("booking")
 	}
 	return nil
+}
+
+func (r *Repository) FindForUpdate(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeBookings, []any{id})
+	if err != nil {
+		return nil, err
+	}
+	b, err := scanBooking(q.QueryRow(ctx, `SELECT `+bookingCols+` FROM bookings WHERE id=$1`+scope+` FOR UPDATE`, args...))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, shared.NewNotFound("booking")
+	}
+	return b, err
+}
+
+func (r *Repository) SaveStatus(ctx context.Context, b *domain.Booking) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeBookings, []any{
+		b.ID, b.Status, b.HoldExpiresAt, b.StatusChangedAt, b.StatusReason, b.ReadyForced, b.UpdatedAt,
+	})
+	if err != nil {
+		return err
+	}
+	tag, err := q.Exec(ctx, `
+		UPDATE bookings SET status=$2, hold_expires_at=$3, status_changed_at=$4, status_reason=$5,
+			ready_forced=$6, updated_at=$7
+		WHERE id=$1`+scope, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("booking")
+	}
+	return nil
+}
+
+// LockDeparture is unscoped like the seat count it protects.
+func (r *Repository) LockDeparture(ctx context.Context, departureID uuid.UUID) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	var id uuid.UUID
+	err := q.QueryRow(ctx, `SELECT id FROM departures WHERE id=$1 FOR UPDATE`, departureID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return shared.NewNotFound("departure")
+	}
+	return err
+}
+
+func (r *Repository) listIDs(ctx context.Context, where []string, args []any, after uuid.UUID, limit int) ([]uuid.UUID, error) {
+	args = append(args, after)
+	where = append(where, fmt.Sprintf("b.id > $%d", len(args)))
+	where, args, err := pgscope.Append(ctx, scopeParent, where, args)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 200
+	}
+	args = append(args, limit)
+	q := tx.QuerierFrom(ctx, r.pool)
+	rows, err := q.Query(ctx, fmt.Sprintf(`SELECT b.id FROM bookings b WHERE %s ORDER BY b.id LIMIT $%d`,
+		strings.Join(where, " AND "), len(args)), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) ListExpiredHolds(ctx context.Context, now time.Time, after uuid.UUID, limit int) ([]uuid.UUID, error) {
+	return r.listIDs(ctx, []string{"b.status = 'option_hold'", "b.hold_expires_at <= $1"}, []any{now}, after, limit)
+}
+
+func (r *Repository) ListDueForTravel(ctx context.Context, today time.Time, after uuid.UUID, limit int) ([]uuid.UUID, error) {
+	return r.listIDs(ctx, []string{
+		"b.status IN ('confirmed','partially_paid','ready')",
+		"EXISTS (SELECT 1 FROM departures d WHERE d.id = b.departure_id AND d.depart_date <= $1::date)",
+	}, []any{today.Format("2006-01-02")}, after, limit)
+}
+
+// ListDerivedCandidates skips confirmed-family bookings whose status already
+// matches their money and cannot become ready (balance still open).
+func (r *Repository) ListDerivedCandidates(ctx context.Context, after uuid.UUID, limit int) ([]uuid.UUID, error) {
+	return r.listIDs(ctx, []string{
+		"b.status IN ('confirmed','partially_paid','ready')",
+		`NOT (b.balance_amt > 0 AND (
+			(b.status = 'confirmed' AND b.collected_amt <= 0) OR
+			(b.status = 'partially_paid' AND b.collected_amt > 0)))`,
+		"NOT (b.status = 'ready' AND b.ready_forced)",
+	}, nil, after, limit)
 }
 
 func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Booking, error) {
@@ -281,15 +387,17 @@ func (r *Repository) ListParticipants(ctx context.Context, bookingID uuid.UUID) 
 	return out, rows.Err()
 }
 
-// CountConfirmedPaxByDeparture is deliberately unscoped: departure capacity
-// is shared across branches and owners, so the confirm gate must see every
-// confirmed seat. It exposes only an aggregate.
+// CountConfirmedPaxByDeparture sums pax in seat-consuming statuses. It is
+// deliberately unscoped: departure capacity is shared across branches and
+// owners, so the seat guard must see every seat. It exposes only an aggregate.
 func (r *Repository) CountConfirmedPaxByDeparture(ctx context.Context, departureID uuid.UUID) (int, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	var n int
 	err := q.QueryRow(ctx, `
 		SELECT COALESCE(SUM(pax_count),0) FROM bookings
-		WHERE departure_id=$1 AND status='confirmed'`, departureID).Scan(&n)
+		WHERE departure_id=$1
+		  AND status IN ('option_hold','confirmed','partially_paid','ready','travelled','completed')`,
+		departureID).Scan(&n)
 	return n, err
 }
 
@@ -331,9 +439,9 @@ func (r *Repository) ReplaceLineItems(ctx context.Context, bookingID uuid.UUID, 
 		}
 		if _, err := q.Exec(ctx, `
 			INSERT INTO booking_line_items (
-				id, booking_id, kind, label, quantity, unit_price, unit_cost, sort_order, created_at, updated_at
-			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-			id, bookingID, it.Kind, it.Label, it.Quantity, it.UnitPrice, it.UnitCost, i, now, now,
+				id, booking_id, kind, category, label, quantity, unit_price, unit_cost, sort_order, created_at, updated_at
+			) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+			id, bookingID, it.Kind, it.Category, it.Label, it.Quantity, it.UnitPrice, it.UnitCost, i, now, now,
 		); err != nil {
 			return err
 		}
@@ -348,7 +456,7 @@ func (r *Repository) ListLineItems(ctx context.Context, bookingID uuid.UUID) ([]
 		return nil, err
 	}
 	rows, err := q.Query(ctx, `
-		SELECT li.id, li.booking_id, li.kind, li.label, li.quantity, li.unit_price, li.unit_cost, li.sort_order,
+		SELECT li.id, li.booking_id, li.kind, li.category, li.label, li.quantity, li.unit_price, li.unit_cost, li.sort_order,
 			li.created_at, li.updated_at
 		FROM booking_line_items li WHERE li.booking_id=$1`+scope+` ORDER BY li.sort_order`, args...)
 	if err != nil {
@@ -358,7 +466,7 @@ func (r *Repository) ListLineItems(ctx context.Context, bookingID uuid.UUID) ([]
 	var out []domain.LineItem
 	for rows.Next() {
 		var l domain.LineItem
-		if err := rows.Scan(&l.ID, &l.BookingID, &l.Kind, &l.Label, &l.Quantity, &l.UnitPrice, &l.UnitCost,
+		if err := rows.Scan(&l.ID, &l.BookingID, &l.Kind, &l.Category, &l.Label, &l.Quantity, &l.UnitPrice, &l.UnitCost,
 			&l.SortOrder, &l.CreatedAt, &l.UpdatedAt); err != nil {
 			return nil, err
 		}

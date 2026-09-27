@@ -67,7 +67,7 @@ func (a *DashboardAggregator) Compute(ctx context.Context, branchID *uuid.UUID, 
 	}
 	if err := q.QueryRow(ctx, `
 		SELECT COUNT(*) FROM bookings b
-		WHERE b.balance_amt > 0 AND b.status = 'confirmed'
+		WHERE b.balance_amt > 0 AND b.status IN ('confirmed','partially_paid','ready','travelled')
 		  AND b.created_at >= $1 AND b.created_at < $2
 		  AND ($3::uuid IS NULL OR b.branch_id = $3)`+bsc, args...).Scan(&kpi.BookingsUnpaid); err != nil {
 		return nil, err
@@ -81,9 +81,9 @@ func (a *DashboardAggregator) Compute(ctx context.Context, branchID *uuid.UUID, 
 	}
 	if err := q.QueryRow(ctx, `
 		SELECT COALESCE(SUM(b.total_amount),0), COALESCE(SUM(b.collected_amt),0),
-			COALESCE(SUM(b.total_amount - COALESCE(b.cost_amt,0)),0)
+			COALESCE(SUM(b.total_amount - b.tax_amt - b.fee_amt - COALESCE(b.cost_amt,0)),0)
 		FROM bookings b
-		WHERE b.status IN ('confirmed','completed')
+		WHERE b.status IN ('confirmed','partially_paid','ready','travelled','completed')
 		  AND b.created_at >= $1 AND b.created_at < $2
 		  AND ($3::uuid IS NULL OR b.branch_id = $3)`+bsc, args...).
 		Scan(&kpi.BookedAmt, &kpi.CollectedAmt, &kpi.MarginAmt); err != nil {
@@ -164,7 +164,7 @@ func (a *DashboardAggregator) AttentionFeed(ctx context.Context, branchID *uuid.
 					GREATEST(0, EXTRACT(EPOCH FROM (NOW() - b.created_at))/3600)::int,
 					'bookings'
 				FROM bookings b
-				WHERE b.status='confirmed' AND b.balance_amt > 0
+				WHERE b.status IN ('confirmed','partially_paid','ready','travelled') AND b.balance_amt > 0
 				  AND ($1::uuid IS NULL OR b.branch_id=$1)`+bsc+`
 			)
 			UNION ALL

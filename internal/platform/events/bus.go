@@ -66,6 +66,7 @@ const (
 	BookingDrafted       = "booking.draft"
 	BookingConfirmed     = "booking.confirmed"
 	BookingCancelled     = "booking.cancelled"
+	BookingStatusChanged = "booking.status_changed"
 	PaymentRecorded      = "payment.recorded"
 	TaskCreated          = "task.created"
 	MessageReceived      = "inbox.message_received"
@@ -91,6 +92,7 @@ func Catalog() []CatalogEntry {
 		{Name: BookingDrafted, Description: "Booking drafted", Idempotent: true},
 		{Name: BookingConfirmed, Description: "Booking confirmed", Idempotent: true},
 		{Name: BookingCancelled, Description: "Booking cancelled", Idempotent: true},
+		{Name: BookingStatusChanged, Description: "Booking lifecycle status changed (manual, override or system)", Idempotent: true},
 		{Name: PaymentRecorded, Description: "Payment ledger entry recorded", Idempotent: true},
 		{Name: TaskCreated, Description: "Task created (seeded or manual)", Idempotent: true},
 		{Name: TaskEscalated, Description: "Task escalated", Idempotent: true},

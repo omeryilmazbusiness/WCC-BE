@@ -12,13 +12,15 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
 
 type Handler struct {
-	Svc *appsvc.Service
+	Svc      *appsvc.Service
+	Promises *appsvc.Promises
 }
 
 type recordRequest struct {
@@ -30,6 +32,7 @@ type recordRequest struct {
 	Note           string    `json:"note"`
 	IdempotencyKey string    `json:"idempotency_key"`
 	AutoVerify     bool      `json:"auto_verify"`
+	ReceivedAt     string    `json:"received_at"`
 }
 
 func mapPayment(p *domain.Payment) map[string]any {
@@ -41,6 +44,14 @@ func mapPayment(p *domain.Payment) map[string]any {
 		"method": p.Method, "reference": p.Reference, "recorded_by": p.RecordedBy,
 		"idempotency_key": p.IdempotencyKey, "event_type": p.EventType, "status": p.Status,
 		"note": p.Note, "created_at": p.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"received_at": p.ReceivedAt.Format(time.DateOnly),
+		"reporting":   nil, "fx_missing": p.Reporting == nil,
+	}
+	if r := p.Reporting; r != nil {
+		m["reporting"] = map[string]any{
+			"currency": r.Currency, "amount": r.Amount, "rate": fx.FormatRate(r.RateScaled),
+			"effective_date": r.EffectiveDate.Format(time.DateOnly),
+		}
 	}
 	if p.ReversesPaymentID != nil {
 		m["reverses_payment_id"] = *p.ReversesPaymentID
@@ -52,6 +63,63 @@ func mapPayment(p *domain.Payment) map[string]any {
 		m["approved_at"] = p.ApprovedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return m
+}
+
+func mapPromise(p *domain.Promise) map[string]any {
+	m := map[string]any{
+		"id": p.ID, "booking_id": p.BookingID, "amount": p.Amount, "currency": p.Currency,
+		"promised_on": p.PromisedOn.Format(time.DateOnly), "note": p.Note, "status": p.Status,
+		"task_id": p.TaskID, "created_by": p.CreatedBy,
+		"created_at": p.CreatedAt.UTC().Format(time.RFC3339), "resolved_at": nil,
+	}
+	if p.ResolvedAt != nil {
+		m["resolved_at"] = p.ResolvedAt.UTC().Format(time.RFC3339)
+	}
+	return m
+}
+
+func mapSummary(s *domain.FinancialSummary, financials bool) map[string]any {
+	m := map[string]any{
+		"currency": s.Currency, "subtotal": s.Subtotal, "discount": s.Discount, "tax": s.Tax,
+		"fees": s.Fees, "total": s.Total, "collected": s.Collected, "pending": s.Pending,
+		"balance": s.Balance, "reporting": nil,
+	}
+	if financials {
+		m["cost"] = s.Cost
+		m["margin"] = s.Margin
+	}
+	if r := s.Reporting; r != nil {
+		m["reporting"] = map[string]any{
+			"currency": r.Currency, "total": r.Total, "collected": r.Collected, "balance": r.Balance,
+			"rate": fx.FormatRate(r.RateScaled), "effective_date": r.EffectiveDate.Format(time.DateOnly),
+		}
+	}
+	promises := map[string]any{
+		"open_count": s.Promises.OpenCount, "open_amount": s.Promises.OpenAmount, "next_promised_on": nil,
+	}
+	if s.Promises.NextPromisedOn != nil {
+		promises["next_promised_on"] = s.Promises.NextPromisedOn.Format(time.DateOnly)
+	}
+	m["promises"] = promises
+	return m
+}
+
+// canSeeFinancials must match the booking field-redaction rule (T-243):
+// cost and margin need payments.read.
+func canSeeFinancials(r *http.Request) bool {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	return ok && platformauth.HasPermission(claims.Role, platformauth.PermPaymentsRead)
+}
+
+func optionalDate(v, field string) (*time.Time, error) {
+	if v == "" {
+		return nil, nil
+	}
+	d, err := time.Parse(time.DateOnly, v)
+	if err != nil {
+		return nil, shared.NewValidation(field + " must be YYYY-MM-DD")
+	}
+	return &d, nil
 }
 
 func mapSchedule(s *domain.Schedule) map[string]any {
@@ -87,10 +155,17 @@ func (h Handler) Record(w http.ResponseWriter, r *http.Request) {
 	if key == "" {
 		key = r.Header.Get("Idempotency-Key")
 	}
+	receivedAt, err := optionalDate(req.ReceivedAt, "received_at")
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	p, err := h.Svc.Record(r.Context(), appsvc.RecordInput{
 		BookingID: req.BookingID, Amount: req.Amount, Currency: req.Currency,
 		Method: req.Method, Reference: req.Reference, Note: req.Note,
 		RecordedBy: claims.UserID, IdempotencyKey: key, AutoVerify: req.AutoVerify,
+		MayApprove: platformauth.HasPermission(claims.Role, platformauth.PermPaymentsApprove),
+		ReceivedAt: receivedAt,
 	})
 	if err != nil {
 		response.Error(w, err)
@@ -128,7 +203,85 @@ func (h Handler) FinancialSummary(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, sum)
+	response.JSON(w, http.StatusOK, mapSummary(sum, canSeeFinancials(r)))
+}
+
+func (h Handler) ListPromises(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	items, err := h.Promises.List(r.Context(), id)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(items))
+	for i := range items {
+		out = append(out, mapPromise(&items[i]))
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+func (h Handler) CreatePromise(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	var body struct {
+		Amount     int64  `json:"amount"`
+		Currency   string `json:"currency"`
+		PromisedOn string `json:"promised_on"`
+		Note       string `json:"note"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	promisedOn, err := optionalDate(body.PromisedOn, "promised_on")
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	if promisedOn == nil {
+		response.Error(w, shared.NewValidation("promised_on is required"))
+		return
+	}
+	p, err := h.Promises.Create(r.Context(), appsvc.CreatePromiseInput{
+		BookingID: id, Amount: body.Amount, Currency: body.Currency, PromisedOn: *promisedOn,
+		Note: body.Note, ActorID: claims.UserID,
+	})
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusCreated, mapPromise(p))
+}
+
+func (h Handler) CancelPromise(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	p, err := h.Promises.Cancel(r.Context(), id, claims.UserID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, mapPromise(p))
 }
 
 func (h Handler) Verify(w http.ResponseWriter, r *http.Request) {
@@ -393,9 +546,9 @@ func (h Handler) Export(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename=finance-"+string(kind)+".csv")
+	w.Header().Set("Content-Disposition", `attachment; filename="finance-`+string(kind)+`.csv"`)
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(csv))
+	_, _ = w.Write(csv)
 }
 
 func (h Handler) ProcessReminders(w http.ResponseWriter, r *http.Request) {

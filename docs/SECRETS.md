@@ -17,6 +17,7 @@ outside SQL backups. This checklist verifies the secrets contract.
 | Channel tokens | `integration_accounts.secrets_enc`; verify token as `verify_token_hash` | WhatsApp/IG/email | Verify token once on connect, then hint only |
 | External integration secrets | `external_integrations.secrets_enc` | extint adapters | `secret_hints` only (`••••1234`) |
 | File-sync OAuth | `file_sync_connections.secrets_enc` | filesync | `secret_hints` only |
+| LiraScope API key (optional) | `LIRASCOPE_API_KEY` + `LIRASCOPE_API_SECRET` | live FX board (`fxlive`), sent only as request headers | No |
 | Passport numbers | `customers` / `booking_participants.passport_enc` (+ `passport_hash`, `passport_last4`) | customer, booking, rooming, import/export | Masked; full value only via audited reveal (`pii.read`) |
 
 ## Rules (DoD)

@@ -76,3 +76,52 @@ func TestSessionSettingsValidation(t *testing.T) {
 		}
 	}
 }
+
+func validFX() config.FXConfig {
+	return config.FXConfig{
+		LiveEnabled: true, LocalCurrency: "SYP", LivePinned: []string{"USD", "EUR", "SAR"},
+		LiveCurrencies: []string{"USD", "TRY"}, LiveMarketMaxAge: 48 * time.Hour, LiveTimeout: 10 * time.Second,
+		LiraScopeBaseURL: "https://lirascope.syria-cloud.sy/api/v1", ERAPIBaseURL: "https://open.er-api.com/v6",
+		AccountingSource: "off",
+	}
+}
+
+func TestFXLiveValidation(t *testing.T) {
+	cases := map[string]struct {
+		mutate func(*config.FXConfig)
+		ok     bool
+	}{
+		"defaults":                   {func(*config.FXConfig) {}, true},
+		"accounting official":        {func(f *config.FXConfig) { f.AccountingSource = "official" }, true},
+		"accounting unknown":         {func(f *config.FXConfig) { f.AccountingSource = "street" }, false},
+		"accounting without live":    {func(f *config.FXConfig) { f.LiveEnabled, f.AccountingSource = false, "market" }, false},
+		"disabled skips live checks": {func(f *config.FXConfig) { f.LiveEnabled, f.LocalCurrency, f.LiraScopeBaseURL = false, "", "" }, true},
+		"bad local currency":         {func(f *config.FXConfig) { f.LocalCurrency = "LIRA" }, false},
+		"bad pinned code":            {func(f *config.FXConfig) { f.LivePinned = []string{"US$"} }, false},
+		"no currencies":              {func(f *config.FXConfig) { f.LivePinned, f.LiveCurrencies = nil, nil }, false},
+		"zero timeout":               {func(f *config.FXConfig) { f.LiveTimeout = 0 }, false},
+		"bad lirascope url":          {func(f *config.FXConfig) { f.LiraScopeBaseURL = "lirascope.syria-cloud.sy" }, false},
+		"bad erapi url":              {func(f *config.FXConfig) { f.ERAPIBaseURL = "ftp://open.er-api.com" }, false},
+	}
+	for name, c := range cases {
+		fx := validFX()
+		c.mutate(&fx)
+		cfg := config.Config{App: config.AppConfig{Env: "local"}, Database: config.DatabaseConfig{URL: "postgres://x"}, Auth: validAuth(), FX: fx}
+		if err := cfg.Validate(); (err == nil) != c.ok {
+			t.Errorf("%s: ok=%v, got err %v", name, c.ok, err)
+		}
+	}
+}
+
+func TestFXLiveDefaults(t *testing.T) {
+	t.Setenv("APP_ENV", "local")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := cfg.FX
+	if os.Getenv("FX_LIVE_ENABLED") == "" && (!f.LiveEnabled || f.LocalCurrency != "SYP" || f.LiveMarketMaxAge != 48*time.Hour ||
+		len(f.LivePinned) != 3 || f.LivePinned[0] != "USD" || f.AccountingEnabled()) {
+		t.Errorf("live defaults: %+v", f)
+	}
+}

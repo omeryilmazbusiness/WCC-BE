@@ -9,15 +9,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
-type Status string
-
-const (
-	StatusDraft     Status = "draft"
-	StatusConfirmed Status = "confirmed"
-	StatusCancelled Status = "cancelled"
-	StatusCompleted Status = "completed"
-)
-
+// Line categories describe what an item line sells.
 const (
 	LinePackage   = "package"
 	LineHotel     = "hotel"
@@ -27,13 +19,24 @@ const (
 	LineExtras    = "extras"
 )
 
-func ValidLineKind(k string) bool {
-	switch k {
+func ValidLineCategory(c string) bool {
+	switch c {
 	case LinePackage, LineHotel, LineRoom, LineTransport, LineFlight, LineExtras:
 		return true
 	default:
 		return false
 	}
+}
+
+// Line kinds split a booking total into its financial components (T-274).
+const (
+	KindItem = "item"
+	KindTax  = "tax"
+	KindFee  = "fee"
+)
+
+func ValidLineKind(k string) bool {
+	return k == KindItem || k == KindTax || k == KindFee
 }
 
 type Booking struct {
@@ -46,18 +49,32 @@ type Booking struct {
 	PaxCount     int
 	TotalAmount  int64
 	DiscountAmt  int64
+	TaxAmt       int64
+	FeeAmt       int64
 	CostAmt      int64
 	CollectedAmt int64
 	BalanceAmt   int64
 	Currency     string
 	Notes        string
 	OwnerID      uuid.UUID
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// HoldExpiresAt is set exactly while Status is option_hold.
+	HoldExpiresAt   *time.Time
+	StatusChangedAt time.Time
+	StatusReason    string
+	// ReadyForced keeps an overridden ready status from being re-derived.
+	ReadyForced bool
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
+// Subtotal is the item amount before discount, tax and fees.
+func (b *Booking) Subtotal() int64 {
+	return b.TotalAmount + b.DiscountAmt - b.TaxAmt - b.FeeAmt
+}
+
+// Margin is net revenue after discount minus cost; tax and fees are pass-through.
 func (b *Booking) Margin() int64 {
-	return b.TotalAmount - b.CostAmt - b.DiscountAmt
+	return b.TotalAmount - b.TaxAmt - b.FeeAmt - b.CostAmt
 }
 
 type Participant struct {
@@ -78,6 +95,8 @@ type LineItem struct {
 	ID        uuid.UUID
 	BookingID uuid.UUID
 	Kind      string
+	// Category is set for item lines only.
+	Category  string
 	Label     string
 	Quantity  int
 	UnitPrice int64
@@ -114,57 +133,37 @@ type ListFilter struct {
 	Offset      int
 }
 
-// Readiness for confirm gate + travel checklist (T-065 / Epic 12).
+// Readiness reports the travel-readiness gate for the ready status and
+// whether a manual confirm would currently pass its guards.
 type Readiness struct {
-	BookingID           uuid.UUID `json:"booking_id"`
-	CanConfirm          bool      `json:"can_confirm"`
-	Blocking            []string  `json:"blocking"`
-	Warnings            []string  `json:"warnings"`
-	ParticipantsCount   int       `json:"participants_count"`
-	PaxCount            int       `json:"pax_count"`
-	MissingPassports    int       `json:"missing_passports"`
-	ChecklistRequired   int       `json:"checklist_required"`
-	ChecklistCompleted  int       `json:"checklist_completed"`
-	ChecklistIncomplete int       `json:"checklist_incomplete"`
-	BalanceAmt          int64     `json:"balance_amt"`
-	DaysToDeparture     *int      `json:"days_to_departure,omitempty"`
-	RiskAlerts          []string  `json:"risk_alerts"`
-	OverrideActive      bool      `json:"override_active"`
-	MissingDocs         []string  `json:"missing_docs"`
+	BookingID  uuid.UUID `json:"booking_id"`
+	CanConfirm bool      `json:"can_confirm"`
+	// ConfirmGuards lists the guards a confirm request would fail now.
+	ConfirmGuards []Guard `json:"confirm_guards"`
+	// ReadinessOK is the readiness input of the derived ready status.
+	ReadinessOK         bool     `json:"readiness_ok"`
+	Blocking            []string `json:"blocking"`
+	Warnings            []string `json:"warnings"`
+	ParticipantsCount   int      `json:"participants_count"`
+	PaxCount            int      `json:"pax_count"`
+	MissingPassports    int      `json:"missing_passports"`
+	ChecklistRequired   int      `json:"checklist_required"`
+	ChecklistCompleted  int      `json:"checklist_completed"`
+	ChecklistIncomplete int      `json:"checklist_incomplete"`
+	BalanceAmt          int64    `json:"balance_amt"`
+	DaysToDeparture     *int     `json:"days_to_departure,omitempty"`
+	RiskAlerts          []string `json:"risk_alerts"`
+	OverrideActive      bool     `json:"override_active"`
+	MissingDocs         []string `json:"missing_docs"`
 }
 
-// ReadinessOverride allows confirm despite missing required documents (Epic 12).
+// ReadinessOverride lifts the checklist and document gates of readiness (T-271).
 type ReadinessOverride struct {
 	ID        uuid.UUID
 	BookingID uuid.UUID
 	Reason    string
 	ActorID   *uuid.UUID
 	CreatedAt time.Time
-}
-
-var allowed = map[Status][]Status{
-	StatusDraft:     {StatusConfirmed, StatusCancelled},
-	StatusConfirmed: {StatusCompleted, StatusCancelled},
-	StatusCancelled: {},
-	StatusCompleted: {},
-}
-
-func CanTransition(from, to Status) bool {
-	for _, s := range allowed[from] {
-		if s == to {
-			return true
-		}
-	}
-	return false
-}
-
-func (b *Booking) TransitionTo(to Status) error {
-	if !CanTransition(b.Status, to) {
-		return shared.NewInvalidState("cannot transition booking from " + string(b.Status) + " to " + string(to))
-	}
-	b.Status = to
-	b.UpdatedAt = time.Now().UTC()
-	return nil
 }
 
 func (b *Booking) RecomputeBalance() {
@@ -174,51 +173,111 @@ func (b *Booking) RecomputeBalance() {
 	}
 }
 
-// RecalculateFromLines sets TotalAmount/CostAmt from line items minus discount (T-062).
-func (b *Booking) RecalculateFromLines(lines []LineItem) {
-	var total, cost int64
-	for _, l := range lines {
-		total += l.LineTotal()
-		cost += l.LineCost()
-	}
-	if b.DiscountAmt < 0 {
-		b.DiscountAmt = 0
-	}
-	b.TotalAmount = total - b.DiscountAmt
-	if b.TotalAmount < 0 {
-		b.TotalAmount = 0
-	}
-	b.CostAmt = cost
-	b.RecomputeBalance()
-	b.UpdatedAt = time.Now().UTC()
+// Totals is the deterministic breakdown of a line-driven booking:
+// Total = Subtotal - Discount + Tax + Fees.
+type Totals struct {
+	Subtotal int64
+	Discount int64
+	Tax      int64
+	Fees     int64
+	Total    int64
+	Cost     int64
 }
 
-func (b *Booking) ApplyUpdate(pax int, total int64, currency string, discount *int64, notes *string) error {
-	if b.Status != StatusDraft {
-		return shared.NewInvalidState("only draft bookings can be updated")
+// ComputeTotals sums lines by kind; the discount applies to item lines only.
+func ComputeTotals(lines []LineItem, discount int64) (Totals, error) {
+	if discount < 0 {
+		return Totals{}, shared.NewValidation("discount_amt must be >= 0")
 	}
-	if pax <= 0 {
+	t := Totals{Discount: discount}
+	for _, l := range lines {
+		switch l.Kind {
+		case KindItem:
+			t.Subtotal += l.LineTotal()
+		case KindTax:
+			t.Tax += l.LineTotal()
+		case KindFee:
+			t.Fees += l.LineTotal()
+		default:
+			return Totals{}, shared.NewValidation("invalid line kind: " + l.Kind)
+		}
+		t.Cost += l.LineCost()
+	}
+	if discount > t.Subtotal {
+		return Totals{}, shared.NewValidation("discount_amt cannot exceed the item subtotal")
+	}
+	t.Total = t.Subtotal - t.Discount + t.Tax + t.Fees
+	return t, nil
+}
+
+func (b *Booking) applyTotals(t Totals, now time.Time) {
+	b.DiscountAmt = t.Discount
+	b.TaxAmt = t.Tax
+	b.FeeAmt = t.Fees
+	b.TotalAmount = t.Total
+	b.CostAmt = t.Cost
+	b.RecomputeBalance()
+	b.UpdatedAt = now
+}
+
+// RecalculateFromLines derives the money fields from line items (T-062, T-274).
+func (b *Booking) RecalculateFromLines(lines []LineItem, now time.Time) error {
+	t, err := ComputeTotals(lines, b.DiscountAmt)
+	if err != nil {
+		return err
+	}
+	b.applyTotals(t, now)
+	return nil
+}
+
+// UpdateFields is a PATCH of the editable booking fields.
+type UpdateFields struct {
+	PaxCount    int
+	TotalAmount int64
+	Currency    string
+	DiscountAmt *int64
+	Notes       *string
+}
+
+// ApplyUpdate edits a draft/quoted booking. With line items the money
+// fields are derived from them and TotalAmount is ignored; without lines the
+// legacy manual total (amount owed) is kept.
+func (b *Booking) ApplyUpdate(in UpdateFields, lines []LineItem, now time.Time) error {
+	if !b.Status.Editable() {
+		return shared.NewInvalidState("only draft or quoted bookings can be updated")
+	}
+	if in.PaxCount <= 0 {
 		return shared.NewValidation("pax_count must be > 0")
 	}
-	if total < 0 {
+	if in.TotalAmount < 0 {
 		return shared.NewValidation("total_amount must be >= 0")
 	}
-	b.PaxCount = pax
-	b.TotalAmount = total
-	if currency != "" {
-		b.Currency = currency
-	}
-	if discount != nil {
-		if *discount < 0 {
+	discount := b.DiscountAmt
+	if in.DiscountAmt != nil {
+		if *in.DiscountAmt < 0 {
 			return shared.NewValidation("discount_amt must be >= 0")
 		}
-		b.DiscountAmt = *discount
+		discount = *in.DiscountAmt
 	}
-	if notes != nil {
-		b.Notes = *notes
+	if len(lines) > 0 {
+		t, err := ComputeTotals(lines, discount)
+		if err != nil {
+			return err
+		}
+		b.applyTotals(t, now)
+	} else {
+		b.TotalAmount = in.TotalAmount
+		b.DiscountAmt = discount
+	}
+	b.PaxCount = in.PaxCount
+	if in.Currency != "" {
+		b.Currency = in.Currency
+	}
+	if in.Notes != nil {
+		b.Notes = *in.Notes
 	}
 	b.RecomputeBalance()
-	b.UpdatedAt = time.Now().UTC()
+	b.UpdatedAt = now
 	return nil
 }
 
@@ -269,4 +328,19 @@ type Repository interface {
 
 	UpsertReadinessOverride(ctx context.Context, o *ReadinessOverride) error
 	FindReadinessOverride(ctx context.Context, bookingID uuid.UUID) (*ReadinessOverride, error)
+}
+
+// LifecycleStore is the persistence port of status transitions and sweeps.
+// Status columns are written only through SaveStatus, so generic updates
+// (e.g. payment balance sync) can never overwrite a lifecycle change.
+type LifecycleStore interface {
+	// FindForUpdate loads the booking and row-locks it for the transaction.
+	FindForUpdate(ctx context.Context, id uuid.UUID) (*Booking, error)
+	SaveStatus(ctx context.Context, b *Booking) error
+	// LockDeparture serializes seat accounting on one departure.
+	LockDeparture(ctx context.Context, departureID uuid.UUID) error
+	// The List* sweeps page by id: they return ids greater than after.
+	ListExpiredHolds(ctx context.Context, now time.Time, after uuid.UUID, limit int) ([]uuid.UUID, error)
+	ListDueForTravel(ctx context.Context, today time.Time, after uuid.UUID, limit int) ([]uuid.UUID, error)
+	ListDerivedCandidates(ctx context.Context, after uuid.UUID, limit int) ([]uuid.UUID, error)
 }

@@ -593,6 +593,202 @@ in an import never overwrite a stored passport.
   written as `''`). Message bodies, stored document files and audit history are not rewritten by anonymization
   (retention policy); verify-token hashes are case-insensitive.
 
+## Epic 21 — Finance
+
+| Task | Status |
+|------|--------|
+| T-272 FX rates (`fx_rates`, 8-decimal fixed point), converter, payment + booking reporting snapshots, optional provider sync | Done |
+| T-274 Payment promises, follow-up / broken-promise tasks, new financial summary | Done |
+| T-276 Refund segregation of duties, `auto_verify` needs `payments.approve`, `received_at` | Done |
+| T-277 Finance queues are read-only; overdue schedules maintained by a job | Done |
+| T-278 Finance CSV export: UTF-8 BOM, formula neutralization, audited `finance.exported` | Done |
+| Live exchange rates (Damascus): LiraScope + ExchangeRate-API board, audited adopt, optional accounting sync | Done |
+
+**Money.** Amounts are integer minor units (2 decimals for every currency). Rates are stored as
+`rate_scaled = rate × 10^8` and travel as decimal strings (`"3.75000000"`). Conversion is
+`round_half_away_from_zero(amount × rate_scaled / 10^8)` with big integers. When only the reverse pair exists
+the rate is inverted to 8 decimals first (the snapshot stores that inverted rate, so every stored amount is
+reproducible). The newest rate with `effective_date ≤ on` wins; direct beats inverse on the same date. Rates are
+company-wide. Business dates (`received_at`, `promised_on`, "today") use `SCHEDULER_TZ`.
+
+**Snapshots.** Every new ledger entry stores `amount_reporting`, `reporting_currency`, `fx_rate_scaled`,
+`fx_effective_date` (branch reporting currency, rate as of `received_at`) on INSERT; the ledger trigger
+(`payments_ledger_guard`) keeps them and `received_at` immutable. Reversals copy the negated original snapshot.
+No rate → the entry is recorded with NULLs and `"fx_missing": true`. Confirming a booking snapshots its total
+into `bookings.total_reporting` (same columns) via the `booking.confirmed` reactor.
+
+**API**
+- `GET /v1/fx-rates?base&quote&from&to&page&limit` (`payments.read`) →
+  `{"data":[{"id","base","quote","rate":"3.75000000","effective_date":"2026-09-01","source","created_by","created_at"}],"meta":{"total","limit","offset","page","total_pages"}}`.
+- `POST /v1/fx-rates` (`fx.manage`: GM, finance) `{"base":"USD","quote":"SAR","rate":"3.75","effective_date":"2026-09-01","source":"manual"}`
+  → `201` rate object; `409 fx_rate_exists` for a duplicate pair/date.
+- `PUT /v1/fx-rates/{id}` (`fx.manage`) `{"rate":"3.751","source":"corrected"}` → rate object (existing snapshots never change).
+- `DELETE /v1/fx-rates/{id}` (`fx.manage`) → `{"data":{"deleted":true}}`. Mutations are audited
+  (`fx.rate_created|updated|deleted`, before/after) in the same transaction.
+- `GET /v1/fx-rates/convert?amount=10000&from=SAR&to=USD&on=2026-09-20` (`payments.read`) →
+  `{"data":{"amount":10000,"from":"SAR","to":"USD","converted":2667,"rate":"0.26666667","effective_date":"2026-09-01"}}`;
+  `404 fx_rate_not_found`.
+- `POST /v1/payments` accepts `received_at` (`YYYY-MM-DD`, default today, not in the future).
+  `auto_verify: true` without `payments.approve` → `403 forbidden_auto_verify`. Payment JSON adds
+  `"received_at"`, `"reporting":{"currency","amount","rate","effective_date"}|null`, `"fx_missing"`.
+- `POST /v1/payments/{id}/approve` by the refund requester → `403 sod_violation` (the requester may still reject).
+- `GET /v1/bookings/{id}/financial-summary` (`payments.read`) →
+  `{"data":{"currency","subtotal","discount","tax","fees","total","cost","margin","collected","pending","balance","reporting":{"currency","total","collected","balance","rate","effective_date"}|null,"promises":{"open_count","open_amount","next_promised_on"}}}`.
+  `subtotal/tax/fees` come from line items (`kind` item/tax/fee); `balance = total − collected` (negative = credit);
+  `pending` = unverified charges; `cost`/`margin` follow the booking redaction rule (`payments.read`); `reporting` uses
+  the confirmation snapshot rate, else today's rate, else `null`.
+- `GET /v1/bookings/{id}/payment-promises` (`payments.read`) →
+  `{"data":[{"id","booking_id","amount","currency","promised_on","note","status","task_id","created_by","created_at","resolved_at"}]}`;
+  `status` is the effective one (`open|kept|broken|cancelled`) — kept once verified/approved collections recorded since the
+  promise was created cover its amount, broken after `promised_on`.
+- `POST /v1/bookings/{id}/payment-promises` (`payments.write`) `{"amount":20000,"promised_on":"2026-10-05","note":"..."}`
+  (currency = booking currency) → `201` promise; creates a follow-up task for the booking owner due 09:00 on `promised_on`.
+- `POST /v1/payment-promises/{id}/cancel` (`payments.write`) → promise (`422 invalid_state` unless open).
+- `GET /v1/finance/queues/{kind}` never writes. `GET /v1/finance/export?kind=` returns a UTF-8 BOM CSV whose text cells
+  starting with `= + - @ \t \r` are prefixed with `'`; `finance.exported` (`extra.filters`, `rows`, `format`) is
+  audited before any byte is sent.
+
+**Jobs** (scheduler zone `SCHEDULER_TZ`)
+- `finance.promises_check` `0 8 * * *` — persists kept/broken, closes the follow-up task (kept) or creates an urgent
+  task + in-app notification for the owner (broken); audited as system.
+- `finance.schedules_overdue` `0 * * * *` — flips open schedules past `due_at` to `overdue` in batches of 500, one
+  audit row (`payment.schedule_overdue`, system) per schedule; idempotent.
+- `fx.rates_sync` `30 6 * * *` — scheduled when `FX_PROVIDER_URL` is set or `FX_ACCOUNTING_SOURCE` is not `off`;
+  inserts missing rates for today (`GET {url}?base={FX_PROVIDER_BASE}&date=YYYY-MM-DD` → `{"rates":{"SAR":"3.75"}}`,
+  plus live rates, see below), never overwrites manual ones. A failing provider does not block the others.
+- `fx.live_sync` `*/10 * * * *` — scheduled when `FX_LIVE_ENABLED`; refreshes the live board (below).
+
+- Migration: `00027_epic21_finance.sql` (`fx_rates`; payment snapshot columns + `received_at`; extended ledger
+  trigger; booking snapshot columns; `payment_promises`).
+- Env: `FX_PROVIDER_URL`, `FX_PROVIDER_BASE` (default `USD`), `FX_PROVIDER_TIMEOUT` (default `10s`).
+
+### Live exchange rates (Damascus)
+
+A read-only rate board for the Syria deployment. It is informational: accounting only ever uses `fx_rates`, and a
+live quote reaches `fx_rates` through a human "adopt" (or the opt-in daily accounting sync).
+
+**Sources**
+- **LiraScope** (`GET {LIRASCOPE_BASE_URL}/rates/latest?lang=en`, Syria-hosted, no key; limit 60 req/min, 1200/h per
+  IP) — `cbsRates` = Central Bank of Syria **official** rate (currently USD only), `marketRates` = Damascus parallel
+  **market**. Values are SYP per 1 unit; every quote keeps its own `observed_at` (many market quotes are months old).
+  Optional `LIRASCOPE_API_KEY` / `LIRASCOPE_API_SECRET` are sent as `X-Api-Key` / `X-Api-Secret` only when set.
+- **ExchangeRate-API** open access (`GET {ERAPI_BASE_URL}/latest/USD`, no key) — international **reference** crosses
+  (units per 1 USD), updated daily. Polled at most every 6 h and never before `time_next_update_unix`. Its terms
+  **require attribution**: the UI must show "Rates By Exchange Rate API" linking to https://www.exchangerate-api.com
+  wherever these values (`usd_cross`, derived quotes) appear; the source entry carries `attribution` for this.
+
+**Redenomination.** Syria redenominated on 2026-01-01 (1 new SYP = 100 old; ISO code still `SYP`). All values are new
+SYP. A payload quoting more than 2000 SYP per USD is old-lira data: that source's whole payload is rejected (source
+`ok:false` with an error), never divided by 100.
+
+**Official vs market.** Per currency: `official` is the CBS quote, or — when CBS publishes none — `derived`
+= CBS USD ÷ reference units-per-USD. `market` is the direct LiraScope quote when observed within
+`FX_LIVE_MARKET_MAX_AGE` (48 h); otherwise it is derived from the market USD rate the same way (`derived:true`,
+`stale` if the market USD itself is old); with no derivation possible an old direct quote is returned with
+`stale:true`; else `null`. Numbers are 8-decimal fixed point with half-away-from-zero rounding (no floats); e.g.
+official EUR = 122 ÷ 0.877506 = `139.03038840`.
+
+**Resilience.** Sources are fetched independently; a failure is stored per source (`ok:false`, `error`) while the
+last good quotes and their `fetched_at` stay on the board. Snapshots live in `fx_live_snapshots` (one row per
+source + kind, quotes as decimal strings). The board is cached in-process for 30 s. `stale` is `true` when the newest
+successful LiraScope fetch is older than 1 h (or never happened).
+
+**API**
+- `GET /v1/fx/live` (any authenticated user; `Cache-Control: private, max-age=60`) →
+  `{"data":{"local_currency":"SYP","updated_at":RFC3339|null,"stale":bool,"quotes":[{"currency":"USD","pinned":true,"official":{"buy","sell","mid","observed_at","derived"}|null,"market":{"buy","sell","mid","observed_at","derived","stale"}|null,"usd_cross":"1.00000000"|null}],"sources":[{"id","name","url","attribution"?,"kinds","ok","fetched_at","error"}],"disclaimer"}}`.
+  Quotes: pinned first (`FX_LIVE_PINNED` order), then `FX_LIVE_CURRENCIES`. `404 fx_live_disabled` when
+  `FX_LIVE_ENABLED=false`.
+- `POST /v1/fx/live/refresh` (`fx.manage`) — syncs inline (20 s budget; a source is not refetched within 30 s, and
+  ExchangeRate-API never before its next update) → same board.
+- `POST /v1/fx-rates/adopt` (`fx.manage`) `{"currency":"USD","kind":"official|market","side":"mid|buy|sell","effective_date":"YYYY-MM-DD"}`
+  (`effective_date` defaults to today in `SCHEDULER_TZ`) → `201` rate object (as in `GET /v1/fx-rates`) with
+  `base=currency`, `quote=FX_LOCAL_CURRENCY`, `source` `lirascope:<kind>:<side>` or `derived:<kind>:<side>`;
+  `409 fx_rate_exists`; `422 live_quote_unavailable` when that quote is `null`. Audited as `fx.rate_adopted`
+  (`extra`: kind, side, derived, stale, observed_at) in the same transaction (fail closed).
+
+**Accounting sync.** With `FX_ACCOUNTING_SOURCE=official|market`, the daily `fx.rates_sync` also stores today's
+mid of each pinned currency → local currency via insert-if-absent (source `lirascope:<kind>`, or `derived:<kind>`
+for derived values). It skips stale market quotes, writes nothing when the board is stale and never overwrites a
+manual rate.
+
+**Config** — `FX_LIVE_ENABLED` (`true`), `FX_LOCAL_CURRENCY` (`SYP`), `FX_LIVE_PINNED` (`USD,EUR,SAR`),
+`FX_LIVE_CURRENCIES` (`USD,EUR,SAR,TRY,AED,GBP,JOD,EGP,KWD,QAR,LBP,IQD`), `FX_LIVE_MARKET_MAX_AGE` (`48h`),
+`FX_LIVE_TIMEOUT` (`10s`), `LIRASCOPE_BASE_URL` (`https://lirascope.syria-cloud.sy/api/v1`), `ERAPI_BASE_URL`
+(`https://open.er-api.com/v6`), `LIRASCOPE_API_KEY` / `LIRASCOPE_API_SECRET` (optional secrets),
+`FX_ACCOUNTING_SOURCE` (`off`). Migration `00028_fx_live_snapshots.sql`.
+
+## Epic 21 — Booking lifecycle
+
+| Task | Status |
+|------|--------|
+| T-268 Nine statuses, pure state machine, `POST /v1/bookings/{id}/status`, `allowed_transitions` | Done |
+| T-269 Automatic transitions (derived paid/ready, option hold expiry, travelled) + jobs | Done |
+| T-271 Manager/GM override (`bookings.override`), readiness override folded in | Done |
+| T-274 (booking side) Line `kind` item/tax/fee, `subtotal − discount + tax + fees = total`, `bookings.discount` | Done |
+
+The rules live in `internal/domain/booking/lifecycle.go` (no I/O); `internal/app/booking` loads facts, locks rows and
+audits. Seat-holding statuses are `option_hold, confirmed, partially_paid, ready, travelled, completed`;
+`departures.capacity_sold` is recomputed from them under a `FOR UPDATE` lock on the departure, and each seat change
+records `capacity_sold_before/after`.
+
+| From | To | Actor | Guards |
+|------|----|-------|--------|
+| draft | quoted, option_hold, confirmed, cancelled | user | see below |
+| quoted | draft, option_hold, confirmed, cancelled | user | |
+| option_hold | quoted, confirmed, cancelled | user | |
+| option_hold | draft (`hold_expired`) | system | `hold_not_expired` |
+| confirmed ⇄ partially_paid ⇄ ready | each other (`derived`) | system | target must equal `derive(collected, balance, readiness_ok)` |
+| confirmed, partially_paid | ready | override | readiness / balance bypassed and recorded |
+| confirmed, partially_paid, ready | cancelled | user | reason required |
+| confirmed, partially_paid, ready | travelled (`departed`) | system | `departure_not_reached` |
+| travelled | completed | user | |
+| cancelled, completed | — | — | terminal |
+
+- Entering `option_hold` or the confirmed family from outside: `customer_required`, `departure_required`,
+  `sales_closed`, `no_capacity` (seat acquisition only). `option_hold` needs `hold_expires_at` in the future and at
+  most 14 days away (`hold_expiry_required|in_past|too_far`). `cancelled` needs a reason (`reason_required`).
+- `derive`: `collected = 0` → `confirmed`; `balance ≤ 0` and readiness OK → `ready`; otherwise `partially_paid`.
+  Readiness OK = participants complete + required checklist + required documents (a readiness override lifts
+  checklist/documents, never participants). A forced `ready` (`ready_forced`) sticks until the booking leaves the family.
+- Override: `bookings.override` (manager, GM), reason ≥ 10 characters (`override_reason_too_short`); bypasses only
+  `readiness_incomplete` / `balance_outstanding`; capacity, customer and departure stay hard. Audited as
+  `booking.status_overridden` with `extra.guards_bypassed`. `POST /{id}/readiness-override` now requires
+  `bookings.override` and re-derives the status.
+- Every change writes `booking.status_changed` (`before/after` `{status, hold_expires_at[, status_reason]}`,
+  `extra.actor_kind`) in the same transaction; automatic ones use `actor_type = system`.
+
+**API**
+- `POST /v1/bookings/{id}/status` (`bookings.write`)
+  `{"status":"option_hold","reason":"...","hold_expires_at":"2026-10-01T12:00:00Z","override":false}` → `{"data":booking}`.
+  `409 invalid_transition` (no such edge for the actor), `422 guard_failed` with
+  `{"error":{"code":"guard_failed","details":{"guards":["no_capacity"]}}}`, `403` for `override:true` without
+  `bookings.override`, `400` for a non-RFC3339 `hold_expires_at`. `POST /{id}/confirm` is `{"status":"confirmed"}`.
+- Booking JSON adds `status_changed_at`, `status_reason`, `hold_expires_at` (RFC3339 or `null`), `subtotal_amt`,
+  `tax_amt`, `fee_amt` and `allowed_transitions: [{"status","requires_reason","requires_override"}]` (override
+  edges only for callers holding `bookings.override`).
+- `GET /{id}/readiness` adds `readiness_ok` and `confirm_guards`; confirming no longer requires readiness.
+- Line items: `{"kind":"item|tax|fee","category":"package|hotel|room|transport|flight|extras","label",...}`;
+  `category` is required for `item` and empty for tax/fee (legacy `{"kind":"hotel"}` is read as item/hotel).
+  `total = subtotal − discount + tax + fees`; the discount applies to the item subtotal and cannot exceed it.
+  Line JSON adds `category`. Lines, participants deletion and PATCH totals are editable only in draft/quoted.
+- Setting or changing `discount_amt` (create or PATCH) needs `bookings.discount` (manager, GM) → otherwise `403`.
+
+**Jobs** (scheduler zone `SCHEDULER_TZ`, all idempotent, keyset batches of 200)
+- `booking.hold_expiry` `*/5 * * * *` — lapsed holds → draft, seats released, high-priority follow-up task for the owner.
+- `booking.travelled_sweep` `15 0 * * *` — confirmed-family bookings on/after `depart_date` → travelled; the audit
+  records `collected_amt`, `balance_amt`, `readiness_ok` at departure.
+- `booking.recompute_sweep` `45 * * * *` — reconciles derived statuses the payment service changes without an event.
+- `booking.recompute` `{"booking_id":"..."}` — on-demand single recompute. In-process, `payment.recorded`,
+  participant, checklist and readiness-override changes recompute immediately.
+
+- Migration: `00026_epic21_booking_lifecycle.sql` — 9-value status CHECK; `hold_expires_at`, `status_changed_at`,
+  `status_reason`, `ready_forced`, `tax_amt`, `fee_amt`; confirmed bookings with collections become `partially_paid`
+  (audited as system); `capacity_sold` resynced from seat statuses (audited); line `kind` → `category`, new
+  `kind` item/tax/fee. Down is lossy (quoted/option_hold → draft, partially_paid/ready/travelled → confirmed,
+  tax/fee lines → extras).
+- Deferred: automatic `travelled → completed` after `return_date`, hold extension endpoint, recompute on document
+  review (covered by the hourly sweep).
+
 ## Go-Live Backlog (Epic 19–26)
 
 Monzer.pdf %100 uyum ve canlıya çıkış için 110 task (T-236–T-345), sprint sırası ve kabul kriterleri: [`docs/GO_LIVE_BACKLOG.md`](docs/GO_LIVE_BACKLOG.md).

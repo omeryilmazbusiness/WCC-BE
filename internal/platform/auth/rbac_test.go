@@ -98,3 +98,25 @@ func TestPrivacyManagePermission(t *testing.T) {
 		}
 	}
 }
+
+// Epic 21 T-271/T-274 — status override and discounts are manager/GM only.
+func TestBookingOverrideAndDiscountPermissions(t *testing.T) {
+	for _, r := range AllRoles() {
+		want := r == RoleGM || r == RoleManager
+		for _, p := range []Permission{PermBookingsOverride, PermBookingsDiscount} {
+			if HasPermission(r, p) != want {
+				t.Fatalf("%s %s = %v, want %v", r, p, !want, want)
+			}
+		}
+	}
+}
+
+// Epic 21 T-272 — FX rates are maintained by GM and finance only.
+func TestFXManagePermission(t *testing.T) {
+	for _, r := range AllRoles() {
+		want := r == RoleGM || r == RoleFinance
+		if HasPermission(r, PermFXManage) != want {
+			t.Fatalf("%s fx.manage = %v, want %v", r, !want, want)
+		}
+	}
+}

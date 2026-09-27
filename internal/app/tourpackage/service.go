@@ -469,14 +469,14 @@ func (s *Service) Readiness(ctx context.Context, departureID uuid.UUID) (*domain
 	}
 	r.BookingsTotal = len(books)
 	for _, b := range books {
-		switch b.Status {
-		case bookingdomain.StatusDraft:
-			r.BookingsDraft++
-		case bookingdomain.StatusConfirmed:
+		switch {
+		case b.Status.IsSold():
 			r.BookingsConfirmed++
 			r.PaxConfirmed += b.PaxCount
-		case bookingdomain.StatusCancelled:
+		case b.Status == bookingdomain.StatusCancelled:
 			r.BookingsCancelled++
+		default:
+			r.BookingsDraft++
 		}
 	}
 	return r, nil

@@ -21,7 +21,8 @@ type errorBody struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	// RetryAfter is seconds until retry for 423/429/503 responses.
-	RetryAfter int `json:"retry_after,omitempty"`
+	RetryAfter int            `json:"retry_after,omitempty"`
+	Details    map[string]any `json:"details,omitempty"`
 }
 
 func JSON(w http.ResponseWriter, status int, data any) {
@@ -40,6 +41,9 @@ func Error(w http.ResponseWriter, err error) {
 		secs := int((app.RetryAfter + time.Second - 1) / time.Second)
 		body.RetryAfter = secs
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
+	}
+	if app != nil && len(app.Details) > 0 {
+		body.Details = app.Details
 	}
 	write(w, status, envelope{Error: body})
 }

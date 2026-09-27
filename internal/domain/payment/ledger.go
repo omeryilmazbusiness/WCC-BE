@@ -14,12 +14,21 @@ type StatusTransition struct {
 }
 
 // StatusTransitions is the complete whitelist of ledger status changes. The
-// payments_ledger_guard trigger (migration 00025) enforces the same list;
-// every other column of a ledger entry is immutable.
+// payments_ledger_guard trigger (latest definition: migration 00027) enforces
+// the same list.
 var StatusTransitions = []StatusTransition{
 	{EventCharge, StatusUnverified, StatusVerified},
 	{EventRefund, StatusPendingApproval, StatusApproved},
 	{EventRefund, StatusPendingApproval, StatusRejected},
+}
+
+// ImmutableColumns are fixed at INSERT; payments_ledger_guard rejects any
+// change. approved_by, approved_at and note may be set once; status follows
+// StatusTransitions.
+var ImmutableColumns = []string{
+	"id", "booking_id", "amount", "currency", "method", "reference", "recorded_by",
+	"idempotency_key", "created_at", "event_type", "reverses_payment_id",
+	"received_at", "amount_reporting", "reporting_currency", "fx_rate_scaled", "fx_effective_date",
 }
 
 // CanTransition reports whether an entry of eventType may move from -> to.

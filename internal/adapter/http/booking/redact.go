@@ -11,6 +11,8 @@ import (
 // The zero value redacts everything.
 type fieldAccess struct {
 	financials bool // cost and margin
+	override   bool
+	discount   bool
 }
 
 func fieldAccessFor(r *http.Request) fieldAccess {
@@ -24,5 +26,7 @@ func fieldAccessFor(r *http.Request) fieldAccess {
 func fieldAccessForRole(role platformauth.Role) fieldAccess {
 	return fieldAccess{
 		financials: platformauth.HasPermission(role, platformauth.PermPaymentsRead),
+		override:   platformauth.HasPermission(role, platformauth.PermBookingsOverride),
+		discount:   platformauth.HasPermission(role, platformauth.PermBookingsDiscount),
 	}
 }

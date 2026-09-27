@@ -42,7 +42,10 @@ type updateRequest struct {
 }
 
 type statusRequest struct {
-	Status string `json:"status"`
+	Status        string  `json:"status"`
+	Reason        string  `json:"reason"`
+	HoldExpiresAt *string `json:"hold_expires_at"`
+	Override      bool    `json:"override"`
 }
 
 type participantRequest struct {
@@ -60,6 +63,7 @@ func newPassport(p *string) string {
 type lineItemsRequest struct {
 	Items []struct {
 		Kind      string `json:"kind"`
+		Category  string `json:"category"`
 		Label     string `json:"label"`
 		Quantity  int    `json:"quantity"`
 		UnitPrice int64  `json:"unit_price"`
@@ -79,25 +83,36 @@ func mapBooking(b *domain.Booking, fa fieldAccess) map[string]any {
 	if fa.financials {
 		cost, margin = b.CostAmt, b.Margin()
 	}
+	var holdExpiresAt any
+	if b.HoldExpiresAt != nil {
+		holdExpiresAt = b.HoldExpiresAt.UTC().Format(time.RFC3339)
+	}
 	return map[string]any{
-		"id":            b.ID,
-		"branch_id":     b.BranchID,
-		"customer_id":   b.CustomerID,
-		"departure_id":  b.DepartureID,
-		"lead_id":       b.LeadID,
-		"status":        b.Status,
-		"pax_count":     b.PaxCount,
-		"total_amount":  b.TotalAmount,
-		"discount_amt":  b.DiscountAmt,
-		"cost_amt":      cost,
-		"margin":        margin,
-		"collected_amt": b.CollectedAmt,
-		"balance_amt":   b.BalanceAmt,
-		"currency":      b.Currency,
-		"notes":         b.Notes,
-		"owner_id":      b.OwnerID,
-		"created_at":    b.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updated_at":    b.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		"id":                  b.ID,
+		"branch_id":           b.BranchID,
+		"customer_id":         b.CustomerID,
+		"departure_id":        b.DepartureID,
+		"lead_id":             b.LeadID,
+		"status":              b.Status,
+		"status_changed_at":   b.StatusChangedAt.UTC().Format(time.RFC3339Nano),
+		"status_reason":       b.StatusReason,
+		"hold_expires_at":     holdExpiresAt,
+		"allowed_transitions": domain.AllowedTransitions(b.Status, fa.override),
+		"pax_count":           b.PaxCount,
+		"subtotal_amt":        b.Subtotal(),
+		"discount_amt":        b.DiscountAmt,
+		"tax_amt":             b.TaxAmt,
+		"fee_amt":             b.FeeAmt,
+		"total_amount":        b.TotalAmount,
+		"cost_amt":            cost,
+		"margin":              margin,
+		"collected_amt":       b.CollectedAmt,
+		"balance_amt":         b.BalanceAmt,
+		"currency":            b.Currency,
+		"notes":               b.Notes,
+		"owner_id":            b.OwnerID,
+		"created_at":          b.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"updated_at":          b.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }
 
@@ -132,6 +147,7 @@ func mapLine(l domain.LineItem, fa fieldAccess) map[string]any {
 		"id":         l.ID,
 		"booking_id": l.BookingID,
 		"kind":       l.Kind,
+		"category":   l.Category,
 		"label":      l.Label,
 		"quantity":   l.Quantity,
 		"unit_price": l.UnitPrice,
@@ -179,16 +195,18 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
+	fa := fieldAccessFor(r)
 	b, err := h.Svc.CreateDraft(r.Context(), appsvc.CreateInput{
 		CustomerID: req.CustomerID, DepartureID: req.DepartureID,
 		LeadID: req.LeadID, PaxCount: req.PaxCount, TotalAmount: req.TotalAmount,
 		DiscountAmt: req.DiscountAmt, Currency: req.Currency, Notes: req.Notes,
+		CanDiscount: fa.discount,
 	})
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusCreated, mapBooking(b, fieldAccessFor(r)))
+	response.JSON(w, http.StatusCreated, mapBooking(b, fa))
 }
 
 func (h Handler) List(w http.ResponseWriter, r *http.Request) {
@@ -277,15 +295,16 @@ func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
+	fa := fieldAccessFor(r)
 	b, err := h.Svc.Update(r.Context(), id, appsvc.UpdateInput{
 		PaxCount: req.PaxCount, TotalAmount: req.TotalAmount, Currency: req.Currency,
-		DiscountAmt: req.DiscountAmt, Notes: req.Notes,
+		DiscountAmt: req.DiscountAmt, Notes: req.Notes, CanDiscount: fa.discount,
 	})
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapBooking(b, fieldAccessFor(r)))
+	response.JSON(w, http.StatusOK, mapBooking(b, fa))
 }
 
 func (h Handler) Confirm(w http.ResponseWriter, r *http.Request) {
@@ -313,12 +332,42 @@ func (h Handler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
-	b, err := h.Svc.Transition(r.Context(), id, domain.Status(strings.TrimSpace(req.Status)))
+	in, err := req.input()
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapBooking(b, fieldAccessFor(r)))
+	fa := fieldAccessFor(r)
+	if in.Override && !fa.override {
+		response.Error(w, shared.NewForbidden("override requires bookings.override"))
+		return
+	}
+	b, err := h.Svc.Transition(r.Context(), id, in)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, mapBooking(b, fa))
+}
+
+func (req statusRequest) input() (appsvc.TransitionInput, error) {
+	in := appsvc.TransitionInput{
+		Status:   domain.Status(strings.TrimSpace(req.Status)),
+		Reason:   req.Reason,
+		Override: req.Override,
+	}
+	if in.Status == "" {
+		return in, shared.NewValidation("status is required")
+	}
+	if req.HoldExpiresAt != nil && strings.TrimSpace(*req.HoldExpiresAt) != "" {
+		t, err := time.Parse(time.RFC3339, strings.TrimSpace(*req.HoldExpiresAt))
+		if err != nil {
+			return in, shared.NewValidation("hold_expires_at must be RFC3339")
+		}
+		t = t.UTC()
+		in.HoldExpiresAt = &t
+	}
+	return in, nil
 }
 
 func (h Handler) Readiness(w http.ResponseWriter, r *http.Request) {
@@ -468,7 +517,7 @@ func (h Handler) SetLineItems(w http.ResponseWriter, r *http.Request) {
 	inputs := make([]appsvc.LineItemInput, 0, len(req.Items))
 	for _, it := range req.Items {
 		inputs = append(inputs, appsvc.LineItemInput{
-			Kind: it.Kind, Label: it.Label, Quantity: it.Quantity, UnitPrice: it.UnitPrice, UnitCost: it.UnitCost,
+			Kind: it.Kind, Category: it.Category, Label: it.Label, Quantity: it.Quantity, UnitPrice: it.UnitPrice, UnitCost: it.UnitCost,
 		})
 	}
 	b, lines, err := h.Svc.SetLineItems(r.Context(), id, inputs)
