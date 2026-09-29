@@ -7,11 +7,14 @@ import (
 )
 
 // ScopeLevelFor maps a role to its data-visibility breadth (PDF §3):
-// GM/Admin see every branch, Finance/Operations the whole branch, Managers
-// their team (branch when unassigned to a team), Employees their own records.
+// GMs see every branch of their company, the platform Admin every company,
+// Finance/Operations the whole branch, Managers their team (branch when
+// unassigned to a team), Employees their own records.
 func ScopeLevelFor(role Role, teamID uuid.UUID) access.Level {
 	switch role {
-	case RoleGM, RoleAdmin:
+	case RoleGM:
+		return access.LevelCompany
+	case RoleAdmin:
 		return access.LevelGlobal
 	case RoleFinance, RoleOperations:
 		return access.LevelBranch

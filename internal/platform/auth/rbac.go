@@ -58,6 +58,12 @@ const (
 	PermSettingsWrite       Permission = "settings.write"
 	// PermPrivacyManage serves KVKK data subject requests (export, anonymize).
 	PermPrivacyManage Permission = "privacy.manage"
+	// PermSetupManage runs the first-run company onboarding.
+	PermSetupManage Permission = "setup.manage"
+	// PermBranchesManage creates, renames and re-kinds the company's branches.
+	PermBranchesManage Permission = "branches.manage"
+	// PermCompaniesManage registers tenant companies (platform operators only).
+	PermCompaniesManage Permission = "companies.manage"
 )
 
 const (
@@ -104,6 +110,7 @@ func PermissionsFor(role Role) []Permission {
 			PermPrivacyManage,
 			PermFXManage,
 			PermBookingsOverride, PermBookingsDiscount,
+			PermSetupManage, PermBranchesManage,
 		}
 	case RoleAdmin:
 		return []Permission{
@@ -115,6 +122,7 @@ func PermissionsFor(role Role) []Permission {
 			PermFileSyncRead, PermFileSyncWrite,
 			PermSettingsRead, PermSettingsWrite,
 			PermPrivacyManage,
+			PermBranchesManage, PermCompaniesManage,
 		}
 	case RoleManager:
 		return []Permission{

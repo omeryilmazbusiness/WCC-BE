@@ -25,15 +25,6 @@ type User struct {
 	UpdatedAt    time.Time
 }
 
-type Branch struct {
-	ID        uuid.UUID
-	Code      string
-	NameEN    string
-	NameAR    string
-	IsActive  bool
-	CreatedAt time.Time
-}
-
 type Team struct {
 	ID        uuid.UUID
 	BranchID  uuid.UUID
@@ -61,8 +52,6 @@ type Repository interface {
 	CreateUser(ctx context.Context, user *User) error
 	UpdateUser(ctx context.Context, user *User) error
 	ListUsers(ctx context.Context, f UserFilter) ([]User, int, error)
-	ListBranches(ctx context.Context) ([]Branch, error)
-	UpdateBranch(ctx context.Context, b *Branch) error
 	ListTeams(ctx context.Context, branchID *uuid.UUID) ([]Team, error)
 	FindTeam(ctx context.Context, id uuid.UUID) (*Team, error)
 }

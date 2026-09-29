@@ -137,6 +137,7 @@ type modules struct {
 	adminConfig  *appadminconfig.Service
 	rooming      *approoming.Service
 	search       *appsearch.Service
+	tenancy      tenancyModule
 	imports      *appimportexport.Service
 	backfill     *dataprotection.Service
 	privacy      *appprivacy.Service
@@ -316,6 +317,7 @@ func (m *modules) build() error {
 
 	m.rooming = approoming.NewService(pgrooming.NewRepository(pool, passports))
 	m.search = appsearch.NewService(pgsearch.NewRepository(pool, passports))
+	m.tenancy = newTenancyModule(pool, m.users, m.ai, m.inbox, txm, m.audit)
 	m.imports = appimportexport.NewService(pgimportexport.NewRepository(pool, passports), customerRepo, txm)
 	m.imports.SetEnqueuer(m.queue)
 	m.imports.SetQueueMode(m.queue)

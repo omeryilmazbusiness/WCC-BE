@@ -17,6 +17,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/authsec"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
 
@@ -50,6 +51,17 @@ func (f sessionsFunc) Validate(_ context.Context, sid, uid uuid.UUID, ver int) e
 
 var allowAllSessions = sessionsFunc(func(uuid.UUID, uuid.UUID, int) error { return nil })
 
+// anyWorkspace places every caller in a one-branch company around their home branch.
+type anyWorkspace struct{}
+
+func (anyWorkspace) Workspace(_ context.Context, branchID uuid.UUID) (*company.Workspace, error) {
+	id := uuid.New()
+	return &company.Workspace{
+		Company:  company.Company{ID: id, Slug: "test-co", NameEN: "Test", IsActive: true},
+		Branches: []company.Branch{{ID: branchID, CompanyID: id, Slug: "main", Kind: company.KindMainCenter}},
+	}, nil
+}
+
 func testRouterWith(t *testing.T, sessions middleware.SessionValidator) (http.Handler, *platformauth.TokenService) {
 	t.Helper()
 	cfg := config.Config{
@@ -64,7 +76,7 @@ func testRouterWith(t *testing.T, sessions middleware.SessionValidator) (http.Ha
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewRouter(cfg, tokens, sessions, Handlers{}), tokens
+	return NewRouter(cfg, tokens, sessions, anyWorkspace{}, Handlers{}), tokens
 }
 
 func testRouter(t *testing.T) (http.Handler, *platformauth.TokenService) {
@@ -102,6 +114,8 @@ func TestEveryBusinessRouteRequiresPermission(t *testing.T) {
 		"POST /v1/bookings/{id}/status":         false, "POST /v1/bookings/{id}/readiness-override": false,
 		"GET /v1/ai/leads/{id}/score": false, "POST /v1/ai/leads/{id}/score": false,
 		"POST /v1/tasks/escalate-overdue": false,
+		"POST /v1/branches":               false, "PATCH /v1/branches/{id}": false,
+		"GET /v1/platform/companies/": false, "POST /v1/platform/companies/": false,
 	}
 
 	routes, ok := router.(chi.Routes)

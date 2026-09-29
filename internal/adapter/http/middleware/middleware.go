@@ -185,25 +185,6 @@ func RequirePermission(p platformauth.Permission) func(http.Handler) http.Handle
 	}
 }
 
-// ScopeBranch restricts a query branch_id to the caller's branch unless the
-// caller has global scope (GM/Admin), who may pick any branch (nil = all).
-func ScopeBranch(claims *platformauth.Claims, requested *uuid.UUID) *uuid.UUID {
-	s := platformauth.ScopeFor(claims)
-	if s.Level == access.LevelGlobal {
-		return requested
-	}
-	id := claims.BranchID
-	return &id
-}
-
-// OwnsOrElevated reports whether the caller may act on a record in branchID
-// owned by ownerID (and ownerTeamID when known).
-func OwnsOrElevated(claims *platformauth.Claims, branchID uuid.UUID, ownerID, ownerTeamID *uuid.UUID) bool {
-	return platformauth.ScopeFor(claims).CanAccess(access.Record{
-		BranchID: branchID, OwnerID: ownerID, OwnerTeamID: ownerTeamID,
-	})
-}
-
 // SecurityHeaders sets conservative headers for a JSON API.
 func SecurityHeaders(hsts bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

@@ -16,6 +16,7 @@ import (
 	audithttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/audithttp"
 	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
+	companyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/company"
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
@@ -34,6 +35,7 @@ import (
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
 	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
 	searchhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/search"
+	setuphttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/setup"
 	streamhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/stream"
 	supplierhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/supplier"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
@@ -128,6 +130,8 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		AdminConfig:  adminconfighttp.Handler{Svc: m.adminConfig},
 		Rooming:      roominghttp.Handler{Svc: m.rooming},
 		Search:       searchhttp.Handler{Svc: m.search},
+		Setup:        setuphttp.Handler{Svc: m.tenancy.setup},
+		Company:      companyhttp.Handler{Svc: m.tenancy.companies},
 		Privacy:      privacyhttp.Handler{Svc: m.privacy},
 		Webhook:      newWebhookHandler(cfg, m.webhooks, m.limiter),
 		Stream:       streamhttp.Handler{Hub: hub, Heartbeat: streamHeartbeat, Closing: streamsClosing},
@@ -135,7 +139,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 
 	srv := &http.Server{
 		Addr:         cfg.HTTP.Addr,
-		Handler:      httpadapter.NewRouter(cfg, m.tokens, m.sessionCheck, handlers),
+		Handler:      httpadapter.NewRouter(cfg, m.tokens, m.sessionCheck, m.tenancy.workspaces, handlers),
 		ReadTimeout:  cfg.HTTP.ReadTimeout,
 		WriteTimeout: cfg.HTTP.WriteTimeout,
 		IdleTimeout:  cfg.HTTP.IdleTimeout,

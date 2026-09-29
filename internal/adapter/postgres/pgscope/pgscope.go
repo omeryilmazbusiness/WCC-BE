@@ -31,6 +31,10 @@ func Append(ctx context.Context, cols Columns, where []string, args []any) ([]st
 		args = append(args, b)
 		where = append(where, fmt.Sprintf("%s=$%d", cols.Branch, len(args)))
 	}
+	if set, ok := s.CompanyBranches(); ok && cols.Branch != "" {
+		args = append(args, set)
+		where = append(where, fmt.Sprintf("%s = ANY($%d::uuid[])", cols.Branch, len(args)))
+	}
 	if cols.Owner == "" {
 		return where, args, nil
 	}

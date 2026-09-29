@@ -26,6 +26,24 @@ func TestGlobalAddsNothing(t *testing.T) {
 	}
 }
 
+func TestCompanyScopeConfinesToTenantBranches(t *testing.T) {
+	main, second := uuid.New(), uuid.New()
+	ctx := access.WithScope(context.Background(), access.Scope{
+		Level: access.LevelCompany, BranchID: main, UserID: uuid.New(),
+		CompanyID: uuid.New(), Branches: []uuid.UUID{main, second},
+	})
+	sql, args, err := Clause(ctx, cols, []any{"id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sql != " AND l.branch_id = ANY($2::uuid[])" {
+		t.Fatalf("unexpected sql %q", sql)
+	}
+	if set, ok := args[1].([]uuid.UUID); !ok || len(set) != 2 {
+		t.Fatalf("unexpected args %v", args)
+	}
+}
+
 func TestOwnScope(t *testing.T) {
 	b, u := uuid.New(), uuid.New()
 	ctx := access.WithScope(context.Background(), access.Scope{Level: access.LevelOwn, BranchID: b, UserID: u})

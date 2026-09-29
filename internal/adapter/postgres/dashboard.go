@@ -44,17 +44,27 @@ func NewDashboardAggregator(pool *pgxpool.Pool) *DashboardAggregator {
 func (a *DashboardAggregator) Compute(ctx context.Context, branchID *uuid.UUID, from, to time.Time) (*dashboard.KPI, error) {
 	q := tx.QuerierFrom(ctx, a.pool)
 	kpi := &dashboard.KPI{PeriodFrom: from, PeriodTo: to}
-	sc, args, err := dashScopes(ctx, []any{from, to, branchID}, dashLeads, dashTasks, dashBookings)
+	// Each statement below reads one table, so each binds only its own
+	// scope placeholders on top of the shared $1..$3.
+	base := []any{from, to, branchID}
+	lsc, largs, err := pgscope.Clause(ctx, dashLeads, append([]any(nil), base...))
 	if err != nil {
 		return nil, err
 	}
-	lsc, tsc, bsc := sc[0], sc[1], sc[2]
+	tsc, targs, err := pgscope.Clause(ctx, dashTasks, append([]any(nil), base...))
+	if err != nil {
+		return nil, err
+	}
+	bsc, bargs, err := pgscope.Clause(ctx, dashBookings, append([]any(nil), base...))
+	if err != nil {
+		return nil, err
+	}
 
 	if err := q.QueryRow(ctx, `
 		SELECT COUNT(*) FROM leads l
 		WHERE l.stage NOT IN ('won','lost')
 		  AND l.created_at >= $1 AND l.created_at < $2
-		  AND ($3::uuid IS NULL OR l.branch_id = $3)`+lsc, args...).Scan(&kpi.LeadsOpen); err != nil {
+		  AND ($3::uuid IS NULL OR l.branch_id = $3)`+lsc, largs...).Scan(&kpi.LeadsOpen); err != nil {
 		return nil, err
 	}
 	if err := q.QueryRow(ctx, `
@@ -62,21 +72,21 @@ func (a *DashboardAggregator) Compute(ctx context.Context, branchID *uuid.UUID, 
 		WHERE t.status IN ('open','in_progress')
 		  AND t.due_at IS NOT NULL AND t.due_at < NOW()
 		  AND t.due_at >= $1 AND t.due_at < $2
-		  AND ($3::uuid IS NULL OR t.branch_id = $3)`+tsc, args...).Scan(&kpi.TasksOverdue); err != nil {
+		  AND ($3::uuid IS NULL OR t.branch_id = $3)`+tsc, targs...).Scan(&kpi.TasksOverdue); err != nil {
 		return nil, err
 	}
 	if err := q.QueryRow(ctx, `
 		SELECT COUNT(*) FROM bookings b
 		WHERE b.balance_amt > 0 AND b.status IN ('confirmed','partially_paid','ready','travelled')
 		  AND b.created_at >= $1 AND b.created_at < $2
-		  AND ($3::uuid IS NULL OR b.branch_id = $3)`+bsc, args...).Scan(&kpi.BookingsUnpaid); err != nil {
+		  AND ($3::uuid IS NULL OR b.branch_id = $3)`+bsc, bargs...).Scan(&kpi.BookingsUnpaid); err != nil {
 		return nil, err
 	}
 	if err := q.QueryRow(ctx, `
 		SELECT COUNT(*) FROM tasks t
 		WHERE t.kind = 'document' AND t.status IN ('open','in_progress')
 		  AND t.created_at >= $1 AND t.created_at < $2
-		  AND ($3::uuid IS NULL OR t.branch_id = $3)`+tsc, args...).Scan(&kpi.MissingDocs); err != nil {
+		  AND ($3::uuid IS NULL OR t.branch_id = $3)`+tsc, targs...).Scan(&kpi.MissingDocs); err != nil {
 		return nil, err
 	}
 	if err := q.QueryRow(ctx, `
@@ -85,7 +95,7 @@ func (a *DashboardAggregator) Compute(ctx context.Context, branchID *uuid.UUID, 
 		FROM bookings b
 		WHERE b.status IN ('confirmed','partially_paid','ready','travelled','completed')
 		  AND b.created_at >= $1 AND b.created_at < $2
-		  AND ($3::uuid IS NULL OR b.branch_id = $3)`+bsc, args...).
+		  AND ($3::uuid IS NULL OR b.branch_id = $3)`+bsc, bargs...).
 		Scan(&kpi.BookedAmt, &kpi.CollectedAmt, &kpi.MarginAmt); err != nil {
 		return nil, err
 	}

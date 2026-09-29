@@ -13,6 +13,8 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/middleware"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/auth"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -260,8 +262,37 @@ func (h Handler) Me(w http.ResponseWriter, r *http.Request) {
 	}
 	payload := mapUser(user)
 	payload["permissions"] = platformauth.PermissionsFor(user.Role)
-	payload["scope"] = platformauth.ScopeFor(claims).Level.String()
+	scope := access.From(r.Context())
+	payload["scope"] = scope.Level.String()
+	if ws, ok := middleware.WorkspaceFrom(r.Context()); ok {
+		addWorkspace(payload, ws, scope, user.BranchID)
+	}
 	response.JSON(w, http.StatusOK, payload)
+}
+
+// addWorkspace describes the caller's tenant: company-wide callers see every
+// branch and act on the active one, everyone else only on their home branch.
+func addWorkspace(payload map[string]any, ws *company.Workspace, scope access.Scope, home uuid.UUID) {
+	payload["company"] = map[string]any{
+		"id": ws.Company.ID, "slug": ws.Company.Slug, "name_en": ws.Company.NameEN, "name_ar": ws.Company.NameAR,
+	}
+	payload["home_branch_id"] = home
+	active := home
+	if scope.Level >= access.LevelCompany && scope.BranchID != uuid.Nil {
+		active = scope.BranchID
+	}
+	payload["active_branch_id"] = active
+	branches := make([]map[string]any, 0, len(ws.Branches))
+	for _, b := range ws.Branches {
+		if scope.Level < access.LevelCompany && b.ID != home {
+			continue
+		}
+		branches = append(branches, map[string]any{
+			"id": b.ID, "slug": b.Slug, "code": b.Code, "name_en": b.NameEN, "name_ar": b.NameAR,
+			"kind": b.Kind, "is_active": b.IsActive,
+		})
+	}
+	payload["branches"] = branches
 }
 
 // MFAEnroll starts TOTP enrollment for the signed-in user.

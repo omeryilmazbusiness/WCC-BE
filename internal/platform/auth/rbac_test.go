@@ -52,6 +52,14 @@ func TestSettingsPermissions(t *testing.T) {
 	}
 }
 
+func TestSetupIsGMOnly(t *testing.T) {
+	for _, r := range AllRoles() {
+		if got := HasPermission(r, PermSetupManage); got != (r == RoleGM) {
+			t.Fatalf("%s setup.manage = %v", r, got)
+		}
+	}
+}
+
 func TestCustomerAndPIIPermissions(t *testing.T) {
 	for _, r := range []Role{RoleGM, RoleManager, RoleEmployee, RoleFinance, RoleOperations} {
 		if !HasPermission(r, PermCustomersRead) {
@@ -72,7 +80,7 @@ func TestCustomerAndPIIPermissions(t *testing.T) {
 func TestScopeLevels(t *testing.T) {
 	team := uuid.New()
 	cases := map[Role]access.Level{
-		RoleGM: access.LevelGlobal, RoleAdmin: access.LevelGlobal,
+		RoleGM: access.LevelCompany, RoleAdmin: access.LevelGlobal,
 		RoleFinance: access.LevelBranch, RoleOperations: access.LevelBranch,
 		RoleManager: access.LevelTeam, RoleEmployee: access.LevelOwn,
 	}

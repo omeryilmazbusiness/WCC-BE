@@ -3,6 +3,7 @@ package response
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -35,6 +36,9 @@ func JSONMeta(w http.ResponseWriter, status int, data any, meta map[string]any) 
 
 func Error(w http.ResponseWriter, err error) {
 	status, code, msg := mapError(err)
+	if status == http.StatusInternalServerError {
+		slog.Error("unhandled request error", "err", err)
+	}
 	body := &errorBody{Code: code, Message: msg}
 	var app *shared.AppError
 	if errors.As(err, &app) && app.RetryAfter > 0 {

@@ -13,6 +13,7 @@ import (
 	audithttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/audithttp"
 	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
+	companyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/company"
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
@@ -32,6 +33,7 @@ import (
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
 	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
 	searchhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/search"
+	setuphttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/setup"
 	streamhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/stream"
 	supplierhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/supplier"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
@@ -72,6 +74,8 @@ type Handlers struct {
 	AdminConfig  adminconfighttp.Handler
 	Rooming      roominghttp.Handler
 	Search       searchhttp.Handler
+	Setup        setuphttp.Handler
+	Company      companyhttp.Handler
 	Privacy      privacyhttp.Handler
 	FX           fxhttp.Handler
 	FXLive       fxhttp.LiveHandler
@@ -82,10 +86,13 @@ type Handlers struct {
 const StreamPath = "/v1/stream"
 
 // NewRouter wires every route. Authenticated routes verify the access token
-// with tokens and its session with sessions.
-func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions middleware.SessionValidator, h Handlers) http.Handler {
+// with tokens and its session with sessions, then confine the caller to the
+// company resolved by workspaces.
+func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions middleware.SessionValidator, workspaces middleware.WorkspaceResolver, h Handlers) http.Handler {
 	r := chi.NewRouter()
-	authenticate := middleware.Authenticate(tokens, sessions)
+	verify := middleware.Authenticate(tokens, sessions)
+	tenancy := middleware.Tenancy(workspaces)
+	authenticate := func(next http.Handler) http.Handler { return verify(tenancy(next)) }
 
 	trusted, err := middleware.ParseCIDRs(cfg.HTTP.TrustedProxies)
 	if err != nil {
@@ -103,7 +110,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.HTTP.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", middleware.BranchHeader},
 		ExposedHeaders:   []string{"X-Request-ID"},
 		AllowCredentials: true,
 		MaxAge:           int((12 * time.Hour).Seconds()),
@@ -142,10 +149,25 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			// Every signed-in user gets their own notifications; the hub
 			// filters branch signals by the caller's scope.
 			r.Get("/stream", h.Stream.Stream)
-			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Users.ListBranches)
-			r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Patch("/branches/{id}", h.Users.UpdateBranch)
+			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Company.ListBranches)
+			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Post("/branches", h.Company.CreateBranch)
+			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Patch("/branches/{id}", h.Company.UpdateBranch)
+			r.Route("/platform/companies", func(r chi.Router) {
+				r.Use(middleware.RequirePermission(platformauth.PermCompaniesManage))
+				r.Get("/", h.Company.ListCompanies)
+				r.Post("/", h.Company.Register)
+			})
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/teams", h.Users.ListTeams)
 			r.With(middleware.RequirePermission(platformauth.PermRolesRead)).Get("/permissions", h.Users.PermissionsMatrix)
+
+			r.Route("/setup", func(r chi.Router) {
+				r.Use(middleware.RequirePermission(platformauth.PermSetupManage))
+				r.Get("/", h.Setup.Get)
+				r.Put("/company", h.Setup.SaveCompany)
+				r.Post("/steps/{step}", h.Setup.AdvanceStep)
+				r.Post("/complete", h.Setup.Complete)
+				r.Post("/dismiss", h.Setup.Dismiss)
+			})
 
 			r.Route("/users", func(r chi.Router) {
 				r.With(middleware.RequirePermission(platformauth.PermUsersRead)).Get("/", h.Users.List)

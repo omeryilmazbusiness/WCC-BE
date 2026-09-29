@@ -159,48 +159,6 @@ func (r *Repository) ListUsers(ctx context.Context, f identity.UserFilter) ([]id
 	return out, total, rows.Err()
 }
 
-func (r *Repository) ListBranches(ctx context.Context) ([]identity.Branch, error) {
-	clause, args, err := pgscope.Clause(ctx, branchScope, nil)
-	if err != nil {
-		return nil, err
-	}
-	q := tx.QuerierFrom(ctx, r.pool)
-	rows, err := q.Query(ctx, `
-		SELECT id, code, name_en, name_ar, is_active, created_at FROM branches
-		WHERE TRUE`+clause+` ORDER BY code`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []identity.Branch
-	for rows.Next() {
-		var b identity.Branch
-		if err := rows.Scan(&b.ID, &b.Code, &b.NameEN, &b.NameAR, &b.IsActive, &b.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
-}
-
-func (r *Repository) UpdateBranch(ctx context.Context, b *identity.Branch) error {
-	clause, args, err := pgscope.Clause(ctx, branchScope, []any{b.ID, b.Code, b.NameEN, b.NameAR, b.IsActive})
-	if err != nil {
-		return err
-	}
-	q := tx.QuerierFrom(ctx, r.pool)
-	tag, err := q.Exec(ctx, `
-		UPDATE branches SET code=$2, name_en=$3, name_ar=$4, is_active=$5
-		WHERE id=$1`+clause, args...)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return shared.NewNotFound("branch")
-	}
-	return nil
-}
-
 func (r *Repository) ListTeams(ctx context.Context, branchID *uuid.UUID) ([]identity.Team, error) {
 	clause, args, err := pgscope.Clause(ctx, userScope, []any{branchID})
 	if err != nil {

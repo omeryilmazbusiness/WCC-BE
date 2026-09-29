@@ -90,6 +90,29 @@ func (s *Service) checkTeam(ctx context.Context, teamID, branchID uuid.UUID) err
 	return nil
 }
 
+// checkPlacement enforces the tenancy rules of a user assignment: the branch
+// must be inside the caller's reach, a GM can only be placed by a
+// company-wide caller and only platform scope may grant the admin role.
+func checkPlacement(ctx context.Context, role platformauth.Role, branchID uuid.UUID) error {
+	sc := access.From(ctx)
+	if !sc.CanAccessBranch(branchID) {
+		err := shared.NewValidation("branch outside your company")
+		err.Details = map[string]any{"branch_id": "not in your company"}
+		return err
+	}
+	switch role {
+	case platformauth.RoleAdmin:
+		if sc.Level != access.LevelGlobal {
+			return shared.NewForbidden("only platform operators can grant the admin role")
+		}
+	case platformauth.RoleGM:
+		if sc.Level < access.LevelCompany {
+			return shared.NewForbidden("only a company-wide account can grant the gm role")
+		}
+	}
+	return nil
+}
+
 func (s *Service) Create(ctx context.Context, in CreateInput) (*identity.User, error) {
 	email := strings.TrimSpace(strings.ToLower(in.Email))
 	if email == "" || in.FullName == "" {
@@ -103,6 +126,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*identity.User, e
 	}
 	if in.BranchID == uuid.Nil {
 		return nil, shared.NewValidation("branch_id is required")
+	}
+	if err := checkPlacement(ctx, in.Role, in.BranchID); err != nil {
+		return nil, err
 	}
 	if in.TeamID != nil {
 		if err := s.checkTeam(ctx, *in.TeamID, in.BranchID); err != nil {
@@ -159,6 +185,9 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*identity.User, e
 		"email": u.Email, "role": u.Role, "branch_id": u.BranchID, "team_id": u.TeamID,
 		"is_active": u.IsActive, "mfa_enabled": u.MFAEnabled,
 	}
+	if u.Role == platformauth.RoleAdmin && access.From(ctx).Level != access.LevelGlobal {
+		return nil, shared.NewForbidden("platform accounts are managed by platform operators")
+	}
 	if in.FullName != nil {
 		u.FullName = strings.TrimSpace(*in.FullName)
 	}
@@ -170,6 +199,11 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*identity.User, e
 	}
 	if in.BranchID != nil {
 		u.BranchID = *in.BranchID
+	}
+	if in.Role != nil || in.BranchID != nil {
+		if err := checkPlacement(ctx, u.Role, u.BranchID); err != nil {
+			return nil, err
+		}
 	}
 	if in.SetTeam {
 		u.TeamID = in.TeamID
@@ -217,64 +251,6 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*identity.User, e
 	}
 	s.sessions.InvalidateUser(u.ID)
 	return u, nil
-}
-
-func (s *Service) ListBranches(ctx context.Context) ([]identity.Branch, error) {
-	return s.users.ListBranches(ctx)
-}
-
-type UpdateBranchInput struct {
-	BranchID  uuid.UUID
-	Code      string
-	NameEN    string
-	NameAR    string
-	ActorID   uuid.UUID
-	IP        string
-	UserAgent string
-}
-
-func (s *Service) UpdateBranch(ctx context.Context, in UpdateBranchInput) (*identity.Branch, error) {
-	items, err := s.users.ListBranches(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var cur *identity.Branch
-	for i := range items {
-		if items[i].ID == in.BranchID {
-			cur = &items[i]
-			break
-		}
-	}
-	if cur == nil {
-		return nil, shared.NewNotFound("branch")
-	}
-	code := strings.TrimSpace(in.Code)
-	nameEN := strings.TrimSpace(in.NameEN)
-	nameAR := strings.TrimSpace(in.NameAR)
-	if code == "" || nameEN == "" {
-		return nil, shared.NewValidation("code and name_en are required")
-	}
-	before := map[string]any{"code": cur.Code, "name_en": cur.NameEN, "name_ar": cur.NameAR}
-	cur.Code = code
-	cur.NameEN = nameEN
-	cur.NameAR = nameAR
-	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		if err := s.users.UpdateBranch(ctx, cur); err != nil {
-			return err
-		}
-		id := cur.ID
-		return s.audit.Record(ctx, audit.RecordInput{
-			ActorID: in.ActorID, Action: "branch.updated", EntityType: "branch",
-			EntityID: &id, BranchID: &id,
-			Before: before,
-			After:  map[string]any{"code": cur.Code, "name_en": cur.NameEN, "name_ar": cur.NameAR},
-			IP:     in.IP, UserAgent: in.UserAgent,
-		})
-	})
-	if err != nil {
-		return nil, err
-	}
-	return cur, nil
 }
 
 func (s *Service) ListTeams(ctx context.Context, branchID *uuid.UUID) ([]identity.Team, error) {

@@ -83,6 +83,8 @@ func DeliveryScope(s access.Scope) access.Scope {
 		return s
 	case access.LevelGlobal:
 		return access.System()
+	case access.LevelCompany:
+		return access.Scope{Level: access.LevelCompany, BranchID: s.BranchID, CompanyID: s.CompanyID, Branches: s.Branches}
 	default:
 		return access.ForBranch(s.BranchID)
 	}
