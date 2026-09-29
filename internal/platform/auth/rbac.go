@@ -114,15 +114,10 @@ func PermissionsFor(role Role) []Permission {
 		}
 	case RoleAdmin:
 		return []Permission{
-			PermUsersRead, PermUsersWrite, PermUsersUnlock, PermRolesRead, PermAuditRead, PermBranchesRead, PermOpsRead,
-			PermIntegrationsRead, PermIntegrationsWrite,
-			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
-			PermReportsRead, PermReportsExport,
-			PermAIRead, PermAIWrite, PermAISetup,
-			PermFileSyncRead, PermFileSyncWrite,
-			PermSettingsRead, PermSettingsWrite,
-			PermPrivacyManage,
-			PermBranchesManage, PermCompaniesManage,
+			// Platform operator: tenants, accounts and platform health. Company
+			// data and configuration belong to each company's GM.
+			PermCompaniesManage,
+			PermUsersRead, PermUsersWrite, PermUsersUnlock, PermAuditRead, PermOpsRead,
 		}
 	case RoleManager:
 		return []Permission{

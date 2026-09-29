@@ -95,6 +95,23 @@ func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, mapUser(u))
 }
 
+// RequireVisible guards account actions served by other handlers (unlock,
+// session revoke): the {id} user must be within the caller's reach.
+func (h Handler) RequireVisible(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id, err := uuid.Parse(chi.URLParam(r, "id"))
+		if err != nil {
+			response.Error(w, shared.NewValidation("invalid id"))
+			return
+		}
+		if _, err := h.Svc.Get(r.Context(), id); err != nil {
+			response.Error(w, err)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
@@ -210,11 +227,15 @@ func (h Handler) PermissionsMatrix(w http.ResponseWriter, _ *http.Request) {
 }
 
 func mapUser(u *identity.User) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"id": u.ID, "email": u.Email, "full_name": u.FullName, "role": u.Role,
-		"branch_id": u.BranchID, "team_id": u.TeamID, "is_active": u.IsActive,
+		"branch_id": nullableID(u.BranchID), "team_id": u.TeamID, "is_active": u.IsActive,
 		"mfa_enabled": u.MFAEnabled, "created_at": u.CreatedAt, "updated_at": u.UpdatedAt,
 	}
+	if u.CompanyName != "" {
+		out["company_name"] = u.CompanyName
+	}
+	return out
 }
 
 func mapTeam(t *identity.Team) map[string]any {
@@ -223,4 +244,12 @@ func mapTeam(t *identity.Team) map[string]any {
 		"name_en": t.NameEN, "name_ar": t.NameAR, "is_active": t.IsActive,
 		"created_at": t.CreatedAt,
 	}
+}
+
+// nullableID renders uuid.Nil (a platform admin without branch) as null.
+func nullableID(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
 }

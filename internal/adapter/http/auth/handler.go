@@ -445,9 +445,17 @@ func mapUser(user *identity.User) map[string]any {
 		"email":       user.Email,
 		"full_name":   user.FullName,
 		"role":        user.Role,
-		"branch_id":   user.BranchID,
+		"branch_id":   branchOrNull(user.BranchID),
 		"team_id":     user.TeamID,
 		"is_active":   user.IsActive,
 		"mfa_enabled": user.MFAEnabled,
 	}
+}
+
+// branchOrNull renders uuid.Nil (a platform admin without branch) as null.
+func branchOrNull(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
 }

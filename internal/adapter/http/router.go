@@ -174,8 +174,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/", h.Users.Create)
 				r.With(middleware.RequirePermission(platformauth.PermUsersRead)).Get("/{id}", h.Users.Get)
 				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Patch("/{id}", h.Users.Update)
-				r.With(middleware.RequirePermission(platformauth.PermUsersUnlock)).Post("/{id}/unlock", h.Auth.UnlockUser)
-				r.With(middleware.RequirePermission(platformauth.PermUsersWrite)).Post("/{id}/sessions/revoke", h.Auth.AdminRevokeUserSessions)
+				r.With(middleware.RequirePermission(platformauth.PermUsersUnlock), h.Users.RequireVisible).Post("/{id}/unlock", h.Auth.UnlockUser)
+				r.With(middleware.RequirePermission(platformauth.PermUsersWrite), h.Users.RequireVisible).Post("/{id}/sessions/revoke", h.Auth.AdminRevokeUserSessions)
 			})
 
 			r.With(middleware.RequirePermission(platformauth.PermAuditRead)).Get("/audit-events", h.Audit.List)

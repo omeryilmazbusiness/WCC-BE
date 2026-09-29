@@ -61,7 +61,24 @@ type UpdateInput struct {
 	UserAgent  string
 }
 
+// platformOperator reports a caller outside any company: the platform admin.
+// It oversees each company through its GM accounts only; everyone else is
+// managed by the company itself.
+func platformOperator(ctx context.Context) bool {
+	sc := access.From(ctx)
+	return sc.Level == access.LevelGlobal && sc.CompanyID == uuid.Nil
+}
+
+func errGMOnly() error { return shared.NewForbidden("platform operators manage GM accounts only") }
+
 func (s *Service) List(ctx context.Context, f identity.UserFilter) ([]identity.User, int, error) {
+	if platformOperator(ctx) {
+		gm := platformauth.RoleGM
+		if f.Role != nil && *f.Role != gm {
+			return nil, 0, nil
+		}
+		f.Role = &gm
+	}
 	return s.users.ListUsers(ctx, f)
 }
 
@@ -74,6 +91,9 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*identity.User, error)
 func (s *Service) visibleUser(ctx context.Context, id uuid.UUID) (*identity.User, error) {
 	u, err := s.users.FindUserByID(ctx, id)
 	if err != nil || !access.From(ctx).CanAccessBranch(u.BranchID) {
+		return nil, shared.NewNotFound("user")
+	}
+	if platformOperator(ctx) && u.Role != platformauth.RoleGM {
 		return nil, shared.NewNotFound("user")
 	}
 	return u, nil
@@ -90,21 +110,34 @@ func (s *Service) checkTeam(ctx context.Context, teamID, branchID uuid.UUID) err
 	return nil
 }
 
-// checkPlacement enforces the tenancy rules of a user assignment: the branch
-// must be inside the caller's reach, a GM can only be placed by a
-// company-wide caller and only platform scope may grant the admin role.
+// checkPlacement enforces the tenancy rules of a user assignment. Platform
+// admins belong to no company (no branch) and only platform scope may grant
+// that role; everyone else sits in exactly one branch within the caller's
+// reach, and a GM can only be placed by a company-wide caller.
 func checkPlacement(ctx context.Context, role platformauth.Role, branchID uuid.UUID) error {
 	sc := access.From(ctx)
+	if role == platformauth.RoleAdmin {
+		if sc.Level != access.LevelGlobal {
+			return shared.NewForbidden("only platform operators can grant the admin role")
+		}
+		if branchID != uuid.Nil {
+			err := shared.NewValidation("platform admins belong to no company")
+			err.Details = map[string]any{"branch_id": "must be empty for the admin role"}
+			return err
+		}
+		return nil
+	}
+	if branchID == uuid.Nil {
+		err := shared.NewValidation("branch_id is required")
+		err.Details = map[string]any{"branch_id": "required"}
+		return err
+	}
 	if !sc.CanAccessBranch(branchID) {
 		err := shared.NewValidation("branch outside your company")
 		err.Details = map[string]any{"branch_id": "not in your company"}
 		return err
 	}
 	switch role {
-	case platformauth.RoleAdmin:
-		if sc.Level != access.LevelGlobal {
-			return shared.NewForbidden("only platform operators can grant the admin role")
-		}
 	case platformauth.RoleGM:
 		if sc.Level < access.LevelCompany {
 			return shared.NewForbidden("only a company-wide account can grant the gm role")
@@ -124,11 +157,14 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*identity.User, e
 	if err := platformauth.ValidatePassword(in.Password); err != nil {
 		return nil, shared.NewValidation(err.Error())
 	}
-	if in.BranchID == uuid.Nil {
-		return nil, shared.NewValidation("branch_id is required")
+	if platformOperator(ctx) && in.Role != platformauth.RoleGM {
+		return nil, errGMOnly()
 	}
 	if err := checkPlacement(ctx, in.Role, in.BranchID); err != nil {
 		return nil, err
+	}
+	if in.TeamID != nil && in.Role == platformauth.RoleAdmin {
+		return nil, shared.NewValidation("platform admins have no team")
 	}
 	if in.TeamID != nil {
 		if err := s.checkTeam(ctx, *in.TeamID, in.BranchID); err != nil {
@@ -157,13 +193,12 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*identity.User, e
 			return shared.NewConflict("email already exists")
 		}
 		id := u.ID
-		branch := u.BranchID
 		return s.audit.Record(ctx, audit.RecordInput{
 			ActorID:    in.ActorID,
 			Action:     "user.created",
 			EntityType: "user",
 			EntityID:   &id,
-			BranchID:   &branch,
+			BranchID:   optionalBranch(u.BranchID),
 			After: map[string]any{
 				"email": u.Email, "role": u.Role, "branch_id": u.BranchID, "team_id": u.TeamID,
 			},
@@ -195,10 +230,16 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*identity.User, e
 		if !platformauth.ValidRole(*in.Role) {
 			return nil, shared.NewValidation("invalid role")
 		}
+		if platformOperator(ctx) && *in.Role != platformauth.RoleGM {
+			return nil, errGMOnly()
+		}
 		u.Role = *in.Role
 	}
 	if in.BranchID != nil {
 		u.BranchID = *in.BranchID
+	}
+	if u.Role == platformauth.RoleAdmin {
+		u.BranchID, u.TeamID = uuid.Nil, nil
 	}
 	if in.Role != nil || in.BranchID != nil {
 		if err := checkPlacement(ctx, u.Role, u.BranchID); err != nil {
@@ -255,4 +296,12 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*identity.User, e
 
 func (s *Service) ListTeams(ctx context.Context, branchID *uuid.UUID) ([]identity.Team, error) {
 	return s.users.ListTeams(ctx, branchID)
+}
+
+// optionalBranch is the audit branch of a user: none for platform admins.
+func optionalBranch(id uuid.UUID) *uuid.UUID {
+	if id == uuid.Nil {
+		return nil
+	}
+	return &id
 }

@@ -103,3 +103,16 @@ func TestTenancyFailsClosed(t *testing.T) {
 		t.Fatalf("lookup failure: %d", code)
 	}
 }
+
+func TestTenancyPlatformAdminHasNoWorkspace(t *testing.T) {
+	ws, main, _ := tenant(true)
+	res := staticWorkspaces{main: ws}
+
+	code, s := serve(t, res, platformauth.RoleAdmin, uuid.Nil, main.String())
+	if code != http.StatusNoContent || s.Level != access.LevelGlobal || s.CompanyID != uuid.Nil || s.BranchID != uuid.Nil {
+		t.Fatalf("platform admin: %d %+v", code, s)
+	}
+	if code, _ = serve(t, res, platformauth.RoleManager, uuid.Nil, ""); code != http.StatusForbidden {
+		t.Fatalf("branchless staff must be refused, got %d", code)
+	}
+}

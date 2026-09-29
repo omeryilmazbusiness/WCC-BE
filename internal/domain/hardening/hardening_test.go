@@ -20,7 +20,7 @@ func TestAIPermissionLeakage(t *testing.T) {
 		{auth.RoleOperations, auth.PermAISetup, false},
 		{auth.RoleGM, auth.PermAISetup, true},
 		{auth.RoleManager, auth.PermAISetup, true},
-		{auth.RoleAdmin, auth.PermAISetup, true},
+		{auth.RoleAdmin, auth.PermAISetup, false},
 		{auth.RoleEmployee, auth.PermAIRead, true},
 		{auth.RoleEmployee, auth.PermAIWrite, true},
 		{auth.RoleFinance, auth.PermAIRead, true},

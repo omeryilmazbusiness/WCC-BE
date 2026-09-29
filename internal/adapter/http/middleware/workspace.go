@@ -47,6 +47,14 @@ func Tenancy(workspaces WorkspaceResolver) func(http.Handler) http.Handler {
 				response.Error(w, shared.NewUnauthorized("unauthenticated"))
 				return
 			}
+			if claims.BranchID == uuid.Nil {
+				if access.From(ctx).Level != access.LevelGlobal {
+					response.Error(w, shared.NewForbidden("account is not linked to a company"))
+					return
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
 			ws, err := workspaces.Workspace(ctx, claims.BranchID)
 			if err != nil {
 				if errors.Is(err, shared.ErrNotFound) {

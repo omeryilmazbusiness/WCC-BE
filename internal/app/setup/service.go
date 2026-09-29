@@ -183,7 +183,8 @@ func progressSnapshot(p domain.Progress) map[string]any {
 }
 
 // SaveCompany validates and stores the full company profile (name, contact,
-// location) and completes the company step.
+// location) and completes the company step. Without an explicit slug the URL
+// follows the English name: renaming re-derives it, otherwise it is kept.
 func (s *Service) SaveCompany(ctx context.Context, a Actor, c company.Company) (*Overview, error) {
 	c.ID = a.CompanyID
 	if strings.TrimSpace(c.Slug) == "" {
@@ -191,7 +192,7 @@ func (s *Service) SaveCompany(ctx context.Context, a Actor, c company.Company) (
 		if err != nil {
 			return nil, err
 		}
-		c.Slug = current.Slug
+		c.Slug = followNameSlug(current, c.NameEN)
 	}
 	if err := c.Normalize(company.ProfileComplete); err != nil {
 		return nil, err
@@ -212,6 +213,16 @@ func (s *Service) SaveCompany(ctx context.Context, a Actor, c company.Company) (
 		s.caches.Invalidate(a.CompanyID)
 	}
 	return o, err
+}
+
+func followNameSlug(current *company.Company, nameEN string) string {
+	if strings.TrimSpace(nameEN) == current.NameEN {
+		return current.Slug
+	}
+	if slug := company.Slugify(nameEN); slug != "" {
+		return slug
+	}
+	return current.Slug
 }
 
 // Advance passes a step; skip is needed for AI or channels that are not

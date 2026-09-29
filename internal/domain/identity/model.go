@@ -21,8 +21,11 @@ type User struct {
 	MFAEnabled   bool
 	// TokenVersion is maintained by the database; access tokens carry it as ver.
 	TokenVersion int
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// CompanyName is the English name of the user's company; filled by
+	// listings only, empty for platform admins.
+	CompanyName string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 type Team struct {

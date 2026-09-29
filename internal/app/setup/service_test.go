@@ -147,8 +147,8 @@ func TestFullOnboardingFlow(t *testing.T) {
 		t.Fatalf("save company: %v", err)
 	}
 	saved := f.companies.companies[f.actor.CompanyID]
-	if o.Progress.Next != domain.StepStaff || saved.NameEN != "WODI Travel" || saved.Slug != "old-co" {
-		t.Fatalf("after company (blank slug keeps the URL): %+v %+v", o.Progress, saved)
+	if o.Progress.Next != domain.StepStaff || saved.NameEN != "WODI Travel" || saved.Slug != "wodi-travel" {
+		t.Fatalf("after company (renaming re-derives the URL): %+v %+v", o.Progress, saved)
 	}
 	if len(f.cache.invalidated) != 1 {
 		t.Fatal("saving the profile must refresh the tenant cache")
@@ -220,5 +220,28 @@ func TestDismissAndCompleteGuards(t *testing.T) {
 	o, err := f.svc.Dismiss(ctx, f.actor)
 	if err != nil || o.Progress.Required {
 		t.Fatalf("dismiss: %v %+v", err, o)
+	}
+}
+
+func TestCompanySlugFollowsEnglishName(t *testing.T) {
+	cases := []struct {
+		name, slug, want string
+	}{
+		{"Old", "", "old-co"},
+		{"  Old  ", "", "old-co"},
+		{"Test", "", "test"},
+		{"شركة وفاد", "", "old-co"},
+		{"Test", "custom-url", "custom-url"},
+	}
+	for _, tc := range cases {
+		f := newFixture(t)
+		p := fullProfile()
+		p.NameEN, p.Slug = tc.name, tc.slug
+		if _, err := f.svc.SaveCompany(context.Background(), f.actor, p); err != nil {
+			t.Fatalf("%q: %v", tc.name, err)
+		}
+		if got := f.companies.companies[f.actor.CompanyID].Slug; got != tc.want {
+			t.Errorf("name %q slug %q: got %q, want %q", tc.name, tc.slug, got, tc.want)
+		}
 	}
 }

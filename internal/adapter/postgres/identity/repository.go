@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -37,7 +38,7 @@ var (
 func (r *Repository) FindUserByEmail(ctx context.Context, email string) (*identity.User, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	row := q.QueryRow(ctx, `
-		SELECT id, email, password_hash, full_name, role, branch_id, team_id, is_active,
+		SELECT id, email, password_hash, full_name, role, COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::uuid), team_id, is_active,
 		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version
 		FROM users WHERE email = $1`, email)
 	return scanUser(row)
@@ -46,20 +47,20 @@ func (r *Repository) FindUserByEmail(ctx context.Context, email string) (*identi
 func (r *Repository) FindUserByID(ctx context.Context, id uuid.UUID) (*identity.User, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	row := q.QueryRow(ctx, `
-		SELECT id, email, password_hash, full_name, role, branch_id, team_id, is_active,
+		SELECT id, email, password_hash, full_name, role, COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::uuid), team_id, is_active,
 		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version
 		FROM users WHERE id = $1`, id)
 	return scanUser(row)
 }
 
 func (r *Repository) CreateUser(ctx context.Context, user *identity.User) error {
-	if err := pgscope.EnsureBranch(ctx, user.BranchID); err != nil {
+	if err := ensureUserBranch(ctx, user.BranchID); err != nil {
 		return err
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO users (id, email, password_hash, full_name, role, branch_id, team_id, is_active, mfa_enabled, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+		VALUES ($1,$2,$3,$4,$5,NULLIF($6::uuid, '00000000-0000-0000-0000-000000000000'::uuid),$7,$8,$9,$10,$11)`,
 		user.ID, user.Email, user.PasswordHash, user.FullName, user.Role, user.BranchID, user.TeamID,
 		user.IsActive, user.MFAEnabled, user.CreatedAt, user.UpdatedAt,
 	)
@@ -67,7 +68,7 @@ func (r *Repository) CreateUser(ctx context.Context, user *identity.User) error 
 }
 
 func (r *Repository) UpdateUser(ctx context.Context, user *identity.User) error {
-	if err := pgscope.EnsureBranch(ctx, user.BranchID); err != nil {
+	if err := ensureUserBranch(ctx, user.BranchID); err != nil {
 		return err
 	}
 	args := []any{
@@ -81,7 +82,7 @@ func (r *Repository) UpdateUser(ctx context.Context, user *identity.User) error 
 	q := tx.QuerierFrom(ctx, r.pool)
 	tag, err := q.Exec(ctx, `
 		UPDATE users SET
-			email=$2, password_hash=$3, full_name=$4, role=$5, branch_id=$6, team_id=$7,
+			email=$2, password_hash=$3, full_name=$4, role=$5, branch_id=NULLIF($6::uuid, '00000000-0000-0000-0000-000000000000'::uuid), team_id=$7,
 			is_active=$8, mfa_enabled=$9, updated_at=$10
 		WHERE id=$1`+clause, args...)
 	if err != nil {
@@ -139,8 +140,9 @@ func (r *Repository) ListUsers(ctx context.Context, f identity.UserFilter) ([]id
 	}
 	args = append(args, limit, f.Offset)
 	rows, err := q.Query(ctx, `
-		SELECT id, email, password_hash, full_name, role, branch_id, team_id, is_active,
-		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version
+		SELECT id, email, password_hash, full_name, role, COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::uuid), team_id, is_active,
+		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version,
+		       COALESCE((SELECT c.name_en FROM branches b JOIN companies c ON c.id = b.company_id WHERE b.id = users.branch_id), '')
 		FROM users WHERE `+w+`
 		ORDER BY full_name ASC
 		LIMIT $`+fmt.Sprint(i)+` OFFSET $`+fmt.Sprint(i+1), args...)
@@ -150,10 +152,12 @@ func (r *Repository) ListUsers(ctx context.Context, f identity.UserFilter) ([]id
 	defer rows.Close()
 	var out []identity.User
 	for rows.Next() {
-		u, err := scanUser(rows)
+		var company string
+		u, err := scanUser(withCompany{rows, &company})
 		if err != nil {
 			return nil, 0, err
 		}
+		u.CompanyName = company
 		out = append(out, *u)
 	}
 	return out, total, rows.Err()
@@ -206,6 +210,16 @@ type scannable interface {
 	Scan(dest ...any) error
 }
 
+// withCompany scans the trailing company name column of a user listing.
+type withCompany struct {
+	row     scannable
+	company *string
+}
+
+func (w withCompany) Scan(dest ...any) error {
+	return w.row.Scan(append(dest, w.company)...)
+}
+
 func scanUser(row scannable) (*identity.User, error) {
 	var u identity.User
 	var role string
@@ -218,4 +232,16 @@ func scanUser(row scannable) (*identity.User, error) {
 	}
 	u.Role = platformauth.Role(role)
 	return &u, nil
+}
+
+// ensureUserBranch guards the target branch of a user write; branchless
+// (platform admin) accounts may only be written with platform scope.
+func ensureUserBranch(ctx context.Context, branchID uuid.UUID) error {
+	if branchID == uuid.Nil {
+		if access.From(ctx).Level != access.LevelGlobal {
+			return access.ErrBranchForbidden
+		}
+		return nil
+	}
+	return pgscope.EnsureBranch(ctx, branchID)
 }

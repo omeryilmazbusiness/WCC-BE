@@ -38,8 +38,11 @@ func TestAISetupNotLeaked(t *testing.T) {
 
 // Epic 18 — settings permissions matrix.
 func TestSettingsPermissions(t *testing.T) {
-	if !HasPermission(RoleGM, PermSettingsWrite) || !HasPermission(RoleAdmin, PermSettingsWrite) || !HasPermission(RoleManager, PermSettingsWrite) {
-		t.Fatal("gm/admin/manager must write settings")
+	if !HasPermission(RoleGM, PermSettingsWrite) || !HasPermission(RoleManager, PermSettingsWrite) {
+		t.Fatal("gm/manager must write settings")
+	}
+	if HasPermission(RoleAdmin, PermSettingsRead) {
+		t.Fatal("company settings belong to the company, not the platform admin")
 	}
 	if !HasPermission(RoleOperations, PermSettingsRead) || HasPermission(RoleOperations, PermSettingsWrite) {
 		t.Fatal("operations settings.read only")
@@ -97,10 +100,10 @@ func TestScopeLevels(t *testing.T) {
 	}
 }
 
-// Epic 20 T-267 — KVKK export/anonymize is limited to GM and Admin.
+// Epic 20 T-267 — KVKK export/anonymize of company data is limited to the GM.
 func TestPrivacyManagePermission(t *testing.T) {
 	for _, r := range AllRoles() {
-		want := r == RoleGM || r == RoleAdmin
+		want := r == RoleGM
 		if HasPermission(r, PermPrivacyManage) != want {
 			t.Fatalf("%s privacy.manage = %v, want %v", r, !want, want)
 		}
@@ -125,6 +128,23 @@ func TestFXManagePermission(t *testing.T) {
 		want := r == RoleGM || r == RoleFinance
 		if HasPermission(r, PermFXManage) != want {
 			t.Fatalf("%s fx.manage = %v, want %v", r, !want, want)
+		}
+	}
+}
+
+// The platform admin runs tenants and accounts but holds no company data permission.
+func TestPlatformAdminHoldsPlatformPermissionsOnly(t *testing.T) {
+	want := map[Permission]bool{
+		PermCompaniesManage: true, PermUsersRead: true, PermUsersWrite: true, PermUsersUnlock: true,
+		PermAuditRead: true, PermOpsRead: true,
+	}
+	got := PermissionsFor(RoleAdmin)
+	if len(got) != len(want) {
+		t.Fatalf("admin has %d permissions, want %d: %v", len(got), len(want), got)
+	}
+	for _, p := range got {
+		if !want[p] {
+			t.Fatalf("admin must not hold %s", p)
 		}
 	}
 }
