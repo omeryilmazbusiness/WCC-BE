@@ -34,6 +34,10 @@ func (s *stubAgg) Compute(_ context.Context, branchID *uuid.UUID, from, to time.
 func (s *stubAgg) TeamPerformance(context.Context, *uuid.UUID, time.Time, time.Time) ([]dashboard.TeamMember, error) {
 	return nil, nil
 }
+func (s *stubAgg) AttentionSummary(context.Context, *uuid.UUID) (*dashboard.AttentionSummary, error) {
+	return &dashboard.AttentionSummary{Total: 3, High: 1, Kinds: map[string]int{dashboard.AttentionOverdueTask: 2, dashboard.AttentionCapacity: 1}}, nil
+}
+
 func (s *stubAgg) AttentionFeed(context.Context, *uuid.UUID, int) ([]dashboard.AttentionItem, error) {
 	return nil, nil
 }
@@ -167,6 +171,24 @@ func TestServiceKPIsRequiresScope(t *testing.T) {
 	svc := dashboard.NewService(&stubAgg{kpi: &dashboard.KPI{}})
 	now := time.Now().UTC()
 	if _, err := svc.KPIs(context.Background(), nil, now.Add(-time.Hour), now); !errors.Is(err, access.ErrNoScope) {
+		t.Fatalf("want ErrNoScope, got %v", err)
+	}
+}
+
+func TestAttentionSummaryFillsEveryKind(t *testing.T) {
+	svc := dashboard.NewService(&stubAgg{kpi: &dashboard.KPI{}})
+	ctx := access.WithScope(context.Background(), access.Scope{Level: access.LevelBranch, BranchID: uuid.New(), UserID: uuid.New()})
+	sum, err := svc.AttentionSummary(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Total != 3 || sum.High != 1 || len(sum.Kinds) != len(dashboard.AttentionKinds) {
+		t.Fatalf("summary = %+v", sum)
+	}
+	if sum.Kinds[dashboard.AttentionOverdueTask] != 2 || sum.Kinds[dashboard.AttentionMissingDoc] != 0 {
+		t.Fatalf("kinds = %v", sum.Kinds)
+	}
+	if _, err := svc.AttentionSummary(context.Background(), nil); !errors.Is(err, access.ErrNoScope) {
 		t.Fatalf("want ErrNoScope, got %v", err)
 	}
 }

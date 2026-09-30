@@ -37,16 +37,48 @@ type TeamMember struct {
 	CollectedAmt int64     `json:"collected_amt"`
 }
 
+// Attention kinds, one per exception source. Each record appears under exactly one kind.
+const (
+	AttentionEscalatedTask = "escalated_task" // open task escalated by SLA rules
+	AttentionOverdueTask   = "overdue_task"   // open non-document task past due
+	AttentionMissingDoc    = "missing_doc"    // open document-collection task
+	AttentionUnpaidBooking = "unpaid_booking" // balance with an overdue, imminent or missing instalment plan
+	AttentionCapacity      = "capacity"       // upcoming departure closed, full or past its soft threshold
+)
+
+// AttentionKinds lists kinds in display order.
+var AttentionKinds = []string{
+	AttentionEscalatedTask, AttentionOverdueTask, AttentionUnpaidBooking, AttentionMissingDoc, AttentionCapacity,
+}
+
 // AttentionItem is an exception feed row — T-087.
 type AttentionItem struct {
 	ID          uuid.UUID `json:"id"`
-	Kind        string    `json:"kind"`     // overdue_task|unpaid_booking|missing_doc|capacity|escalated_task
-	Severity    string    `json:"severity"` // low|medium|high
+	Kind        string    `json:"kind"`     // one of AttentionKinds
+	Severity    string    `json:"severity"` // medium|high
 	Title       string    `json:"title"`
 	RelatedType string    `json:"related_type"`
 	RelatedID   uuid.UUID `json:"related_id"`
 	AgeHours    int       `json:"age_hours"`
 	HrefHint    string    `json:"href_hint"` // tasks|bookings|packages|pipeline
+	// Context names who or what the row is about (customer, lead, package, target).
+	Context string `json:"context,omitempty"`
+	// LinkType/LinkID point at the record to open: booking|package|lead|conversation|revenue_target|task.
+	LinkType string    `json:"link_type"`
+	LinkID   uuid.UUID `json:"link_id"`
+	// Amount is the open balance of an unpaid booking, in minor units of Currency.
+	Amount        *int64     `json:"amount,omitempty"`
+	Currency      string     `json:"currency,omitempty"`
+	CapacitySold  *int       `json:"capacity_sold,omitempty"`
+	CapacityTotal *int       `json:"capacity_total,omitempty"`
+	DueAt         *time.Time `json:"due_at,omitempty"`
+}
+
+// AttentionSummary counts every open exception, not just the page the feed returns.
+type AttentionSummary struct {
+	Total int            `json:"total"`
+	High  int            `json:"high"`
+	Kinds map[string]int `json:"kinds"`
 }
 
 // MyWorkItem is a prioritized employee work queue row — T-089.
@@ -83,11 +115,17 @@ type Scope struct {
 	To       time.Time
 }
 
+// AttentionReader reads the exception feed and its totals (ISP).
+type AttentionReader interface {
+	AttentionFeed(ctx context.Context, branchID *uuid.UUID, limit int) ([]AttentionItem, error)
+	AttentionSummary(ctx context.Context, branchID *uuid.UUID) (*AttentionSummary, error)
+}
+
 // Aggregator is the persistence port (DIP).
 type Aggregator interface {
 	Compute(ctx context.Context, branchID *uuid.UUID, from, to time.Time) (*KPI, error)
 	TeamPerformance(ctx context.Context, branchID *uuid.UUID, from, to time.Time) ([]TeamMember, error)
-	AttentionFeed(ctx context.Context, branchID *uuid.UUID, limit int) ([]AttentionItem, error)
+	AttentionReader
 	MyWorkToday(ctx context.Context, branchID *uuid.UUID, ownerID uuid.UUID, limit int) ([]MyWorkItem, error)
 	TargetProgress(ctx context.Context, branchID uuid.UUID, ownerID *uuid.UUID) (*TargetProgress, error)
 }
@@ -153,6 +191,24 @@ func (s *Service) Attention(ctx context.Context, branchID *uuid.UUID, limit int)
 		return nil, err
 	}
 	return s.agg.AttentionFeed(ctx, branchID, limit)
+}
+
+// AttentionSummary totals open exceptions by kind; every kind is present, zero when clear.
+func (s *Service) AttentionSummary(ctx context.Context, branchID *uuid.UUID) (*AttentionSummary, error) {
+	branchID, err := resolveBranch(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	sum, err := s.agg.AttentionSummary(ctx, branchID)
+	if err != nil {
+		return nil, err
+	}
+	kinds := make(map[string]int, len(AttentionKinds))
+	for _, k := range AttentionKinds {
+		kinds[k] = sum.Kinds[k]
+	}
+	sum.Kinds = kinds
+	return sum, nil
 }
 
 // MyWork is the caller's own queue across the branches their scope covers.

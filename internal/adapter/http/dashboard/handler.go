@@ -127,6 +127,30 @@ func (h Handler) Attention(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, items)
 }
 
+// AttentionSummary counts every open exception by kind for the manager dashboard.
+func (h Handler) AttentionSummary(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	if claims.Role == platformauth.RoleEmployee {
+		response.Error(w, shared.NewForbidden("manager dashboard only"))
+		return
+	}
+	branchID, err := request.OptionalUUID(r, "branch_id")
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	sum, err := h.Svc.AttentionSummary(r.Context(), branchID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, sum)
+}
+
 func (h Handler) MyWork(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	items, err := h.Svc.MyWork(r.Context(), limit)
