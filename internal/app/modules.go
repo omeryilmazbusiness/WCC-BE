@@ -251,7 +251,8 @@ func (m *modules) build() error {
 	m.packages = apppkg.NewService(pkgRepo, txm)
 	m.packages.SetAuditor(m.audit)
 	m.packages.SetBookingReader(bookingRepo)
-	m.dashboard = appdashboard.NewService(pgdash.NewDashboardAggregator(pool))
+	dashAgg := pgdash.NewDashboardAggregator(pool)
+	m.dashboard = appdashboard.NewService(dashAgg)
 
 	m.documents = appdocument.NewService(pgdocument.NewRepository(pool), store, txm)
 	m.documents.SetAuditor(m.audit)
@@ -271,6 +272,7 @@ func (m *modules) build() error {
 		Cfg: cfg, Log: log, Pool: pool, Tx: txm, Auditor: m.audit, Payments: m.payments,
 		Repo: paymentRepo, Bookings: bookingRepo, Tasks: taskSeeder, Notifier: m.notify,
 	})
+	m.dashboard.SetRevenueSources(dashAgg, paymentRepo, m.finance.FX.Converter())
 
 	reportRepo := pgreport.NewRepository(pool)
 	m.reports = appreport.NewService(reportRepo)

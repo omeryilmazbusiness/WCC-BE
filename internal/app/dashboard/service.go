@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
+	fxdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
@@ -94,6 +95,10 @@ type Aggregator interface {
 type Service struct {
 	agg Aggregator
 	now func() time.Time
+
+	revenue      RevenueReader
+	reportingCur ReportingCurrencyReader
+	fx           fxdomain.Converter
 }
 
 func NewService(agg Aggregator) *Service {

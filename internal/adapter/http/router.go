@@ -310,6 +310,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				Get("/dashboard/team", h.Dashboard.Team)
 			r.With(middleware.RequirePermission(platformauth.PermDashboardRead)).
 				Get("/dashboard/attention", h.Dashboard.Attention)
+			r.With(middleware.RequirePermission(platformauth.PermDashboardRead), middleware.RequirePermission(platformauth.PermPaymentsRead)).
+				Get("/dashboard/revenue", h.Dashboard.Revenue)
 			r.With(middleware.RequirePermission(platformauth.PermTasksRead)).
 				Get("/dashboard/my-work", h.Dashboard.MyWork)
 			r.With(middleware.RequirePermission(platformauth.PermTargetsRead)).

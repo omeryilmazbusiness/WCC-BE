@@ -156,6 +156,7 @@ Demo users (password `ChangeMe123!`):
 - `GET /v1/tasks/{id}` · `POST .../status|complete|reschedule|assign`
 - `GET /v1/dashboard/kpis` · `GET /v1/dashboard/team` · `GET /v1/dashboard/attention` (gm/manager)
 - `GET /v1/dashboard/my-work` · `GET /v1/dashboard/my-target` (authenticated; `?scope=branch` for managers)
+- `GET /v1/dashboard/revenue?from&to` (dashboard.read + payments.read) — finance-ledger revenue in the branch reporting currency: booked, net collected (verified charges minus approved refunds, by `received_at`), collection %, margin (only bookings with a cost entered), outstanding balances, overdue and 30-day instalments, payments awaiting verification, payment-method split and a daily series. Rows use their stored FX snapshot; the rest are converted with the latest effective rate, and currencies without a rate are listed in `unconverted` instead of being summed as-is.
 - `POST /v1/documents/presign`
 - Inbox + webhooks — see Epic 8 below
 
