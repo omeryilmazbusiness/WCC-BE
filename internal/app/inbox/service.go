@@ -43,15 +43,16 @@ type LeadShellInput struct {
 }
 
 type Service struct {
-	repo      domain.Repository
-	providers domain.Registry
-	customers CustomerMatcher
-	leads     LeadShellCreator
-	tx        tx.Runner
-	bus       *events.Bus
-	outbox    events.Outbox
-	secrets   *accountSecrets
-	now       func() time.Time
+	repo        domain.Repository
+	providers   domain.Registry
+	customers   CustomerMatcher
+	leads       LeadShellCreator
+	leadLocator LeadLocator
+	tx          tx.Runner
+	bus         *events.Bus
+	outbox      events.Outbox
+	secrets     *accountSecrets
+	now         func() time.Time
 }
 
 // SetOutbox enables durable conversation and integration events.

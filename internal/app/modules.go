@@ -224,6 +224,7 @@ func (m *modules) build() error {
 	m.bookings.SetAuditor(m.audit)
 	m.bookings.SetTimeZone(loc)
 	m.leads.SetBookingCreator(leadBookingBridge{svc: m.bookings})
+	m.leads.SetPackageChecker(leadPackageBridge{repo: pkgRepo})
 
 	m.notify = appnotification.NewService(pgnotification.NewRepository(pool), txm, log)
 	m.notify.SetUserDirectory(directory)
@@ -287,6 +288,9 @@ func (m *modules) build() error {
 	m.ai.SetConversationReader(aiInboxBridge{repo: inboxRepo})
 	m.ai.SetLeadReader(aiLeadBridge{repo: leadRepo, tasks: taskRepo})
 	m.ai.SetTargetReader(aiTargetBridge{svc: m.targets})
+	m.ai.SetLostLeadReader(aiLostBridge{repo: leadRepo})
+	m.ai.SetDraftConversationReader(aiInboxBridge{repo: inboxRepo})
+	m.ai.SetPackageCatalog(aiPackageCatalog{repo: pkgRepo})
 
 	m.fileSync = appfilesync.NewService(pgfilesync.NewRepository(pool), filesyncprovider.NewRegistry(
 		filesyncprovider.NewOneDrive(),
@@ -307,6 +311,7 @@ func (m *modules) build() error {
 	m.inbox.SetSecrets(secretBox, m.keyring)
 	m.inbox.SetCustomerMatcher(inboxCustomerBridge{repo: customerRepo})
 	m.inbox.SetLeadShellCreator(inboxLeadBridge{svc: m.leads})
+	m.inbox.SetLeadLocator(inboxLeadLocator{repo: leadRepo})
 	m.inbox.SetOutbox(outbox)
 	m.inboxAccts = appinbox.NewWebhookAccounts(inboxRepo, secretBox, m.keyring)
 
@@ -339,7 +344,7 @@ func (m *modules) build() error {
 		Alerts: alerts, Tasks: taskSeeder, TaskRead: taskRepo, Queries: pgautomation.NewQueries(pool),
 		Checklist: m.documents, SLA: m.inbox, Escalate: m.notify, Overdue: m.tasks,
 		Payments: m.payments, Documents: m.documents, Suppliers: m.suppliers, Visas: m.visas,
-		Targets: m.targets, Webhooks: m.webhooks, Reports: m.schedules, AI: m.ai,
+		Targets: m.targets, Webhooks: m.webhooks, Reports: m.schedules, AI: m.ai, LostLeads: m.ai, AIReady: m.ai,
 		Outbox: m.dispatcher, Log: log,
 	})
 	return nil

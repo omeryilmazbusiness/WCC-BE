@@ -32,6 +32,7 @@ const (
 	JobMissingDocs     shared.JobName = "booking.missing_docs"
 	JobIdleLeads       shared.JobName = "lead.idle_check"
 	JobOutboxPurge     shared.JobName = "outbox.purge"
+	JobLostLeadsWeekly shared.JobName = "ai.lost_leads.weekly"
 )
 
 // Tunables of the sweeps.
@@ -39,6 +40,7 @@ const (
 	sweepBatch        = 500
 	paymentDueWithin  = 72 * time.Hour
 	aiSummaryHour     = 7
+	lostLeadsHour     = 8
 	webhookRetryBatch = 100
 	reportBatch       = 200
 )
@@ -82,6 +84,12 @@ type (
 	DailySummarizer interface {
 		DailySummary(ctx context.Context, branchID, actorID uuid.UUID) (map[string]any, error)
 	}
+	LostLeadsAnalyzer interface {
+		LostLeadsAnalysis(ctx context.Context, branchID, actorID uuid.UUID, from, to time.Time) (map[string]any, error)
+	}
+	AIReadiness interface {
+		Configured(ctx context.Context, branchID uuid.UUID) (bool, error)
+	}
 	OutboxPurger interface {
 		Purge(ctx context.Context) (int64, error)
 	}
@@ -105,6 +113,8 @@ type JobDeps struct {
 	Webhooks  WebhookRetrier
 	Reports   ReportRunner
 	AI        DailySummarizer
+	LostLeads LostLeadsAnalyzer
+	AIReady   AIReadiness
 	Outbox    OutboxPurger
 	Log       *slog.Logger
 }
@@ -143,6 +153,7 @@ func (j *Jobs) Handlers() map[shared.JobName]Handler {
 		JobMissingDocs:                j.MissingDocs,
 		JobIdleLeads:                  j.IdleLeads,
 		shared.JobAISummaryDaily:      j.AISummary,
+		JobLostLeadsWeekly:            j.LostLeadsWeekly,
 		shared.JobReportGenerate:      j.Reports,
 		shared.JobWebhookRetry:        j.WebhookRetry,
 		shared.JobReminderSend:        j.Reminder,
@@ -253,6 +264,9 @@ func (j *Jobs) AISummary(ctx context.Context, _ []byte) error {
 		if local.Hour() < aiSummaryHour {
 			return nil
 		}
+		if ready, err := j.aiReady(ctx, b.ID); !ready {
+			return err
+		}
 		a := j.d.Alerts
 		return a.once(ctx, ledgerAISummary, b.ID.String(), local.Format(time.DateOnly), func(ctx context.Context) error {
 			out, err := j.d.AI.DailySummary(ctx, b.ID, uuid.Nil)
@@ -269,6 +283,67 @@ func (j *Jobs) AISummary(ctx context.Context, _ []byte) error {
 		})
 	})
 	return j.logCount(ctx, "ai daily summaries", sent, err)
+}
+
+// LostLeadsWeekly analyses why each branch lost leads in the previous local
+// week (Monday to Sunday) once, from Monday 08:00 branch time, and sends the
+// summary to its managers. A week without lost leads sends nothing.
+func (j *Jobs) LostLeadsWeekly(ctx context.Context, _ []byte) error {
+	now := j.now()
+	sent := 0
+	err := j.forBranches(ctx, func(b Branch) error {
+		local := now.In(b.Location())
+		if local.Weekday() == time.Monday && local.Hour() < lostLeadsHour {
+			return nil
+		}
+		if ready, err := j.aiReady(ctx, b.ID); !ready {
+			return err
+		}
+		to := startOfWeek(local)
+		from := to.AddDate(0, 0, -7)
+		year, week := from.ISOWeek()
+		a := j.d.Alerts
+		return a.once(ctx, ledgerLostLeads, b.ID.String(), fmt.Sprintf("%d-W%02d", year, week), func(ctx context.Context) error {
+			out, err := j.d.LostLeads.LostLeadsAnalysis(ctx, b.ID, uuid.Nil, from, to)
+			if err != nil {
+				return err
+			}
+			n, _ := out["lost_count"].(int)
+			if n == 0 {
+				return nil
+			}
+			id := b.ID
+			_, err = a.notify.EmitToRoles(ctx, b.ID, managerRoles, appnotification.EmitInput{
+				Kind: notificationdomain.KindAILostLeads, Title: fmt.Sprintf("Lost leads last week: %d", n),
+				Body: lostLeadsBody(out), EntityType: "branch", EntityID: &id, HrefHint: "/manager",
+			})
+			sent++
+			return err
+		})
+	})
+	return j.logCount(ctx, "weekly lost lead analyses", sent, err)
+}
+
+// aiReady keeps AI jobs from claiming a period for a branch without AI, so
+// a key added later still gets that period's run.
+func (j *Jobs) aiReady(ctx context.Context, branchID uuid.UUID) (bool, error) {
+	if j.d.AIReady == nil {
+		return false, nil
+	}
+	return j.d.AIReady.Configured(ctx, branchID)
+}
+
+// startOfWeek is Monday 00:00 of t's week in t's zone.
+func startOfWeek(t time.Time) time.Time {
+	y, m, d := t.Date()
+	return time.Date(y, m, d-(int(t.Weekday())+6)%7, 0, 0, 0, 0, t.Location())
+}
+
+func lostLeadsBody(out map[string]any) string {
+	if s, ok := out["summary"].(map[string]string); ok && strings.TrimSpace(s["en"]) != "" {
+		return s["en"]
+	}
+	return "Open the dashboard to see why leads were lost."
 }
 
 func summaryHeadline(out map[string]any) string {

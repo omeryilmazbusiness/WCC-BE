@@ -30,6 +30,7 @@ const (
 	ledgerPassport     = "alert.passport_expiry"
 	ledgerMissingDocs  = "alert.missing_docs"
 	ledgerAISummary    = "ai.summary_daily"
+	ledgerLostLeads    = "ai.lost_leads_weekly"
 )
 
 // Alerts implements the alert ports of the document, supplier, visa, target,

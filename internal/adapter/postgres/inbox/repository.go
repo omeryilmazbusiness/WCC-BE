@@ -233,7 +233,8 @@ const convSelect = `
 	c.last_inbound_at, c.last_outbound_at, c.unanswered_since, c.last_message_preview,
 	COALESCE(cu.full_name,''),
 	TRIM(BOTH ' ·' FROM CONCAT_WS(' ·', NULLIF(ci.display_name,''), NULLIF(ci.phone,''), NULLIF(ci.email,''))),
-	c.created_at, c.updated_at, c.sla_warned_at`
+	c.created_at, c.updated_at, c.sla_warned_at,
+	COALESCE(ci.display_name,''), COALESCE(ci.phone,'')`
 
 func scanConv(row pgx.Row) (*domain.Conversation, error) {
 	var c domain.Conversation
@@ -243,6 +244,7 @@ func scanConv(row pgx.Row) (*domain.Conversation, error) {
 		&c.Subject, &c.Status, &c.SLAStartedAt, &c.SLADueAt, &c.SLABreachedAt, &c.SLAStoppedAt,
 		&c.LastInboundAt, &c.LastOutboundAt, &c.UnansweredSince, &c.LastMessagePreview,
 		&c.CustomerName, &c.IdentityLabel, &c.CreatedAt, &c.UpdatedAt, &c.SLAWarnedAt,
+		&c.ContactName, &c.ContactPhone,
 	)
 	if err != nil {
 		return nil, err
@@ -486,21 +488,37 @@ func (r *Repository) FindMessageByEvent(ctx context.Context, provider domain.Cha
 }
 
 func (r *Repository) ListMessages(ctx context.Context, conversationID uuid.UUID, limit int) ([]domain.Message, error) {
+	return r.messages(ctx, conversationID, limit, false)
+}
+
+// RecentMessages returns the newest limit messages, oldest first.
+func (r *Repository) RecentMessages(ctx context.Context, conversationID uuid.UUID, limit int) ([]domain.Message, error) {
+	return r.messages(ctx, conversationID, limit, true)
+}
+
+func (r *Repository) messages(ctx context.Context, conversationID uuid.UUID, limit int, newest bool) ([]domain.Message, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	clause, args, err := pgscope.Clause(ctx, convScope, []any{conversationID, limit})
 	if err != nil {
 		return nil, err
 	}
+	pick := "ASC"
+	if newest {
+		pick = "DESC"
+	}
 	rows, err := q.Query(ctx, `
-		SELECT m.id, m.conversation_id, m.branch_id, m.direction, m.body, m.content_type, m.provider,
-			m.provider_message_id, m.provider_event_id, m.status, m.document_id, m.author_user_id,
-			COALESCE(u.full_name,''), m.error_message, m.created_at
-		FROM messages m
-		LEFT JOIN users u ON u.id = m.author_user_id
-		WHERE m.conversation_id=$1
-		  AND EXISTS (SELECT 1 FROM conversations c WHERE c.id=m.conversation_id`+clause+`)
-		ORDER BY m.created_at ASC
-		LIMIT $2`, args...)
+		SELECT * FROM (
+			SELECT m.id, m.conversation_id, m.branch_id, m.direction, m.body, m.content_type, m.provider,
+				m.provider_message_id, m.provider_event_id, m.status, m.document_id, m.author_user_id,
+				COALESCE(u.full_name,''), m.error_message, m.created_at
+			FROM messages m
+			LEFT JOIN users u ON u.id = m.author_user_id
+			WHERE m.conversation_id=$1
+			  AND EXISTS (SELECT 1 FROM conversations c WHERE c.id=m.conversation_id`+clause+`)
+			ORDER BY m.created_at `+pick+`
+			LIMIT $2
+		) picked
+		ORDER BY created_at ASC`, args...)
 	if err != nil {
 		return nil, err
 	}

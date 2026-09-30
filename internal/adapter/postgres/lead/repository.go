@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -31,7 +32,8 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 
 const leadCols = `l.id, l.branch_id, l.customer_id, l.full_name, l.phone, l.source, l.stage, l.owner_id,
 	COALESCE(u.full_name, ''), l.lost_reason_code, l.lost_reason, l.notes, l.no_follow_up,
-	l.converted_booking_id, l.created_at, l.updated_at`
+	l.converted_booking_id, l.created_at, l.updated_at,
+	l.travel_date, l.travel_window, l.pax_count, l.budget_amount, l.budget_currency, l.package_id, l.package_interest`
 
 func scanLead(row pgx.Row) (*domain.Lead, error) {
 	var l domain.Lead
@@ -40,6 +42,8 @@ func scanLead(row pgx.Row) (*domain.Lead, error) {
 		&l.ID, &l.BranchID, &l.CustomerID, &l.FullName, &l.Phone, &l.Source, &stage, &l.OwnerID,
 		&l.OwnerName, &l.LostReasonCode, &l.LostReason, &l.Notes, &l.NoFollowUp,
 		&l.ConvertedBookingID, &l.CreatedAt, &l.UpdatedAt,
+		&l.Interest.TravelDate, &l.Interest.TravelWindow, &l.Interest.PaxCount, &l.Interest.BudgetAmount,
+		&l.Interest.BudgetCurrency, &l.Interest.PackageID, &l.Interest.PackageInterest,
 	)
 	if err != nil {
 		return nil, err
@@ -56,10 +60,13 @@ func (r *Repository) Create(ctx context.Context, l *domain.Lead) error {
 	_, err := q.Exec(ctx, `
 		INSERT INTO leads (
 			id, branch_id, customer_id, full_name, phone, source, stage, owner_id,
-			lost_reason_code, lost_reason, notes, no_follow_up, converted_booking_id, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+			lost_reason_code, lost_reason, notes, no_follow_up, converted_booking_id, created_at, updated_at,
+			travel_date, travel_window, pax_count, budget_amount, budget_currency, package_id, package_interest
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
 		l.ID, l.BranchID, l.CustomerID, l.FullName, l.Phone, l.Source, l.Stage, l.OwnerID,
 		l.LostReasonCode, l.LostReason, l.Notes, l.NoFollowUp, l.ConvertedBookingID, l.CreatedAt, l.UpdatedAt,
+		l.Interest.TravelDate, l.Interest.TravelWindow, l.Interest.PaxCount, l.Interest.BudgetAmount,
+		l.Interest.BudgetCurrency, l.Interest.PackageID, l.Interest.PackageInterest,
 	)
 	return err
 }
@@ -69,6 +76,8 @@ func (r *Repository) Update(ctx context.Context, l *domain.Lead) error {
 	args := []any{
 		l.ID, l.CustomerID, l.FullName, l.Phone, l.Source, l.Stage, l.OwnerID,
 		l.LostReasonCode, l.LostReason, l.Notes, l.NoFollowUp, l.ConvertedBookingID, l.UpdatedAt,
+		l.Interest.TravelDate, l.Interest.TravelWindow, l.Interest.PaxCount, l.Interest.BudgetAmount,
+		l.Interest.BudgetCurrency, l.Interest.PackageID, l.Interest.PackageInterest,
 	}
 	scope, args, err := pgscope.Clause(ctx, scopeBare, args)
 	if err != nil {
@@ -76,7 +85,9 @@ func (r *Repository) Update(ctx context.Context, l *domain.Lead) error {
 	}
 	tag, err := q.Exec(ctx, `
 		UPDATE leads SET customer_id=$2, full_name=$3, phone=$4, source=$5, stage=$6, owner_id=$7,
-			lost_reason_code=$8, lost_reason=$9, notes=$10, no_follow_up=$11, converted_booking_id=$12, updated_at=$13
+			lost_reason_code=$8, lost_reason=$9, notes=$10, no_follow_up=$11, converted_booking_id=$12, updated_at=$13,
+			travel_date=$14, travel_window=$15, pax_count=$16, budget_amount=$17, budget_currency=$18,
+			package_id=$19, package_interest=$20
 		WHERE id=$1`+scope, args...)
 	if err != nil {
 		return err
@@ -181,6 +192,39 @@ func (r *Repository) AppendStageHistory(ctx context.Context, h *domain.StageHist
 		h.ID, h.LeadID, h.FromStage, h.ToStage, h.ChangedBy, h.Note, h.CreatedAt,
 	)
 	return err
+}
+
+// LostBetween lists leads of a branch that are lost and entered the lost
+// stage in [from, to), latest first.
+func (r *Repository) LostBetween(ctx context.Context, branchID uuid.UUID, from, to time.Time, limit int) ([]domain.LostRecord, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeAliased, []any{branchID, from, to, limit})
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Query(ctx, `
+		SELECT code, note, source, from_stage, lost_at FROM (
+			SELECT DISTINCT ON (l.id) l.lost_reason_code AS code, l.lost_reason AS note, l.source,
+			       COALESCE(h.from_stage, '') AS from_stage, h.created_at AS lost_at
+			FROM leads l
+			JOIN lead_stage_history h ON h.lead_id = l.id AND h.to_stage = 'lost'
+			WHERE l.branch_id = $1 AND l.stage = 'lost' AND h.created_at >= $2 AND h.created_at < $3`+scope+`
+			ORDER BY l.id, h.created_at DESC
+		) lost
+		ORDER BY lost_at DESC LIMIT $4`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.LostRecord
+	for rows.Next() {
+		var rec domain.LostRecord
+		if err := rows.Scan(&rec.ReasonCode, &rec.Note, &rec.Source, &rec.FromStage, &rec.LostAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
 }
 
 func (r *Repository) ListStageHistory(ctx context.Context, leadID uuid.UUID) ([]domain.StageHistory, error) {

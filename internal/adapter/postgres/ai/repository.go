@@ -126,12 +126,12 @@ func (r *Repository) UpdateRunFeedback(ctx context.Context, id uuid.UUID, feedba
 	return nil
 }
 
-func (r *Repository) ListRuns(ctx context.Context, branchID uuid.UUID, kind domain.Kind, limit int) ([]domain.Run, error) {
+func (r *Repository) ListRuns(ctx context.Context, branchID uuid.UUID, kind domain.Kind, status string, limit int) ([]domain.Run, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
-	clause, args, err := pgscope.Clause(ctx, runScope, []any{branchID, string(kind), limit})
+	clause, args, err := pgscope.Clause(ctx, runScope, []any{branchID, string(kind), limit, status})
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func (r *Repository) ListRuns(ctx context.Context, branchID uuid.UUID, kind doma
 		SELECT id, branch_id, actor_id, kind, provider, model, scope_json,
 		       input_hash, output_json, feedback, status, error_message, created_at
 		FROM ai_runs
-		WHERE branch_id=$1 AND ($2 = '' OR kind=$2)`+clause+`
+		WHERE branch_id=$1 AND ($2 = '' OR kind=$2) AND ($4 = '' OR status=$4)`+clause+`
 		ORDER BY created_at DESC LIMIT $3`, args...)
 	if err != nil {
 		return nil, err

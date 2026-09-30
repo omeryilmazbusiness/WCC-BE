@@ -118,6 +118,8 @@ type Conversation struct {
 	LastMessagePreview   string
 	CustomerName         string
 	IdentityLabel        string
+	ContactName          string // channel identity display name
+	ContactPhone         string // channel identity phone
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 }

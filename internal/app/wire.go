@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	httpadapter "github.com/wodi-crm/wodi-crm-be/internal/adapter/http"
@@ -49,6 +52,7 @@ import (
 	pglead "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/lead"
 	pgrealtime "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/realtime"
 	pgtask "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/task"
+	pkgpg "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/tourpackage"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/queue"
 	appai "github.com/wodi-crm/wodi-crm-be/internal/app/ai"
 	appbooking "github.com/wodi-crm/wodi-crm-be/internal/app/booking"
@@ -63,6 +67,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	domainai "github.com/wodi-crm/wodi-crm-be/internal/domain/ai"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
+	inboxdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	taskdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/task"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -362,6 +367,99 @@ func (b aiInboxBridge) Messages(ctx context.Context, conversationID, branchID uu
 		lines = append(lines, string(m.Direction)+": "+m.Body)
 	}
 	return c.Subject, lines, nil
+}
+
+func (b aiInboxBridge) DraftConversation(ctx context.Context, conversationID, branchID uuid.UUID, limit int) (*appai.DraftConversation, error) {
+	c, err := b.repo.GetConversation(ctx, conversationID)
+	if err != nil || c == nil {
+		return nil, shared.NewNotFound("conversation")
+	}
+	if c.BranchID != branchID {
+		return nil, shared.NewForbidden("conversation branch mismatch")
+	}
+	msgs, err := b.repo.RecentMessages(ctx, conversationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		body := strings.TrimSpace(m.Body)
+		if body == "" {
+			continue
+		}
+		switch m.Direction {
+		case inboxdomain.DirectionIn:
+			lines = append(lines, "customer: "+body)
+		case inboxdomain.DirectionOut:
+			lines = append(lines, "agent: "+body)
+		}
+	}
+	return &appai.DraftConversation{
+		ContactName: c.ContactName, ContactPhone: c.ContactPhone, LeadID: c.LeadID, Lines: lines,
+	}, nil
+}
+
+// aiPackageCatalog lists the branch's active packages for lead extraction.
+type aiPackageCatalog struct{ repo *pkgpg.Repository }
+
+func (b aiPackageCatalog) ActivePackages(ctx context.Context, branchID uuid.UUID) ([]appai.CatalogPackage, error) {
+	pkgs, err := b.repo.ListPackages(ctx, branchID, true)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]appai.CatalogPackage, 0, len(pkgs))
+	for _, p := range pkgs {
+		out = append(out, appai.CatalogPackage{ID: p.ID, Code: p.Code, Name: p.NameEN})
+	}
+	return out, nil
+}
+
+// aiLostBridge hands lost-lead reasons to AI; a note that only repeats the
+// reason code carries no extra signal.
+type aiLostBridge struct{ repo *pglead.Repository }
+
+func (b aiLostBridge) LostBetween(ctx context.Context, branchID uuid.UUID, from, to time.Time, limit int) ([]appai.LostLead, error) {
+	recs, err := b.repo.LostBetween(ctx, branchID, from, to, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]appai.LostLead, 0, len(recs))
+	for _, r := range recs {
+		note := strings.TrimSpace(r.Note)
+		if note == r.ReasonCode {
+			note = ""
+		}
+		out = append(out, appai.LostLead{ReasonCode: r.ReasonCode, Note: note, Source: r.Source, FromStage: r.FromStage})
+	}
+	return out, nil
+}
+
+// inboxLeadLocator resolves leads through the scoped lead repository.
+type inboxLeadLocator struct{ repo *pglead.Repository }
+
+func (b inboxLeadLocator) LeadBranch(ctx context.Context, leadID uuid.UUID) (uuid.UUID, bool, error) {
+	l, err := b.repo.FindByID(ctx, leadID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, err
+	}
+	return l.BranchID, true, nil
+}
+
+// leadPackageBridge lets leads reference only their own branch's packages.
+type leadPackageBridge struct{ repo *pkgpg.Repository }
+
+func (b leadPackageBridge) PackageInBranch(ctx context.Context, packageID, branchID uuid.UUID) (bool, error) {
+	p, err := b.repo.FindPackage(ctx, packageID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return p.BranchID == branchID, nil
 }
 
 type aiLeadBridge struct {

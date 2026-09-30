@@ -22,12 +22,13 @@ type Handler struct {
 }
 
 type createRequest struct {
-	CustomerID *uuid.UUID `json:"customer_id"`
-	FullName   string     `json:"full_name"`
-	Phone      string     `json:"phone"`
-	Source     string     `json:"source"`
-	Notes      string     `json:"notes"`
-	OwnerID    *uuid.UUID `json:"owner_id"`
+	CustomerID *uuid.UUID       `json:"customer_id"`
+	FullName   string           `json:"full_name"`
+	Phone      string           `json:"phone"`
+	Source     string           `json:"source"`
+	Notes      string           `json:"notes"`
+	OwnerID    *uuid.UUID       `json:"owner_id"`
+	Interest   *interestRequest `json:"interest"`
 }
 
 type stageRequest struct {
@@ -70,6 +71,7 @@ func mapLead(l *domain.Lead) map[string]any {
 		"lost_reason_code":     l.LostReasonCode,
 		"lost_reason":          l.LostReason,
 		"notes":                l.Notes,
+		"interest":             mapInterest(l.Interest),
 		"no_follow_up":         l.NoFollowUp,
 		"converted_booking_id": l.ConvertedBookingID,
 		"created_at":           l.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -108,9 +110,14 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if req.OwnerID != nil {
 		owner = *req.OwnerID
 	}
+	interest, err := req.Interest.toDomain()
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	l, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
 		CustomerID: req.CustomerID, FullName: req.FullName,
-		Phone: req.Phone, Source: req.Source, OwnerID: owner, Notes: req.Notes,
+		Phone: req.Phone, Source: req.Source, OwnerID: owner, Notes: req.Notes, Interest: interest,
 		ActorID: claims.UserID, IP: r.RemoteAddr, UserAgent: r.UserAgent(),
 	})
 	if err != nil {

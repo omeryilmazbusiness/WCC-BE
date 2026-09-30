@@ -209,6 +209,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermLeadsWrite)).Post("/", h.Lead.Create)
 				r.With(middleware.RequirePermission(platformauth.PermLeadsWrite)).Post("/assign", h.Lead.Assign)
 				r.With(middleware.RequirePermission(platformauth.PermLeadsRead)).Get("/{id}", h.Lead.Get)
+				r.With(middleware.RequirePermission(platformauth.PermLeadsWrite)).Patch("/{id}", h.Lead.Update)
 				r.With(middleware.RequirePermission(platformauth.PermLeadsWrite)).Post("/{id}/stage", h.Lead.ChangeStage)
 				r.With(middleware.RequirePermission(platformauth.PermLeadsWrite)).Post("/{id}/assign", h.Lead.Assign)
 				r.With(middleware.RequirePermission(platformauth.PermLeadsRead)).Get("/{id}/history", h.Lead.History)
@@ -439,6 +440,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermInboxWrite)).Post("/conversations/{id}/assign", h.Inbox.Assign)
 				r.With(middleware.RequirePermission(platformauth.PermInboxWrite)).Post("/conversations/{id}/reply", h.Inbox.Reply)
 				r.With(middleware.RequirePermission(platformauth.PermInboxWrite)).Post("/conversations/{id}/status", h.Inbox.SetStatus)
+				r.With(middleware.RequirePermission(platformauth.PermInboxWrite), middleware.RequirePermission(platformauth.PermLeadsWrite)).Post("/conversations/{id}/lead", h.Inbox.LinkLead)
 				r.With(middleware.RequirePermission(platformauth.PermInboxWrite)).Post("/sla/check", h.Inbox.CheckSLA)
 			})
 			r.With(middleware.RequirePermission(platformauth.PermIntegrationsRead)).
@@ -501,7 +503,13 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermAISetup)).Post("/setup", h.AI.CompleteSetup)
 				r.With(middleware.RequirePermission(platformauth.PermAISetup)).Post("/setup/disable", h.AI.Disable)
 				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Get("/daily-summary", h.AI.DailySummary)
+				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/daily-summary", h.AI.GenerateDailySummary)
+				r.With(middleware.RequirePermission(platformauth.PermAIRead), middleware.RequirePermission(platformauth.PermDashboardRead)).
+					Get("/lost-leads/analysis", h.AI.LostLeadsAnalysis)
+				r.With(middleware.RequirePermission(platformauth.PermAIWrite), middleware.RequirePermission(platformauth.PermDashboardRead)).
+					Post("/lost-leads/analysis", h.AI.AnalyzeLostLeads)
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/conversations/{id}/assist", h.AI.ConversationAssist)
+				r.With(middleware.RequirePermission(platformauth.PermAIWrite), middleware.RequirePermission(platformauth.PermLeadsWrite)).Post("/conversations/{id}/lead-draft", h.AI.LeadDraft)
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Get("/leads/{id}/score", h.AI.LeadPriority)
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/leads/{id}/score", h.AI.ScoreLead)
 				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Get("/targets/{id}/insight", h.AI.TargetInsight)

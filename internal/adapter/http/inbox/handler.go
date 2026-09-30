@@ -54,6 +54,8 @@ func mapConversation(c *domain.Conversation) map[string]any {
 		"last_message_preview":   c.LastMessagePreview,
 		"customer_name":          c.CustomerName,
 		"identity_label":         c.IdentityLabel,
+		"contact_name":           c.ContactName,
+		"contact_phone":          c.ContactPhone,
 		"created_at":             c.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at":             c.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		"sla_breached":           c.SLABreachedAt != nil,

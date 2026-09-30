@@ -139,6 +139,7 @@ Demo users (password `ChangeMe123!`):
 - `GET|POST /v1/customers/{id}/companions` · `DELETE .../companions/{companionId}`
 - `GET|POST /v1/leads` · `GET /v1/leads/analytics` · `GET /v1/leads/lost-reasons` · `POST /v1/leads/assign`
 - `GET /v1/leads/{id}` · `POST .../stage|assign|convert|no-follow-up` · `GET .../history`
+- `PATCH /v1/leads/{id}` — name, phone, notes and `interest` (`travel_date` YYYY-MM-DD, `travel_window`, `pax_count` 1–500, `budget_amount` minor units + `budget_currency`, `package_id` of the lead's branch, `package_interest`); a sent `interest` replaces the whole interest. `POST /v1/leads` accepts the same `interest`.
 - `GET|POST /v1/packages` · `GET|PATCH /v1/packages/{id}` · `POST .../clone` · `GET|PUT .../tiers`
 - `GET|POST /v1/packages/{id}/departures`
 - `GET|PATCH /v1/departures/{id}` · `POST .../clone|close-sales|mark-full|recompute-capacity`
@@ -330,12 +331,15 @@ Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supp
 | T-196 Money/SLA/target stay deterministic | Done |
 | T-197–T-201 FE surfaces + BYO setup wizard | Done |
 
-- `GET/POST /v1/ai/setup` — BYO `openai` \| `anthropic` \| `gemini` API key (per branch; key never returned raw)
-- `GET /v1/ai/daily-summary` · `POST /v1/ai/conversations/{id}/assist` · `POST /v1/ai/leads/{id}/score`
+- `GET/POST /v1/ai/setup` — BYO `openai` \| `anthropic` \| `gemini` API key (per branch; key never returned raw). Enabling sends one tiny test request, so a wrong key or model is refused before saving. A blank model uses the provider default (`gpt-6-luna`, `claude-haiku-4-5`, `gemini-3.5-flash`).
+- Provider failures come back as `ai_model_not_found`, `ai_key_invalid` (field details `model` / `api_key`), `ai_rate_limited` or `ai_provider_error`; 5xx answers are retried twice with a short backoff.
+- `GET /v1/ai/daily-summary` returns the latest stored briefing (no model call) · `POST /v1/ai/daily-summary` generates one now · `POST /v1/ai/conversations/{id}/assist` · `POST /v1/ai/leads/{id}/score`
 - `GET /v1/ai/targets/{id}/insight` · `POST /v1/ai/ocr` · `POST /v1/ai/runs/{id}/feedback`
+- `GET/POST /v1/ai/lost-leads/analysis` — why leads were lost: reason breakdown, a 1–2 sentence summary and 3–5 simple actions (EN + AR). The `ai.lost_leads.weekly` job analyses the previous Monday–Sunday once per branch from Monday 08:00 branch time and notifies managers; `POST` runs it now over the last 7 days. Only reason codes, notes, lead source and stage reach the model — never names or contacts.
+- `POST /v1/ai/conversations/{id}/lead-draft` (`ai.write` + `leads.write`) — reads the newest 60 messages and returns a lead form prefill: name, travel date or period, travellers, budget (minor units + ISO currency), a catalogue package or free-text interest, notes, plus `ai_fields` naming what the model filled. Output is range-checked server-side; the phone always comes from the channel identity, never the model. Staff review and save through `POST /v1/leads` or `PATCH /v1/leads/{id}`, then `POST /v1/inbox/conversations/{id}/lead` links a new lead.
 - Permissions: `ai.read` / `ai.write` / `ai.setup`
 - Providers in `adapter/ai` (OCP); domain scoring pure; runs stored in `ai_runs`
-- Without a key, summaries/insights fall back to deterministic rules (`source=deterministic`)
+- AI features run only with a branch key: without one they answer `ai_not_configured` and the scheduled AI jobs skip the branch without using up its period, so a key added later still gets that day's or week's run. Lead priority scores and target insight numbers stay deterministic.
 
 ## Epic 16 P2 Advanced Extensions
 

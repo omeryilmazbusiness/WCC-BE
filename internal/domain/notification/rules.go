@@ -124,6 +124,11 @@ func DefaultRules() []Rule {
 			DefaultHref: "/manager", EntityType: "branch",
 		},
 		{
+			Kind: KindAILostLeads, Severity: SeverityInfo,
+			Groupable: true, DefaultTitle: "Weekly lost leads analysis",
+			DefaultHref: "/manager", EntityType: "branch",
+		},
+		{
 			Kind: KindTaskReminder, Severity: SeverityInfo,
 			Groupable: false, DefaultTitle: "Task reminder",
 			DefaultHref: "/tasks", EntityType: "task",

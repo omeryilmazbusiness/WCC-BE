@@ -1,8 +1,10 @@
 package ai
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -94,7 +96,14 @@ func (h Handler) Disable(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, out)
 }
 
+// DailySummary returns the branch's latest AI briefing without calling the
+// model; available is false until one has been generated.
 func (h Handler) DailySummary(w http.ResponseWriter, r *http.Request) {
+	h.latest(w, r, h.Svc.LatestDailySummary)
+}
+
+// GenerateDailySummary asks the model for a fresh briefing now.
+func (h Handler) GenerateDailySummary(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
@@ -110,6 +119,58 @@ func (h Handler) DailySummary(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	out["available"] = true
+	response.JSON(w, http.StatusOK, out)
+}
+
+// LostLeadsAnalysis returns the branch's latest lost-lead analysis.
+func (h Handler) LostLeadsAnalysis(w http.ResponseWriter, r *http.Request) {
+	h.latest(w, r, h.Svc.LatestLostLeadsAnalysis)
+}
+
+func (h Handler) latest(w http.ResponseWriter, r *http.Request, read func(context.Context, uuid.UUID) (map[string]any, error)) {
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	configured, err := h.Svc.Configured(r.Context(), branchID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out, err := read(r.Context(), branchID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	if out == nil {
+		out = map[string]any{}
+	}
+	out["available"] = len(out) > 0
+	out["ai_enabled"] = configured
+	response.JSON(w, http.StatusOK, out)
+}
+
+// AnalyzeLostLeads runs the analysis now over the last seven days.
+func (h Handler) AnalyzeLostLeads(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	now := time.Now()
+	out, err := h.Svc.LostLeadsAnalysis(r.Context(), branchID, claims.UserID, now.AddDate(0, 0, -7), now)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out["available"] = true
 	response.JSON(w, http.StatusOK, out)
 }
 
@@ -130,6 +191,31 @@ func (h Handler) ConversationAssist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.Svc.ConversationAssist(r.Context(), branchID, claims.UserID, id)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+// LeadDraft reads a conversation with AI and returns a lead form prefill.
+func (h Handler) LeadDraft(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	out, err := h.Svc.LeadDraftFromConversation(r.Context(), branchID, claims.UserID, id)
 	if err != nil {
 		response.Error(w, err)
 		return

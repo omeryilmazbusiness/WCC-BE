@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -80,7 +82,7 @@ func (o *OpenAI) Complete(ctx context.Context, apiKey string, req domain.Complet
 	}
 	body := map[string]any{
 		"model": model, "messages": messages,
-		"max_tokens": maxTok(req.MaxTokens),
+		"max_completion_tokens": maxTok(req.MaxTokens) + reasoningHeadroom,
 	}
 	if req.JSONMode {
 		body["response_format"] = map[string]string{"type": "json_object"}
@@ -209,14 +211,16 @@ func (g *Gemini) Complete(ctx context.Context, apiKey string, req domain.Complet
 	body := map[string]any{
 		"contents": []map[string]any{{"parts": parts}},
 		"generationConfig": map[string]any{
-			"maxOutputTokens": maxTok(req.MaxTokens),
+			"maxOutputTokens": maxTok(req.MaxTokens) + reasoningHeadroom,
 		},
 	}
 	if req.JSONMode {
 		body["generationConfig"].(map[string]any)["responseMimeType"] = "application/json"
 	}
-	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", g.Base, model, apiKey)
-	raw, err := postJSONHeaders(ctx, g.Client, url, map[string]string{"Content-Type": "application/json"}, body)
+	endpoint := fmt.Sprintf("%s/models/%s:generateContent", g.Base, url.PathEscape(model))
+	raw, err := postJSONHeaders(ctx, g.Client, endpoint, map[string]string{
+		"Content-Type": "application/json", "x-goog-api-key": apiKey,
+	}, body)
 	if err != nil {
 		return nil, err
 	}
@@ -241,6 +245,11 @@ func (g *Gemini) Complete(ctx context.Context, apiKey string, req domain.Complet
 	return &domain.CompletionResponse{Text: text, Model: model, Raw: raw}, nil
 }
 
+// reasoningHeadroom is added to output limits because reasoning models
+// (OpenAI GPT-5+, Gemini 2.5+) spend part of that budget on hidden thinking;
+// without it short JSON answers come back empty.
+const reasoningHeadroom = 2048
+
 func maxTok(n int) int {
 	if n <= 0 {
 		return 1024
@@ -255,12 +264,30 @@ func postJSON(ctx context.Context, client httpDoer, url, bearer string, body any
 	}, body)
 }
 
+// retryBackoff lists waits before each retry of a transient (5xx) vendor failure.
+var retryBackoff = []time.Duration{700 * time.Millisecond, 2 * time.Second}
+
 func postJSONHeaders(ctx context.Context, client httpDoer, url string, headers map[string]string, body any) (json.RawMessage, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(b))
+	for attempt := 0; ; attempt++ {
+		raw, err := postOnce(ctx, client, url, headers, b)
+		var pe *domain.ProviderError
+		if err == nil || !errors.As(err, &pe) || pe.Status < 500 || attempt >= len(retryBackoff) {
+			return raw, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(retryBackoff[attempt]):
+		}
+	}
+}
+
+func postOnce(ctx context.Context, client httpDoer, url string, headers map[string]string, body []byte) (json.RawMessage, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +305,7 @@ func postJSONHeaders(ctx context.Context, client httpDoer, url string, headers m
 		if len(msg) > 400 {
 			msg = msg[:400]
 		}
-		return nil, fmt.Errorf("provider http %d: %s", res.StatusCode, msg)
+		return nil, &domain.ProviderError{Status: res.StatusCode, Body: msg}
 	}
 	return json.RawMessage(raw), nil
 }

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"time"
 
@@ -72,6 +73,9 @@ type Service struct {
 	inbox    ConversationReader
 	leads    LeadReader
 	targets  TargetReader
+	lost     LostLeadReader
+	drafts   DraftConversationReader
+	catalog  PackageCatalog
 }
 
 func NewService(repo domain.Repository, registry ProviderRegistry, secrets crypto.SecretSealer) *Service {
@@ -157,6 +161,11 @@ func (s *Service) CompleteSetup(ctx context.Context, in SetupInput) (map[string]
 	model := strings.TrimSpace(in.Model)
 	if model == "" {
 		model = domain.DefaultModel(in.Provider)
+	}
+	if in.Enabled {
+		if err := s.verifyCredentials(ctx, in.Provider, key, model); err != nil {
+			return nil, err
+		}
 	}
 	sealed, err := s.secrets.Seal(map[string]string{"api_key": key}, secretBinding(in.BranchID))
 	if err != nil {
@@ -249,11 +258,16 @@ func (s *Service) complete(ctx context.Context, st *domain.Settings, p domain.Co
 	return p.Complete(ctx, key, req)
 }
 
-// DailySummary — T-190 / T-197. actorID is uuid.Nil for the scheduled run.
+// DailySummary asks the branch's AI to brief managers on today's operations.
+// actorID is uuid.Nil for the scheduled run.
 func (s *Service) DailySummary(ctx context.Context, branchID, actorID uuid.UUID) (map[string]any, error) {
 	var actor *uuid.UUID
 	if actorID != uuid.Nil {
 		actor = &actorID
+	}
+	st, p, key, err := s.resolve(ctx, branchID)
+	if err != nil {
+		return nil, err
 	}
 	facts := &DashboardFacts{}
 	if s.dash != nil {
@@ -267,57 +281,71 @@ func (s *Service) DailySummary(ctx context.Context, branchID, actorID uuid.UUID)
 	}
 	scope := map[string]any{"facts": facts}
 	hash := domain.HashInput("daily", branchID.String(), time.Now().UTC().Format("2006-01-02"))
-
-	st, p, key, err := s.resolve(ctx, branchID)
-	if err != nil {
-		// Deterministic fallback when AI not configured
-		out := map[string]any{
-			"headline": "Daily briefing (rules engine)",
-			"bullets": []string{
-				formatInt("Open leads", facts.LeadsOpen),
-				formatInt("Overdue tasks", facts.TasksOverdue),
-				formatInt("Unpaid bookings", facts.BookingsUnpaid),
-				formatInt("Missing docs", facts.MissingDocs),
-			},
-			"attention":  facts.Attention,
-			"source":     "deterministic",
-			"ai_enabled": false,
-		}
-		run, _ := s.record(ctx, branchID, actor, domain.KindDailySummary, nil, scope, out, hash, "skipped", "ai_not_configured")
-		out["run_id"] = runID(run)
-		return out, nil
-	}
-
-	userPrompt := "Summarize this branch operations snapshot for a Hajj/Umrah CRM manager in under 120 words. Use bullet points. Do not invent numbers.\n" + mustJSON(facts)
 	resp, err := s.complete(ctx, st, p, key, domain.CompletionRequest{
-		System: "You are an operations analyst. Money/SLA figures are already computed — explain only. JSON: {\"headline\":\"\",\"bullets\":[],\"focus\":\"\"}",
-		User:   userPrompt, JSONMode: true, MaxTokens: 500,
+		System:   "You are an operations analyst. Money/SLA figures are already computed — explain only. JSON: {\"headline\":\"\",\"bullets\":[],\"focus\":\"\"}",
+		User:     "Summarize this branch operations snapshot for a Hajj/Umrah CRM manager in under 120 words. Use bullet points. Do not invent numbers.\n" + mustJSON(facts),
+		JSONMode: true, MaxTokens: 500,
 	})
 	if err != nil {
-		out := map[string]any{
-			"headline": "Daily briefing (provider unavailable — rules engine)",
-			"bullets": []string{
-				formatInt("Open leads", facts.LeadsOpen),
-				formatInt("Overdue tasks", facts.TasksOverdue),
-				formatInt("Unpaid bookings", facts.BookingsUnpaid),
-				formatInt("Missing docs", facts.MissingDocs),
-			},
-			"attention":      facts.Attention,
-			"source":         "deterministic",
-			"ai_enabled":     true,
-			"provider_error": trimErr(err),
-		}
-		run, _ := s.record(ctx, branchID, actor, domain.KindDailySummary, st, scope, out, hash, "error", err.Error())
-		out["run_id"] = runID(run)
-		return out, nil
+		_, _ = s.record(ctx, branchID, actor, domain.KindDailySummary, st, scope, nil, hash, "error", err.Error())
+		return nil, providerFailure(err, st.Model)
 	}
 	out := parseJSONObject(resp.Text)
+	if str(out["headline"]) == "" && out["bullets"] == nil {
+		_, _ = s.record(ctx, branchID, actor, domain.KindDailySummary, st, scope, nil, hash, "error", "unusable ai response")
+		return nil, shared.NewValidation("ai_provider_error: unusable response")
+	}
+	out["attention"] = facts.Attention
 	out["source"] = "ai"
 	out["model"] = resp.Model
 	out["ai_enabled"] = true
 	run, _ := s.record(ctx, branchID, actor, domain.KindDailySummary, st, scope, out, hash, "ok", "")
 	out["run_id"] = runID(run)
+	out["created_at"] = run.CreatedAt.UTC().Format(time.RFC3339)
 	return out, nil
+}
+
+// LatestDailySummary returns the newest AI briefing, or nil when none exists.
+func (s *Service) LatestDailySummary(ctx context.Context, branchID uuid.UUID) (map[string]any, error) {
+	return s.latestAIRun(ctx, branchID, domain.KindDailySummary)
+}
+
+// latestAIRun returns the newest successful model output of a kind; failed
+// or skipped runs never hide an earlier good one.
+func (s *Service) latestAIRun(ctx context.Context, branchID uuid.UUID, kind domain.Kind, sources ...string) (map[string]any, error) {
+	if len(sources) == 0 {
+		sources = []string{"ai"}
+	}
+	runs, err := s.repo.ListRuns(ctx, branchID, kind, "ok", 20)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range runs {
+		out := map[string]any{}
+		if err := json.Unmarshal(r.OutputJSON, &out); err != nil {
+			continue
+		}
+		src, _ := out["source"].(string)
+		if !slices.Contains(sources, src) {
+			continue
+		}
+		out["run_id"] = r.ID.String()
+		out["created_at"] = r.CreatedAt.UTC().Format(time.RFC3339)
+		return out, nil
+	}
+	return nil, nil
+}
+
+// Configured reports whether the branch has a usable AI provider and key.
+func (s *Service) Configured(ctx context.Context, branchID uuid.UUID) (bool, error) {
+	_, _, _, err := s.resolve(ctx, branchID)
+	if err == nil {
+		return true, nil
+	}
+	if domain.IsNotConfigured(err) {
+		return false, nil
+	}
+	return false, err
 }
 
 // ConversationAssist — T-191 / T-192.
@@ -334,16 +362,7 @@ func (s *Service) ConversationAssist(ctx context.Context, branchID, actorID, con
 
 	st, p, key, err := s.resolve(ctx, branchID)
 	if err != nil {
-		out := map[string]any{
-			"summary":     "AI not configured — open setup to enable conversation assist.",
-			"next_step":   "Configure OpenAI, Claude, or Gemini API key.",
-			"reply_draft": "",
-			"auto_send":   false,
-			"source":      "deterministic",
-		}
-		run, _ := s.record(ctx, branchID, &actorID, domain.KindConversationSum, nil, scope, out, hash, "skipped", "ai_not_configured")
-		out["run_id"] = runID(run)
-		return out, nil
+		return nil, err
 	}
 
 	transcript := strings.Join(lines, "\n")
@@ -357,7 +376,7 @@ func (s *Service) ConversationAssist(ctx context.Context, branchID, actorID, con
 	})
 	if err != nil {
 		_, _ = s.record(ctx, branchID, &actorID, domain.KindConversationSum, st, scope, nil, hash, "error", err.Error())
-		return nil, shared.NewValidation("ai_provider_error: " + trimErr(err))
+		return nil, providerFailure(err, st.Model)
 	}
 	out := parseJSONObject(resp.Text)
 	out["auto_send"] = false // hard rule
@@ -459,7 +478,7 @@ func (s *Service) OCRExtract(ctx context.Context, branchID, actorID uuid.UUID, i
 	})
 	if err != nil {
 		_, _ = s.record(ctx, branchID, &actorID, domain.KindOCRExtract, st, map[string]any{"hint": hint}, nil, domain.HashInput(imageB64[:min(32, len(imageB64))]), "error", err.Error())
-		return nil, shared.NewValidation("ai_provider_error: " + trimErr(err))
+		return nil, providerFailure(err, st.Model)
 	}
 	out := parseJSONObject(resp.Text)
 	out["requires_confirmation"] = true

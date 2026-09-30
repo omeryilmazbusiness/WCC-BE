@@ -37,6 +37,7 @@ func defaultSchedule(cfg config.Config) []worker.ScheduleEntry {
 		{Spec: "45 * * * *", Job: bookingdomain.JobRecomputeSweep},
 		{Spec: "50 * * * *", Job: automation.JobMissingDocs},
 		{Spec: "5 * * * *", Job: shared.JobAISummaryDaily, Queue: "low"},
+		{Spec: "40 * * * *", Job: automation.JobLostLeadsWeekly, Queue: "low"},
 		{Spec: "15 0 * * *", Job: bookingdomain.JobTravelledSweep},
 		{Spec: "30 3 * * *", Job: automation.JobOutboxPurge, Queue: "low"},
 		{Spec: "0 6 * * *", Job: automation.JobDocumentExpiry},

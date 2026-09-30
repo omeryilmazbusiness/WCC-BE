@@ -59,10 +59,21 @@ type Lead struct {
 	LostReasonCode     string
 	LostReason         string
 	Notes              string
+	Interest           TripInterest
 	NoFollowUp         bool
 	ConvertedBookingID *uuid.UUID
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+}
+
+// LostRecord is a lead lost within a period, as loss analysis sees it: the
+// reason and context only, never the customer's name or contact details.
+type LostRecord struct {
+	ReasonCode string
+	Note       string
+	Source     string
+	FromStage  string
+	LostAt     time.Time
 }
 
 type StageHistory struct {

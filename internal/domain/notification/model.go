@@ -68,6 +68,7 @@ const (
 	KindReportReady         = "report.ready"
 	KindImportCompleted     = "import.completed"
 	KindAISummary           = "ai.summary"
+	KindAILostLeads         = "ai.lost_leads"
 	KindTaskReminder        = "task.reminder"
 )
 

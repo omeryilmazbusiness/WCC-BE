@@ -275,6 +275,11 @@ func (a *fakeAI) DailySummary(context.Context, uuid.UUID, uuid.UUID) (map[string
 	return map[string]any{"headline": "Good morning", "bullets": []string{"Open leads: 3"}}, nil
 }
 
+// fakeReady says AI is configured for every branch except those listed.
+type fakeReady struct{ off map[uuid.UUID]bool }
+
+func (r fakeReady) Configured(_ context.Context, id uuid.UUID) (bool, error) { return !r.off[id], nil }
+
 type fakeTaskRead struct{ t *taskdomain.Task }
 
 func (f fakeTaskRead) FindByID(context.Context, uuid.UUID) (*taskdomain.Task, error) {
@@ -285,7 +290,7 @@ func (f fakeTaskRead) FindByID(context.Context, uuid.UUID) (*taskdomain.Task, er
 }
 
 func newJobs(f fixture, q fakeQueries, ai DailySummarizer, tr TaskReader, now time.Time) *Jobs {
-	j := NewJobs(JobDeps{Alerts: f.alerts, Tasks: f.tasks, Queries: q, Checklist: fakeChecklist{missing: []string{"visa"}}, AI: ai, TaskRead: tr})
+	j := NewJobs(JobDeps{Alerts: f.alerts, Tasks: f.tasks, Queries: q, Checklist: fakeChecklist{missing: []string{"visa"}}, AI: ai, AIReady: fakeReady{}, TaskRead: tr})
 	j.now = func() time.Time { return now }
 	f.alerts.now = j.now
 	return j
@@ -313,6 +318,92 @@ func TestAISummaryRunsOncePerLocalDayAfterSeven(t *testing.T) {
 	}
 	if f.notes.sent[0].in.Kind != notificationdomain.KindAISummary || f.notes.sent[0].in.Body != "Open leads: 3" {
 		t.Fatalf("summary note = %+v", f.notes.sent[0].in)
+	}
+}
+
+func TestAIJobsSkipBranchesWithoutAIWithoutClaimingThePeriod(t *testing.T) {
+	riyadh := Branch{ID: uuid.New(), TimeZone: "Asia/Riyadh"}
+	f := newFixture(nil)
+	ai := &fakeAI{}
+	at := time.Date(2026, 9, 16, 6, 0, 0, 0, time.UTC)
+	j := newJobs(f, fakeQueries{branches: []Branch{riyadh}}, ai, nil, at)
+	ready := fakeReady{off: map[uuid.UUID]bool{riyadh.ID: true}}
+	j.d.AIReady = ready
+	if err := j.AISummary(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if ai.calls != 0 || len(f.notes.sent) != 0 {
+		t.Fatalf("ran without AI: calls=%d notes=%d", ai.calls, len(f.notes.sent))
+	}
+	delete(ready.off, riyadh.ID)
+	j.now = func() time.Time { return at.Add(time.Hour) }
+	if err := j.AISummary(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if ai.calls != 1 {
+		t.Fatalf("a key added later must still get today's run: calls=%d", ai.calls)
+	}
+}
+
+type fakeLost struct {
+	calls    int
+	lost     int
+	from, to time.Time
+}
+
+func (l *fakeLost) LostLeadsAnalysis(_ context.Context, _, _ uuid.UUID, from, to time.Time) (map[string]any, error) {
+	l.calls++
+	l.from, l.to = from, to
+	return map[string]any{"lost_count": l.lost, "summary": map[string]string{"en": "Mostly price."}}, nil
+}
+
+func TestLostLeadsWeeklyRunsOncePerWeekFromMondayEight(t *testing.T) {
+	riyadh := Branch{ID: uuid.New(), TimeZone: "Asia/Riyadh"}
+	f := newFixture(nil)
+	lost := &fakeLost{lost: 4}
+	// Monday 2026-09-28 04:30 UTC is 07:30 in Riyadh: too early.
+	monday := time.Date(2026, 9, 28, 4, 30, 0, 0, time.UTC)
+	j := NewJobs(JobDeps{Alerts: f.alerts, Queries: fakeQueries{branches: []Branch{riyadh}}, LostLeads: lost, AIReady: fakeReady{}})
+	f.alerts.now = func() time.Time { return j.now() }
+	run := func(at time.Time) {
+		t.Helper()
+		j.now = func() time.Time { return at }
+		if err := j.LostLeadsWeekly(context.Background(), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(monday)
+	if lost.calls != 0 {
+		t.Fatalf("ran before 08:00 local: %d", lost.calls)
+	}
+	run(monday.Add(time.Hour))
+	run(monday.Add(26 * time.Hour))
+	if lost.calls != 1 {
+		t.Fatalf("calls in one week = %d, want 1", lost.calls)
+	}
+	loc, _ := time.LoadLocation("Asia/Riyadh")
+	if !lost.from.Equal(time.Date(2026, 9, 21, 0, 0, 0, 0, loc)) || !lost.to.Equal(time.Date(2026, 9, 28, 0, 0, 0, 0, loc)) {
+		t.Fatalf("window = %s .. %s, want the previous local Monday to Monday", lost.from, lost.to)
+	}
+	if len(f.notes.sent) != 1 || f.notes.sent[0].in.Kind != notificationdomain.KindAILostLeads || f.notes.sent[0].in.Body != "Mostly price." {
+		t.Fatalf("notes = %+v", f.notes.sent)
+	}
+
+	lost.lost = 0
+	run(monday.AddDate(0, 0, 7).Add(time.Hour))
+	if lost.calls != 2 || len(f.notes.sent) != 1 {
+		t.Fatalf("a week without lost leads must stay silent: calls=%d notes=%d", lost.calls, len(f.notes.sent))
+	}
+}
+
+func TestStartOfWeek(t *testing.T) {
+	for in, want := range map[string]string{
+		"2026-09-28T10:00:00Z": "2026-09-28", "2026-10-04T23:59:00Z": "2026-09-28", "2026-10-05T00:00:00Z": "2026-10-05",
+	} {
+		ts, _ := time.Parse(time.RFC3339, in)
+		if got := startOfWeek(ts).Format(time.DateOnly); got != want {
+			t.Fatalf("startOfWeek(%s) = %s, want %s", in, got, want)
+		}
 	}
 }
 
@@ -389,7 +480,7 @@ func TestEveryAutomationJobHasAHandler(t *testing.T) {
 	h := NewJobs(JobDeps{}).Handlers()
 	for _, name := range []shared.JobName{
 		JobEscalations, JobPaymentDue, JobPaymentOverdue, JobDocumentExpiry, JobPassportExpiry, JobSupplierConfirm, JobVisaFollowUp,
-		JobTargetRecompute, JobMissingDocs, JobIdleLeads, JobOutboxPurge, shared.JobSLASweep, shared.JobAISummaryDaily,
+		JobTargetRecompute, JobMissingDocs, JobIdleLeads, JobOutboxPurge, shared.JobSLASweep, shared.JobAISummaryDaily, JobLostLeadsWeekly,
 		shared.JobReportGenerate, shared.JobWebhookRetry, shared.JobReminderSend, taskdomain.JobOverdueSweep, taskdomain.JobEscalateOverdue,
 	} {
 		if h[name] == nil {

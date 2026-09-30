@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -35,14 +37,24 @@ func ValidProvider(p Provider) bool {
 func DefaultModel(p Provider) string {
 	switch p {
 	case ProviderOpenAI:
-		return "gpt-4o-mini"
+		return "gpt-6-luna"
 	case ProviderAnthropic:
-		return "claude-sonnet-4-20250514"
+		return "claude-haiku-4-5"
 	case ProviderGemini:
-		return "gemini-2.0-flash"
+		return "gemini-3.5-flash"
 	default:
 		return ""
 	}
+}
+
+// ProviderError is a non-2xx answer from an LLM vendor.
+type ProviderError struct {
+	Status int
+	Body   string
+}
+
+func (e *ProviderError) Error() string {
+	return fmt.Sprintf("provider http %d: %s", e.Status, e.Body)
 }
 
 // Kind of audited AI invocation.
@@ -55,6 +67,8 @@ const (
 	KindLeadExplain     Kind = "lead.priority_explain"
 	KindTargetInsight   Kind = "target.recovery_insight"
 	KindOCRExtract      Kind = "document.ocr_extract"
+	KindLostLeads       Kind = "lead.lost_analysis"
+	KindLeadDraft       Kind = "conversation.lead_draft"
 )
 
 // Settings is per-branch BYO AI configuration (secrets in SecretsEnc).
@@ -148,8 +162,16 @@ type CompletionProvider interface {
 }
 
 // ErrNotConfigured is returned when branch has no AI key / provider.
+const notConfiguredMsg = "ai_not_configured: complete AI setup with a provider API key"
+
 func ErrNotConfigured() *shared.AppError {
-	return shared.NewValidation("ai_not_configured: complete AI setup with a provider API key")
+	return shared.NewValidation(notConfiguredMsg)
+}
+
+// IsNotConfigured tells whether err is ErrNotConfigured.
+func IsNotConfigured(err error) bool {
+	var app *shared.AppError
+	return errors.As(err, &app) && app.Message == notConfiguredMsg
 }
 
 // Repository persists settings + runs.
@@ -159,5 +181,6 @@ type Repository interface {
 
 	InsertRun(ctx context.Context, r *Run) error
 	UpdateRunFeedback(ctx context.Context, id uuid.UUID, feedback string) error
-	ListRuns(ctx context.Context, branchID uuid.UUID, kind Kind, limit int) ([]Run, error)
+	// ListRuns returns the newest runs; empty kind or status matches any.
+	ListRuns(ctx context.Context, branchID uuid.UUID, kind Kind, status string, limit int) ([]Run, error)
 }

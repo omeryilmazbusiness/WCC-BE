@@ -46,7 +46,7 @@ func testBox(t *testing.T) *crypto.SecretBox {
 
 func TestCompleteSetupSealsAPIKey(t *testing.T) {
 	repo := &settingsRepo{rows: map[uuid.UUID]domain.Settings{}}
-	svc := ai.NewService(repo, nil, testBox(t))
+	svc := ai.NewService(repo, registry{p: &fakeProvider{reply: "OK"}}, testBox(t))
 	branch := uuid.New()
 	ctx := context.Background()
 

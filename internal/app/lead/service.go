@@ -23,6 +23,7 @@ type CreateInput struct {
 	Source     string
 	OwnerID    uuid.UUID
 	Notes      string
+	Interest   domain.TripInterest
 	ActorID    uuid.UUID
 	IP         string
 	UserAgent  string
@@ -92,6 +93,7 @@ type Service struct {
 	outbox   events.Outbox
 	audit    audit.Recorder
 	bookings BookingDraftCreator
+	packages PackageChecker
 }
 
 // SetOutbox enables durable lead.stage_changed events.
@@ -125,6 +127,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Lead, err
 	if ownerID == uuid.Nil {
 		return nil, shared.NewValidation("owner_id is required")
 	}
+	interest, err := s.checkInterest(ctx, in.Interest, branchID)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	l := &domain.Lead{
 		ID:         uuid.New(),
@@ -136,6 +142,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Lead, err
 		Stage:      domain.StageNew,
 		OwnerID:    ownerID,
 		Notes:      in.Notes,
+		Interest:   interest,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
