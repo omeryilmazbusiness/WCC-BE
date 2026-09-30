@@ -364,10 +364,13 @@ func (s *Service) Convert(ctx context.Context, in ConvertInput) (*ConvertResult,
 		return nil, shared.NewConflict("lead already converted")
 	}
 
-	// Move to won if still open (proposal→won, or already won).
-	if l.Stage != domain.StageWon {
+	path, ok := domain.ConversionPath(l.Stage)
+	if !ok {
+		return nil, shared.NewInvalidState("lead must reach proposal before conversion")
+	}
+	for _, to := range path {
 		l, err = s.ChangeStage(ctx, ChangeStageInput{
-			LeadID: in.LeadID, To: domain.StageWon, Note: "converted to booking",
+			LeadID: in.LeadID, To: to, Note: "converted to booking",
 			ActorID: in.ActorID, IP: in.IP, UserAgent: in.UserAgent,
 		})
 		if err != nil {

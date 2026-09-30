@@ -85,7 +85,7 @@ paths:
               type: object
               required: [stage]
               properties:
-                stage: { type: string, enum: [new, contacted, qualified, proposal, won, lost] }
+                stage: { type: string, enum: [new, contacted, qualified, proposal, paid, won, lost] }
                 note: { type: string }
       responses:
         "200":

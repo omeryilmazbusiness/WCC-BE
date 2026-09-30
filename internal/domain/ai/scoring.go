@@ -46,7 +46,7 @@ func ScoreLead(in LeadSignals) (score int, band PriorityBand, signals []Signal) 
 
 	stage := strings.ToLower(strings.TrimSpace(in.Stage))
 	switch stage {
-	case "qualified", "proposal":
+	case "qualified", "proposal", "paid":
 		add("stage_hot", "Hot pipeline stage", 25)
 	case "contacted", "new":
 		add("stage_active", "Active pipeline stage", 10)

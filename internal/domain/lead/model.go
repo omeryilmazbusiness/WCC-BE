@@ -17,6 +17,7 @@ const (
 	StageContacted Stage = "contacted"
 	StageQualified Stage = "qualified"
 	StageProposal  Stage = "proposal"
+	StagePaid      Stage = "paid" // customer paid; the booking is not created yet
 	StageWon       Stage = "won"
 	StageLost      Stage = "lost"
 )
@@ -131,7 +132,8 @@ var allowedTransitions = map[Stage][]Stage{
 	StageNew:       {StageContacted, StageLost},
 	StageContacted: {StageQualified, StageLost},
 	StageQualified: {StageProposal, StageLost},
-	StageProposal:  {StageWon, StageLost},
+	StageProposal:  {StagePaid, StageLost},
+	StagePaid:      {StageWon, StageLost},
 	StageWon:       {},
 	StageLost:      {},
 }
@@ -153,6 +155,21 @@ func (l *Lead) TransitionTo(to Stage) error {
 	l.Stage = to
 	l.UpdatedAt = time.Now().UTC()
 	return nil
+}
+
+// ConversionPath is the stages a lead walks through to reach won when it is
+// converted to a booking: proposal and paid leads qualify, won needs no steps.
+func ConversionPath(from Stage) ([]Stage, bool) {
+	switch from {
+	case StageProposal:
+		return []Stage{StagePaid, StageWon}, true
+	case StagePaid:
+		return []Stage{StageWon}, true
+	case StageWon:
+		return nil, true
+	default:
+		return nil, false
+	}
 }
 
 func (l *Lead) IsOpen() bool {

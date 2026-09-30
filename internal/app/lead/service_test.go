@@ -172,6 +172,56 @@ func TestConvertRequiresCustomer(t *testing.T) {
 	}
 }
 
+func TestConvertWalksThroughPaid(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		walk  []domain.Stage
+		steps int
+		ok    bool
+	}{
+		{"from proposal", []domain.Stage{domain.StageContacted, domain.StageQualified, domain.StageProposal}, 2, true},
+		{"from paid", []domain.Stage{domain.StageContacted, domain.StageQualified, domain.StageProposal, domain.StagePaid}, 1, true},
+		{"from qualified", []domain.Stage{domain.StageContacted, domain.StageQualified}, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newMem()
+			svc := applead.NewService(repo, tx.Nop{}, events.NewBus(nil))
+			booking := uuid.New()
+			svc.SetBookingCreator(fakeBooking{id: booking})
+			customer := uuid.New()
+			l, err := svc.Create(sysCtx(), applead.CreateInput{
+				BranchID: uuid.New(), FullName: "A", Phone: "+966512", CustomerID: &customer,
+				OwnerID: uuid.New(), ActorID: uuid.New(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, st := range tc.walk {
+				if _, err := svc.ChangeStage(sysCtx(), applead.ChangeStageInput{LeadID: l.ID, To: st, ActorID: uuid.New()}); err != nil {
+					t.Fatalf("stage %s: %v", st, err)
+				}
+			}
+			before := len(repo.history)
+			res, err := svc.Convert(sysCtx(), applead.ConvertInput{LeadID: l.ID, DepartureID: uuid.New(), ActorID: uuid.New()})
+			if !tc.ok {
+				if !errors.Is(err, shared.ErrInvalidState) {
+					t.Fatalf("want invalid state, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Lead.Stage != domain.StageWon || res.BookingID != booking {
+				t.Fatalf("result = %+v", res)
+			}
+			if got := len(repo.history) - before; got != tc.steps {
+				t.Fatalf("history steps = %d, want %d", got, tc.steps)
+			}
+		})
+	}
+}
+
 func TestEmployeeCannotAssignOthers(t *testing.T) {
 	repo := newMem()
 	svc := applead.NewService(repo, tx.Nop{}, events.NewBus(nil))

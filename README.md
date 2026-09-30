@@ -139,6 +139,7 @@ Demo users (password `ChangeMe123!`):
 - `GET|POST /v1/customers/{id}/companions` · `DELETE .../companions/{companionId}`
 - `GET|POST /v1/leads` · `GET /v1/leads/analytics` · `GET /v1/leads/lost-reasons` · `POST /v1/leads/assign`
 - `GET /v1/leads/{id}` · `POST .../stage|assign|convert|no-follow-up` · `GET .../history`
+- Stages: `new → contacted → qualified → proposal → paid → won`, `lost` from any open stage. `paid` means the customer paid before the booking exists. `convert` works from `proposal` or `paid` and records each step to `won`.
 - `PATCH /v1/leads/{id}` — name, phone, notes and `interest` (`travel_date` YYYY-MM-DD, `travel_window`, `pax_count` 1–500, `budget_amount` minor units + `budget_currency`, `package_id` of the lead's branch, `package_interest`); a sent `interest` replaces the whole interest. `POST /v1/leads` accepts the same `interest`.
 - `GET|POST /v1/packages` · `GET|PATCH /v1/packages/{id}` · `POST .../clone` · `GET|PUT .../tiers`
 - `GET|POST /v1/packages/{id}/departures`
