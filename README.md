@@ -154,7 +154,8 @@ Demo users (password `ChangeMe123!`):
 - `POST /v1/payments` (immutable ledger; GM/Manager)
 - `GET|POST /v1/tasks` · `GET /v1/tasks/mine` · `POST /v1/tasks/assign` · `POST /v1/tasks/escalate-overdue`
 - `GET /v1/tasks/{id}` · `POST .../status|complete|reschedule|assign`
-- `GET /v1/dashboard/kpis` · `GET /v1/dashboard/team` · `GET /v1/dashboard/attention` (gm/manager)
+- `GET /v1/dashboard/kpis` · `GET /v1/dashboard/team` · `GET /v1/dashboard/attention` · `GET /v1/dashboard/attention/summary` (gm/manager)
+- `GET /v1/dashboard/team?from&to` — per member: role, leads handled and won, open and overdue tasks, and money collected on their bookings in the period, converted to the branch reporting currency (`currency`); currencies without a rate are listed in `unconverted`
 - `GET /v1/dashboard/my-work` · `GET /v1/dashboard/my-target` (authenticated; `?scope=branch` for managers)
 - `GET /v1/dashboard/revenue?from&to` (dashboard.read + payments.read) — finance-ledger revenue in the branch reporting currency: booked, net collected (verified charges minus approved refunds, by `received_at`), collection %, margin (only bookings with a cost entered), outstanding balances, overdue and 30-day instalments, payments awaiting verification, payment-method split and a daily series. Rows use their stored FX snapshot; the rest are converted with the latest effective rate, and currencies without a rate are listed in `unconverted` instead of being summed as-is.
 - `POST /v1/documents/presign`

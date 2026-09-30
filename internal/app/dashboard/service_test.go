@@ -19,6 +19,7 @@ type stubAgg struct {
 	kpi              *dashboard.KPI
 	err              error
 	calls            int
+	team             []dashboard.TeamMember
 }
 
 func (s *stubAgg) Compute(_ context.Context, branchID *uuid.UUID, from, to time.Time) (*dashboard.KPI, error) {
@@ -32,7 +33,7 @@ func (s *stubAgg) Compute(_ context.Context, branchID *uuid.UUID, from, to time.
 	return &out, nil
 }
 func (s *stubAgg) TeamPerformance(context.Context, *uuid.UUID, time.Time, time.Time) ([]dashboard.TeamMember, error) {
-	return nil, nil
+	return s.team, nil
 }
 func (s *stubAgg) AttentionSummary(context.Context, *uuid.UUID) (*dashboard.AttentionSummary, error) {
 	return &dashboard.AttentionSummary{Total: 3, High: 1, Kinds: map[string]int{dashboard.AttentionOverdueTask: 2, dashboard.AttentionCapacity: 1}}, nil

@@ -124,27 +124,60 @@ func (a *DashboardAggregator) TeamPerformance(ctx context.Context, branchID *uui
 		)
 		SELECT o.id,
 			COALESCE(u.full_name, ''),
+			COALESCE(u.role, ''),
 			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.created_at >= $1 AND l.created_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`),
 			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.stage='won' AND l.updated_at >= $1 AND l.updated_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`),
 			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND ($3::uuid IS NULL OR t.branch_id=$3)`+tsc+`),
-			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND t.due_at < NOW() AND ($3::uuid IS NULL OR t.branch_id=$3)`+tsc+`),
-			(SELECT COALESCE(SUM(b.collected_amt),0) FROM bookings b WHERE b.owner_id=o.id AND b.created_at >= $1 AND b.created_at < $2 AND ($3::uuid IS NULL OR b.branch_id=$3)`+bsc+`)
+			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND t.due_at < NOW() AND ($3::uuid IS NULL OR t.branch_id=$3)`+tsc+`)
 		FROM owners o
 		LEFT JOIN users u ON u.id = o.id
-		ORDER BY 3 DESC, 7 DESC`, args...)
+		WHERE o.id IS NOT NULL
+		ORDER BY 4 DESC, 5 DESC, 2`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []dashboard.TeamMember
+	index := map[uuid.UUID]int{}
 	for rows.Next() {
 		var m dashboard.TeamMember
-		if err := rows.Scan(&m.OwnerID, &m.OwnerName, &m.LeadsHandled, &m.LeadsWon, &m.OpenTasks, &m.OverdueTasks, &m.CollectedAmt); err != nil {
+		if err := rows.Scan(&m.OwnerID, &m.OwnerName, &m.Role, &m.LeadsHandled, &m.LeadsWon, &m.OpenTasks, &m.OverdueTasks); err != nil {
 			return nil, err
 		}
+		index[m.OwnerID] = len(out)
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+
+	bookingScope, bookingArgs, err := dashScopes(ctx, []any{from, to, branchID}, dashBookings)
+	if err != nil {
+		return nil, err
+	}
+	money, err := q.Query(ctx, `
+		SELECT b.owner_id, b.currency, COALESCE(SUM(b.collected_amt), 0)::bigint, COUNT(*)
+		FROM bookings b
+		WHERE b.owner_id IS NOT NULL AND b.created_at >= $1 AND b.created_at < $2 AND ($3::uuid IS NULL OR b.branch_id=$3)`+bookingScope[0]+`
+		GROUP BY 1, 2`, bookingArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer money.Close()
+	for money.Next() {
+		var owner uuid.UUID
+		var amt dashboard.Amount
+		if err := money.Scan(&owner, &amt.Currency, &amt.Minor, &amt.Count); err != nil {
+			return nil, err
+		}
+		if i, ok := index[owner]; ok {
+			out[i].Collected = append(out[i].Collected, amt)
+		}
+	}
+	return out, money.Err()
 }
 
 func (a *DashboardAggregator) MyWorkToday(ctx context.Context, branchID *uuid.UUID, ownerID uuid.UUID, limit int) ([]dashboard.MyWorkItem, error) {

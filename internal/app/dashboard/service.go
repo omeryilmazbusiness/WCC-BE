@@ -26,17 +26,6 @@ type KPI struct {
 	PeriodTo       time.Time `json:"period_to"`
 }
 
-// TeamMember is per-owner performance for the manager board — T-086.
-type TeamMember struct {
-	OwnerID      uuid.UUID `json:"owner_id"`
-	OwnerName    string    `json:"owner_name"`
-	LeadsHandled int       `json:"leads_handled"`
-	LeadsWon     int       `json:"leads_won"`
-	OpenTasks    int       `json:"open_tasks"`
-	OverdueTasks int       `json:"overdue_tasks"`
-	CollectedAmt int64     `json:"collected_amt"`
-}
-
 // Attention kinds, one per exception source. Each record appears under exactly one kind.
 const (
 	AttentionEscalatedTask = "escalated_task" // open task escalated by SLA rules
@@ -169,17 +158,6 @@ func (s *Service) KPIs(ctx context.Context, branchID *uuid.UUID, from, to time.T
 	kpi.PeriodFrom = from
 	kpi.PeriodTo = to
 	return kpi, nil
-}
-
-func (s *Service) Team(ctx context.Context, branchID *uuid.UUID, from, to time.Time) ([]TeamMember, error) {
-	from, to, err := NormalizePeriod(from, to, s.now())
-	if err != nil {
-		return nil, err
-	}
-	if branchID, err = resolveBranch(ctx, branchID); err != nil {
-		return nil, err
-	}
-	return s.agg.TeamPerformance(ctx, branchID, from, to)
 }
 
 func (s *Service) Attention(ctx context.Context, branchID *uuid.UUID, limit int) ([]AttentionItem, error) {
