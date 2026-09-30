@@ -3,6 +3,7 @@ package lead
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,32 +128,71 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusCreated, mapLead(l))
 }
 
-func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	page := request.Page(r)
+// listFilter reads the filters shared by List and Board.
+func listFilter(r *http.Request) (domain.ListFilter, error) {
 	f := domain.ListFilter{
-		Query: request.FilterString(r, "q"), Limit: page.Limit, Offset: page.Offset,
+		Query:  request.FilterString(r, "q"),
+		Source: request.FilterString(r, "source"),
+		Sort:   domain.Sort(request.FilterString(r, "sort")),
 	}
-	branchID, err := request.OptionalUUID(r, "branch_id")
-	if err != nil {
-		response.Error(w, err)
-		return
+	var err error
+	if f.BranchID, err = request.OptionalUUID(r, "branch_id"); err != nil {
+		return f, err
 	}
-	f.BranchID = branchID
-	if oid := request.FilterString(r, "owner_id"); oid != "" {
-		id, err := uuid.Parse(oid)
-		if err != nil {
-			response.Error(w, shared.NewValidation("invalid owner_id"))
-			return
-		}
-		f.OwnerID = &id
+	if f.OwnerID, err = request.OptionalUUID(r, "owner_id"); err != nil {
+		return f, err
+	}
+	if f.CustomerID, err = request.OptionalUUID(r, "customer_id"); err != nil {
+		return f, err
 	}
 	if st := request.FilterString(r, "stage"); st != "" {
 		f.Stage = domain.Stage(st)
+		if !domain.ValidStage(f.Stage) {
+			return f, shared.NewValidation("invalid stage")
+		}
+	}
+	if !domain.ValidSort(f.Sort) {
+		return f, shared.NewValidation("invalid sort")
 	}
 	if nf := request.FilterString(r, "no_follow_up"); nf != "" {
 		v := nf == "1" || strings.EqualFold(nf, "true")
 		f.NoFollowUp = &v
 	}
+	if f.CreatedFrom, err = optionalTime(r, "created_from"); err != nil {
+		return f, err
+	}
+	if f.CreatedTo, err = optionalTime(r, "created_to"); err != nil {
+		return f, err
+	}
+	if f.CreatedFrom != nil && f.CreatedTo != nil && !f.CreatedTo.After(*f.CreatedFrom) {
+		return f, shared.NewValidation("created_to must be after created_from")
+	}
+	return f, nil
+}
+
+// optionalTime parses an RFC 3339 instant, so the caller's time zone decides
+// where a day, week or month starts.
+func optionalTime(r *http.Request, key string) (*time.Time, error) {
+	raw := request.FilterString(r, key)
+	if raw == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil, shared.NewValidation("invalid " + key)
+	}
+	t = t.UTC()
+	return &t, nil
+}
+
+func (h Handler) List(w http.ResponseWriter, r *http.Request) {
+	page := request.Page(r)
+	f, err := listFilter(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	f.Limit, f.Offset = page.Limit, page.Offset
 	items, total, err := h.Svc.List(r.Context(), f)
 	if err != nil {
 		response.Error(w, err)
@@ -167,6 +207,109 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		"total": meta.Total, "limit": meta.Limit, "offset": meta.Offset,
 		"page": meta.Page, "total_pages": meta.TotalPages,
 	})
+}
+
+// Board returns every pipeline lane for the filters: its total, budgets per
+// currency and the first per_stage cards (default 20, 0 for totals only).
+func (h Handler) Board(w http.ResponseWriter, r *http.Request) {
+	f, err := listFilter(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	perStage := 20
+	if raw := request.FilterString(r, "per_stage"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 0 || n > domain.MaxBoardPerStage {
+			response.Error(w, shared.NewValidation("invalid per_stage"))
+			return
+		}
+		perStage = n
+	}
+	b, err := h.Svc.Board(r.Context(), f, perStage)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	cols := make([]map[string]any, 0, len(b.Columns))
+	for _, c := range b.Columns {
+		items := make([]map[string]any, 0, len(c.Items))
+		for i := range c.Items {
+			items = append(items, mapLead(&c.Items[i]))
+		}
+		budgets := c.Budgets
+		if budgets == nil {
+			budgets = []domain.BudgetSum{}
+		}
+		cols = append(cols, map[string]any{
+			"stage": c.Stage, "total": c.Total, "no_follow_up": c.NoFollowUp,
+			"budgets": budgets, "items": items,
+		})
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"columns": cols})
+}
+
+type bulkRequest struct {
+	LeadIDs []string `json:"lead_ids"`
+}
+
+func (h Handler) bulkInput(w http.ResponseWriter, r *http.Request) (appsvc.BulkInput, bool) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return appsvc.BulkInput{}, false
+	}
+	in := appsvc.BulkInput{ActorID: claims.UserID, IP: r.RemoteAddr, UserAgent: r.UserAgent()}
+	raw := []string{}
+	if pathID := chi.URLParam(r, "id"); pathID != "" {
+		raw = append(raw, pathID)
+	} else {
+		var req bulkRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			response.Error(w, shared.NewValidation("invalid json"))
+			return in, false
+		}
+		raw = req.LeadIDs
+	}
+	for _, v := range raw {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			response.Error(w, shared.NewValidation("invalid lead_ids"))
+			return in, false
+		}
+		in.LeadIDs = append(in.LeadIDs, id)
+	}
+	return in, true
+}
+
+// Delete soft-deletes one lead (DELETE /leads/{id}) or many (POST /leads/delete).
+func (h Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.bulkInput(w, r)
+	if !ok {
+		return
+	}
+	if err := h.Svc.Delete(r.Context(), in); err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"deleted": len(in.LeadIDs)})
+}
+
+func (h Handler) Restore(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.bulkInput(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.Svc.Restore(r.Context(), in)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(items))
+	for i := range items {
+		out = append(out, mapLead(&items[i]))
+	}
+	response.JSON(w, http.StatusOK, out)
 }
 
 func (h Handler) Get(w http.ResponseWriter, r *http.Request) {

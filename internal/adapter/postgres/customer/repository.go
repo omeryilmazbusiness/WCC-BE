@@ -361,7 +361,7 @@ func (r *Repository) ListTimeline(ctx context.Context, customerID uuid.UUID, lim
 	rows, err := q.Query(ctx, fmt.Sprintf(`
 		(
 			SELECT 'lead'::text, l.id, coalesce(l.full_name,'Lead'), l.stage, l.updated_at, jsonb_build_object('source', l.source)
-			FROM leads l WHERE l.customer_id=$1`+clauses[0]+`
+			FROM leads l WHERE l.customer_id=$1 AND l.deleted_at IS NULL`+clauses[0]+`
 		)
 		UNION ALL
 		(

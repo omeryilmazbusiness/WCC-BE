@@ -90,11 +90,64 @@ type StageHistory struct {
 type ListFilter struct {
 	BranchID   *uuid.UUID
 	OwnerID    *uuid.UUID
+	CustomerID *uuid.UUID
 	Stage      Stage
+	Source     string
 	Query      string
 	NoFollowUp *bool
-	Limit      int
-	Offset     int
+	// CreatedFrom and CreatedTo bound created_at as [from, to).
+	CreatedFrom *time.Time
+	CreatedTo   *time.Time
+	Sort        Sort
+	Limit       int
+	Offset      int
+}
+
+// Sort is a whitelisted list ordering; the zero value is SortUpdated.
+type Sort string
+
+const (
+	SortUpdated Sort = "updated"
+	SortCreated Sort = "created"
+	SortOldest  Sort = "oldest"
+	SortName    Sort = "name"
+	SortBudget  Sort = "budget"
+	SortTravel  Sort = "travel"
+)
+
+func ValidSort(s Sort) bool {
+	switch s {
+	case "", SortUpdated, SortCreated, SortOldest, SortName, SortBudget, SortTravel:
+		return true
+	}
+	return false
+}
+
+// MaxBoardPerStage caps the cards returned per lane in one board request.
+const MaxBoardPerStage = 100
+
+// MaxBulk caps how many leads one bulk request may touch.
+const MaxBulk = 200
+
+// BudgetSum totals the budgets of a lane in one currency, minor units.
+type BudgetSum struct {
+	Currency string `json:"currency"`
+	Amount   int64  `json:"amount"`
+	Count    int    `json:"count"`
+}
+
+// BoardColumn is one pipeline lane: the filtered total, its budgets and the
+// first page of cards.
+type BoardColumn struct {
+	Stage      Stage
+	Total      int
+	NoFollowUp int
+	Budgets    []BudgetSum
+	Items      []Lead
+}
+
+type Board struct {
+	Columns []BoardColumn
 }
 
 type Analytics struct {
@@ -172,6 +225,20 @@ func ConversionPath(from Stage) ([]Stage, bool) {
 	}
 }
 
+// AllStages is the pipeline order, closed stages last.
+func AllStages() []Stage {
+	return []Stage{StageNew, StageContacted, StageQualified, StageProposal, StagePaid, StageWon, StageLost}
+}
+
+func ValidStage(s Stage) bool {
+	for _, x := range AllStages() {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
 func (l *Lead) IsOpen() bool {
 	return l.Stage != StageWon && l.Stage != StageLost
 }
@@ -184,4 +251,11 @@ type Repository interface {
 	AppendStageHistory(ctx context.Context, h *StageHistory) error
 	ListStageHistory(ctx context.Context, leadID uuid.UUID) ([]StageHistory, error)
 	Analytics(ctx context.Context, branchID *uuid.UUID) (*Analytics, error)
+	// Board summarises every stage for f (f.Stage, Limit and Offset are
+	// ignored) and returns up to perStage cards per lane; 0 skips the cards.
+	Board(ctx context.Context, f ListFilter, perStage int) (*Board, error)
+	// SoftDelete hides a live lead and cancels its open tasks.
+	SoftDelete(ctx context.Context, id, by uuid.UUID, at time.Time) error
+	// Restore brings back a deleted lead and reopens the tasks its deletion cancelled.
+	Restore(ctx context.Context, id uuid.UUID, at time.Time) error
 }

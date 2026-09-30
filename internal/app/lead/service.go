@@ -64,6 +64,14 @@ type ConvertResult struct {
 	BookingID uuid.UUID
 }
 
+// BulkInput names the leads a delete or restore applies to.
+type BulkInput struct {
+	LeadIDs   []uuid.UUID
+	ActorID   uuid.UUID
+	IP        string
+	UserAgent string
+}
+
 type SetNoFollowUpInput struct {
 	LeadID     uuid.UUID
 	NoFollowUp bool
@@ -188,6 +196,97 @@ func (s *Service) List(ctx context.Context, f domain.ListFilter) ([]domain.Lead,
 		f.Limit = 50
 	}
 	return s.repo.List(ctx, f)
+}
+
+// Board summarises the pipeline lanes for f, scoped like List, with up to
+// perStage cards per lane.
+func (s *Service) Board(ctx context.Context, f domain.ListFilter, perStage int) (*domain.Board, error) {
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if f.BranchID, err = scope.ResolveBranch(f.BranchID); err != nil {
+		return nil, err
+	}
+	perStage = min(max(perStage, 0), domain.MaxBoardPerStage)
+	return s.repo.Board(ctx, f, perStage)
+}
+
+// Delete soft-deletes leads all-or-nothing. A lead that became a booking is
+// kept: the booking still points at it.
+func (s *Service) Delete(ctx context.Context, in BulkInput) error {
+	ids, err := bulkIDs(in.LeadIDs)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	return s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		for _, id := range ids {
+			l, err := s.repo.FindByID(ctx, id)
+			if err != nil {
+				return shared.NewNotFound("lead")
+			}
+			if l.ConvertedBookingID != nil {
+				return shared.NewConflict("a lead converted to a booking cannot be deleted")
+			}
+			if err := s.repo.SoftDelete(ctx, id, in.ActorID, now); err != nil {
+				return err
+			}
+			if err := s.recordAudit(ctx, in.ActorID, "lead.deleted", l.ID, &l.BranchID, l, nil, in.IP, in.UserAgent); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// Restore undoes Delete all-or-nothing and returns the restored leads.
+func (s *Service) Restore(ctx context.Context, in BulkInput) ([]domain.Lead, error) {
+	ids, err := bulkIDs(in.LeadIDs)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	out := make([]domain.Lead, 0, len(ids))
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		for _, id := range ids {
+			if err := s.repo.Restore(ctx, id, now); err != nil {
+				return err
+			}
+			l, err := s.repo.FindByID(ctx, id)
+			if err != nil {
+				return shared.NewNotFound("lead")
+			}
+			if err := s.recordAudit(ctx, in.ActorID, "lead.restored", l.ID, &l.BranchID, nil, l, in.IP, in.UserAgent); err != nil {
+				return err
+			}
+			out = append(out, *l)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func bulkIDs(ids []uuid.UUID) ([]uuid.UUID, error) {
+	seen := make(map[uuid.UUID]bool, len(ids))
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, shared.NewValidation("lead_ids required")
+	}
+	if len(out) > domain.MaxBulk {
+		return nil, shared.NewValidation("too many lead_ids")
+	}
+	return out, nil
 }
 
 func (s *Service) History(ctx context.Context, leadID uuid.UUID) ([]domain.StageHistory, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -21,11 +22,12 @@ func sysCtx() context.Context {
 
 type memRepo struct {
 	leads   map[uuid.UUID]*domain.Lead
+	deleted map[uuid.UUID]bool
 	history []domain.StageHistory
 }
 
 func newMem() *memRepo {
-	return &memRepo{leads: map[uuid.UUID]*domain.Lead{}}
+	return &memRepo{leads: map[uuid.UUID]*domain.Lead{}, deleted: map[uuid.UUID]bool{}}
 }
 
 func (m *memRepo) Create(_ context.Context, l *domain.Lead) error {
@@ -40,7 +42,7 @@ func (m *memRepo) Update(_ context.Context, l *domain.Lead) error {
 }
 func (m *memRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.Lead, error) {
 	l, ok := m.leads[id]
-	if !ok {
+	if !ok || m.deleted[id] {
 		return nil, errors.New("not found")
 	}
 	cp := *l
@@ -68,6 +70,23 @@ func (m *memRepo) ListStageHistory(_ context.Context, leadID uuid.UUID) ([]domai
 }
 func (m *memRepo) Analytics(_ context.Context, _ *uuid.UUID) (*domain.Analytics, error) {
 	return &domain.Analytics{Total: len(m.leads)}, nil
+}
+func (m *memRepo) Board(_ context.Context, _ domain.ListFilter, _ int) (*domain.Board, error) {
+	return &domain.Board{}, nil
+}
+func (m *memRepo) SoftDelete(_ context.Context, id, _ uuid.UUID, _ time.Time) error {
+	if _, ok := m.leads[id]; !ok || m.deleted[id] {
+		return shared.NewNotFound("lead")
+	}
+	m.deleted[id] = true
+	return nil
+}
+func (m *memRepo) Restore(_ context.Context, id uuid.UUID, _ time.Time) error {
+	if !m.deleted[id] {
+		return shared.NewNotFound("lead")
+	}
+	delete(m.deleted, id)
+	return nil
 }
 
 func TestCreateAssignLostAndNoFollowUp(t *testing.T) {
@@ -249,5 +268,61 @@ func TestEmployeeCannotAssignOthers(t *testing.T) {
 		LeadIDs: []uuid.UUID{l.ID}, OwnerID: uuid.New(), ActorID: me,
 	}); !errors.Is(err, access.ErrOwnerForbidden) {
 		t.Fatalf("assign: want ErrOwnerForbidden, got %v", err)
+	}
+}
+
+func TestDeleteAndRestore(t *testing.T) {
+	repo := newMem()
+	svc := applead.NewService(repo, tx.Nop{}, events.NewBus(nil))
+	actor := uuid.New()
+	mk := func(phone string) *domain.Lead {
+		l, err := svc.Create(sysCtx(), applead.CreateInput{
+			BranchID: uuid.New(), FullName: "Del", Phone: phone, OwnerID: uuid.New(), ActorID: actor,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	a, b := mk("+966500000021"), mk("+966500000022")
+
+	if err := svc.Delete(sysCtx(), applead.BulkInput{LeadIDs: []uuid.UUID{a.ID, a.ID, b.ID}, ActorID: actor}); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := svc.Get(sysCtx(), a.ID); err == nil {
+		t.Fatal("deleted lead still readable")
+	}
+	if err := svc.Delete(sysCtx(), applead.BulkInput{LeadIDs: []uuid.UUID{a.ID}, ActorID: actor}); err == nil {
+		t.Fatal("deleting twice should fail")
+	}
+	restored, err := svc.Restore(sysCtx(), applead.BulkInput{LeadIDs: []uuid.UUID{a.ID, b.ID}, ActorID: actor})
+	if err != nil || len(restored) != 2 {
+		t.Fatalf("restore: %v %d", err, len(restored))
+	}
+	if _, err := svc.Get(sysCtx(), b.ID); err != nil {
+		t.Fatalf("restored lead unreadable: %v", err)
+	}
+	if err := svc.Delete(sysCtx(), applead.BulkInput{ActorID: actor}); err == nil {
+		t.Fatal("empty lead_ids should fail")
+	}
+}
+
+func TestDeleteKeepsConvertedLead(t *testing.T) {
+	repo := newMem()
+	svc := applead.NewService(repo, tx.Nop{}, events.NewBus(nil))
+	l, err := svc.Create(sysCtx(), applead.CreateInput{
+		BranchID: uuid.New(), FullName: "Won", Phone: "+966500000031", OwnerID: uuid.New(), ActorID: uuid.New(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	booking := uuid.New()
+	repo.leads[l.ID].ConvertedBookingID = &booking
+	err = svc.Delete(sysCtx(), applead.BulkInput{LeadIDs: []uuid.UUID{l.ID}, ActorID: uuid.New()})
+	if !errors.Is(err, shared.ErrConflict) {
+		t.Fatalf("want conflict, got %v", err)
+	}
+	if repo.deleted[l.ID] {
+		t.Fatal("converted lead was deleted")
 	}
 }

@@ -15,6 +15,7 @@ const (
 	PermUsersUnlock         Permission = "users.unlock"
 	PermLeadsRead           Permission = "leads.read"
 	PermLeadsWrite          Permission = "leads.write"
+	PermLeadsDelete         Permission = "leads.delete"
 	PermBookingsRead        Permission = "bookings.read"
 	PermBookingsWrite       Permission = "bookings.write"
 	PermBookingsOverride    Permission = "bookings.override"
@@ -95,7 +96,7 @@ func PermissionsFor(role Role) []Permission {
 	case RoleGM:
 		return []Permission{
 			PermUsersRead, PermUsersWrite, PermRolesRead, PermAuditRead, PermBranchesRead,
-			PermCustomersRead, PermCustomersWrite, PermPIIRead, PermUsersUnlock, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
+			PermCustomersRead, PermCustomersWrite, PermPIIRead, PermUsersUnlock, PermLeadsRead, PermLeadsWrite, PermLeadsDelete, PermBookingsRead, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove,
 			PermDocsRead, PermDocsWrite, PermDocsReview, PermVisaRead, PermVisaWrite,
 			PermSuppliersRead, PermSuppliersWrite, PermOpsRead,
@@ -122,7 +123,7 @@ func PermissionsFor(role Role) []Permission {
 	case RoleManager:
 		return []Permission{
 			PermUsersRead, PermRolesRead, PermBranchesRead, PermAuditRead,
-			PermCustomersRead, PermCustomersWrite, PermPIIRead, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
+			PermCustomersRead, PermCustomersWrite, PermPIIRead, PermLeadsRead, PermLeadsWrite, PermLeadsDelete, PermBookingsRead, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove,
 			PermDocsRead, PermDocsWrite, PermDocsReview, PermVisaRead, PermVisaWrite,
 			PermSuppliersRead, PermSuppliersWrite,

@@ -258,6 +258,49 @@ func (h Handler) scoreLead(w http.ResponseWriter, r *http.Request, explain bool)
 	response.JSON(w, http.StatusOK, out)
 }
 
+// maxScoreBatch caps one ScoreLeads request: a board page of cards.
+const maxScoreBatch = 100
+
+// ScoreLeads scores many leads in one call so a board page needs one request,
+// not one per card. Leads the caller cannot see are left out.
+func (h Handler) ScoreLeads(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	var req struct {
+		LeadIDs []string `json:"lead_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	if len(req.LeadIDs) > maxScoreBatch {
+		response.Error(w, shared.NewValidation("too many lead_ids"))
+		return
+	}
+	out := make([]map[string]any, 0, len(req.LeadIDs))
+	for _, raw := range req.LeadIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			response.Error(w, shared.NewValidation("invalid lead_ids"))
+			return
+		}
+		score, err := h.Svc.ScoreLead(r.Context(), branchID, claims.UserID, id, false)
+		if err != nil {
+			continue
+		}
+		out = append(out, score)
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
 func (h Handler) TargetInsight(w http.ResponseWriter, r *http.Request) {
 	claims, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {

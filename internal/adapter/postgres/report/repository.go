@@ -57,7 +57,7 @@ func (r *Repository) SalesRows(ctx context.Context, f domain.Filter) ([]domain.R
 	rows, err := q.Query(ctx, `
 		WITH owners AS (
 			SELECT DISTINCT owner_id AS id FROM leads
-			WHERE created_at >= $1 AND created_at < $2 AND branch_id=$3
+			WHERE deleted_at IS NULL AND created_at >= $1 AND created_at < $2 AND branch_id=$3
 			  AND ($4::uuid IS NULL OR owner_id=$4)`+owned.and("owner_id")+`
 			UNION
 			SELECT DISTINCT owner_id FROM bookings
@@ -66,8 +66,8 @@ func (r *Repository) SalesRows(ctx context.Context, f domain.Filter) ([]domain.R
 		)
 		SELECT o.id::text,
 			COALESCE(u.full_name, o.id::text),
-			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.created_at >= $1 AND l.created_at < $2 AND l.branch_id=$3),
-			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.stage='won' AND l.updated_at >= $1 AND l.updated_at < $2 AND l.branch_id=$3),
+			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.deleted_at IS NULL AND l.created_at >= $1 AND l.created_at < $2 AND l.branch_id=$3),
+			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.deleted_at IS NULL AND l.stage='won' AND l.updated_at >= $1 AND l.updated_at < $2 AND l.branch_id=$3),
 			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND t.branch_id=$3),
 			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND t.due_at < NOW() AND t.branch_id=$3),
 			(SELECT COALESCE(SUM(b.collected_amt),0) FROM bookings b WHERE b.owner_id=o.id AND b.created_at >= $1 AND b.created_at < $2 AND b.branch_id=$3)

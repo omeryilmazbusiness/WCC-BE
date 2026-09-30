@@ -64,7 +64,7 @@ func (a *DashboardAggregator) Compute(ctx context.Context, branchID *uuid.UUID, 
 
 	if err := q.QueryRow(ctx, `
 		SELECT COUNT(*) FROM leads l
-		WHERE l.stage NOT IN ('won','lost')
+		WHERE l.deleted_at IS NULL AND l.stage NOT IN ('won','lost')
 		  AND l.created_at >= $1 AND l.created_at < $2
 		  AND ($3::uuid IS NULL OR l.branch_id = $3)`+lsc, largs...).Scan(&kpi.LeadsOpen); err != nil {
 		return nil, err
@@ -114,7 +114,7 @@ func (a *DashboardAggregator) TeamPerformance(ctx context.Context, branchID *uui
 	rows, err := q.Query(ctx, `
 		WITH owners AS (
 			SELECT DISTINCT l.owner_id AS id FROM leads l
-			WHERE l.created_at >= $1 AND l.created_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`
+			WHERE l.deleted_at IS NULL AND l.created_at >= $1 AND l.created_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`
 			UNION
 			SELECT DISTINCT t.assignee_id FROM tasks t
 			WHERE t.created_at >= $1 AND t.created_at < $2 AND ($3::uuid IS NULL OR t.branch_id=$3)`+tsc+`
@@ -125,8 +125,8 @@ func (a *DashboardAggregator) TeamPerformance(ctx context.Context, branchID *uui
 		SELECT o.id,
 			COALESCE(u.full_name, ''),
 			COALESCE(u.role, ''),
-			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.created_at >= $1 AND l.created_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`),
-			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.stage='won' AND l.updated_at >= $1 AND l.updated_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`),
+			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.deleted_at IS NULL AND l.created_at >= $1 AND l.created_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`),
+			(SELECT COUNT(*) FROM leads l WHERE l.owner_id=o.id AND l.deleted_at IS NULL AND l.stage='won' AND l.updated_at >= $1 AND l.updated_at < $2 AND ($3::uuid IS NULL OR l.branch_id=$3)`+lsc+`),
 			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND ($3::uuid IS NULL OR t.branch_id=$3)`+tsc+`),
 			(SELECT COUNT(*) FROM tasks t WHERE t.assignee_id=o.id AND t.status IN ('open','in_progress') AND t.due_at < NOW() AND ($3::uuid IS NULL OR t.branch_id=$3)`+tsc+`)
 		FROM owners o
@@ -211,7 +211,7 @@ func (a *DashboardAggregator) MyWorkToday(ctx context.Context, branchID *uuid.UU
 			SELECT l.id, 'lead', 'Follow up '||l.full_name, 'followup',
 				5, NULL, 'lead', l.id, false, false
 			FROM leads l
-			WHERE l.owner_id=$2 AND ($1::uuid IS NULL OR l.branch_id=$1)
+			WHERE l.owner_id=$2 AND ($1::uuid IS NULL OR l.branch_id=$1) AND l.deleted_at IS NULL
 			  AND l.stage NOT IN ('won','lost') AND l.no_follow_up=false`+lsc+`
 			  AND NOT EXISTS (
 				SELECT 1 FROM tasks t

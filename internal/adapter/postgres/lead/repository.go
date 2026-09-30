@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -88,7 +89,7 @@ func (r *Repository) Update(ctx context.Context, l *domain.Lead) error {
 			lost_reason_code=$8, lost_reason=$9, notes=$10, no_follow_up=$11, converted_booking_id=$12, updated_at=$13,
 			travel_date=$14, travel_window=$15, pax_count=$16, budget_amount=$17, budget_currency=$18,
 			package_id=$19, package_interest=$20
-		WHERE id=$1`+scope, args...)
+		WHERE id=$1 AND deleted_at IS NULL`+scope, args...)
 	if err != nil {
 		return err
 	}
@@ -108,7 +109,7 @@ func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Lead, 
 		SELECT `+leadCols+`
 		FROM leads l
 		LEFT JOIN users u ON u.id = l.owner_id
-		WHERE l.id=$1`+scope, args...)
+		WHERE l.id=$1 AND l.deleted_at IS NULL`+scope, args...)
 	l, err := scanLead(row)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
@@ -116,25 +117,37 @@ func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Lead, 
 	return l, err
 }
 
-func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Lead, int, error) {
-	q := tx.QuerierFrom(ctx, r.pool)
-	where := []string{"1=1"}
+// filter builds the WHERE terms shared by List and Board; deleted leads never match.
+func filter(ctx context.Context, f domain.ListFilter) ([]string, []any, error) {
+	where := []string{"l.deleted_at IS NULL"}
 	args := []any{}
+	add := func(term string, v any) {
+		args = append(args, v)
+		where = append(where, fmt.Sprintf(term, len(args)))
+	}
 	if f.BranchID != nil {
-		args = append(args, *f.BranchID)
-		where = append(where, fmt.Sprintf("l.branch_id=$%d", len(args)))
+		add("l.branch_id=$%d", *f.BranchID)
 	}
 	if f.OwnerID != nil {
-		args = append(args, *f.OwnerID)
-		where = append(where, fmt.Sprintf("l.owner_id=$%d", len(args)))
+		add("l.owner_id=$%d", *f.OwnerID)
+	}
+	if f.CustomerID != nil {
+		add("l.customer_id=$%d", *f.CustomerID)
 	}
 	if f.Stage != "" {
-		args = append(args, string(f.Stage))
-		where = append(where, fmt.Sprintf("l.stage=$%d", len(args)))
+		add("l.stage=$%d", string(f.Stage))
+	}
+	if src := strings.TrimSpace(f.Source); src != "" {
+		add("lower(l.source)=lower($%d)", src)
 	}
 	if f.NoFollowUp != nil {
-		args = append(args, *f.NoFollowUp)
-		where = append(where, fmt.Sprintf("l.no_follow_up=$%d", len(args)))
+		add("l.no_follow_up=$%d", *f.NoFollowUp)
+	}
+	if f.CreatedFrom != nil {
+		add("l.created_at >= $%d", *f.CreatedFrom)
+	}
+	if f.CreatedTo != nil {
+		add("l.created_at < $%d", *f.CreatedTo)
 	}
 	if qstr := strings.TrimSpace(f.Query); qstr != "" {
 		args = append(args, "%"+qstr+"%")
@@ -144,7 +157,30 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Le
 			i, i, i, i,
 		))
 	}
-	where, args, err := pgscope.Append(ctx, scopeAliased, where, args)
+	return pgscope.Append(ctx, scopeAliased, where, args)
+}
+
+// orderBy maps a whitelisted sort to SQL; the id tiebreak keeps pages stable.
+func orderBy(s domain.Sort) string {
+	switch s {
+	case domain.SortCreated:
+		return "l.created_at DESC, l.id DESC"
+	case domain.SortOldest:
+		return "l.created_at ASC, l.id ASC"
+	case domain.SortName:
+		return "lower(l.full_name) ASC, l.id ASC"
+	case domain.SortBudget:
+		return "l.budget_amount DESC NULLS LAST, l.updated_at DESC, l.id DESC"
+	case domain.SortTravel:
+		return "l.travel_date ASC NULLS LAST, l.updated_at DESC, l.id DESC"
+	default:
+		return "l.updated_at DESC, l.id DESC"
+	}
+}
+
+func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Lead, int, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	where, args, err := filter(ctx, f)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -165,23 +201,158 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Le
 		SELECT %s FROM leads l
 		LEFT JOIN users u ON u.id = l.owner_id
 		WHERE %s
-		ORDER BY l.updated_at DESC
-		LIMIT $%d OFFSET $%d`, leadCols, clause, i, i+1)
+		ORDER BY %s
+		LIMIT $%d OFFSET $%d`, leadCols, clause, orderBy(f.Sort), i, i+1)
 	args = append(args, limit, offset)
-	rows, err := q.Query(ctx, listSQL, args...)
+	out, err := r.query(ctx, listSQL, args...)
+	return out, total, err
+}
+
+func (r *Repository) query(ctx context.Context, sql string, args ...any) ([]domain.Lead, error) {
+	rows, err := tx.QuerierFrom(ctx, r.pool).Query(ctx, sql, args...)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer rows.Close()
 	var out []domain.Lead
 	for rows.Next() {
 		l, err := scanLead(rows)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		out = append(out, *l)
 	}
-	return out, total, rows.Err()
+	return out, rows.Err()
+}
+
+func (r *Repository) Board(ctx context.Context, f domain.ListFilter, perStage int) (*domain.Board, error) {
+	f.Stage = ""
+	where, args, err := filter(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	clause := strings.Join(where, " AND ")
+	q := tx.QuerierFrom(ctx, r.pool)
+
+	rows, err := q.Query(ctx, `
+		SELECT l.stage, l.budget_currency, COUNT(*),
+			COALESCE(SUM(l.budget_amount) FILTER (WHERE l.budget_amount > 0), 0)::bigint,
+			COUNT(*) FILTER (WHERE l.budget_amount > 0),
+			COUNT(*) FILTER (WHERE l.no_follow_up)
+		FROM leads l LEFT JOIN users u ON u.id = l.owner_id
+		WHERE `+clause+`
+		GROUP BY l.stage, l.budget_currency`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols := map[domain.Stage]*domain.BoardColumn{}
+	board := &domain.Board{}
+	for _, st := range domain.AllStages() {
+		board.Columns = append(board.Columns, domain.BoardColumn{Stage: st})
+	}
+	for i := range board.Columns {
+		cols[board.Columns[i].Stage] = &board.Columns[i]
+	}
+	for rows.Next() {
+		var stage, currency string
+		var n, budgeted, noFollow int
+		var amount int64
+		if err := rows.Scan(&stage, &currency, &n, &amount, &budgeted, &noFollow); err != nil {
+			return nil, err
+		}
+		col, ok := cols[domain.Stage(stage)]
+		if !ok {
+			continue
+		}
+		col.Total += n
+		col.NoFollowUp += noFollow
+		if currency != "" && budgeted > 0 {
+			col.Budgets = append(col.Budgets, domain.BudgetSum{Currency: currency, Amount: amount, Count: budgeted})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	for i := range board.Columns {
+		b := board.Columns[i].Budgets
+		sort.Slice(b, func(x, y int) bool { return b[x].Amount > b[y].Amount })
+	}
+	if perStage <= 0 {
+		return board, nil
+	}
+
+	order := orderBy(f.Sort)
+	n := len(args) + 1
+	items, err := r.query(ctx, fmt.Sprintf(`
+		SELECT %[1]s FROM leads l
+		LEFT JOIN users u ON u.id = l.owner_id
+		WHERE l.id IN (
+			SELECT id FROM (
+				SELECT l.id, ROW_NUMBER() OVER (PARTITION BY l.stage ORDER BY %[2]s) AS rn
+				FROM leads l LEFT JOIN users u ON u.id = l.owner_id
+				WHERE %[3]s
+			) ranked WHERE rn <= $%[4]d
+		)
+		ORDER BY %[2]s`, leadCols, order, clause, n), append(args, perStage)...)
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range items {
+		if col, ok := cols[it.Stage]; ok {
+			col.Items = append(col.Items, it)
+		}
+	}
+	return board, nil
+}
+
+// leadDeletedOutcome marks tasks cancelled by a lead deletion so a restore
+// reopens exactly those.
+const leadDeletedOutcome = "lead_deleted"
+
+func (r *Repository) SoftDelete(ctx context.Context, id, by uuid.UUID, at time.Time) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeBare, []any{id, at, by})
+	if err != nil {
+		return err
+	}
+	tag, err := q.Exec(ctx, `
+		UPDATE leads SET deleted_at=$2, deleted_by=$3
+		WHERE id=$1 AND deleted_at IS NULL`+scope, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("lead")
+	}
+	_, err = q.Exec(ctx, `
+		UPDATE tasks SET status='cancelled', outcome=$3, updated_at=$2
+		WHERE related_type='lead' AND related_id=$1 AND status IN ('open','in_progress')`,
+		id, at, leadDeletedOutcome)
+	return err
+}
+
+func (r *Repository) Restore(ctx context.Context, id uuid.UUID, at time.Time) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	scope, args, err := pgscope.Clause(ctx, scopeBare, []any{id})
+	if err != nil {
+		return err
+	}
+	tag, err := q.Exec(ctx, `
+		UPDATE leads SET deleted_at=NULL, deleted_by=NULL
+		WHERE id=$1 AND deleted_at IS NOT NULL`+scope, args...)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("lead")
+	}
+	_, err = q.Exec(ctx, `
+		UPDATE tasks SET status='open', outcome='', updated_at=$2
+		WHERE related_type='lead' AND related_id=$1 AND status='cancelled' AND outcome=$3`,
+		id, at, leadDeletedOutcome)
+	return err
 }
 
 func (r *Repository) AppendStageHistory(ctx context.Context, h *domain.StageHistory) error {
@@ -208,7 +379,7 @@ func (r *Repository) LostBetween(ctx context.Context, branchID uuid.UUID, from, 
 			       COALESCE(h.from_stage, '') AS from_stage, h.created_at AS lost_at
 			FROM leads l
 			JOIN lead_stage_history h ON h.lead_id = l.id AND h.to_stage = 'lost'
-			WHERE l.branch_id = $1 AND l.stage = 'lost' AND h.created_at >= $2 AND h.created_at < $3`+scope+`
+			WHERE l.branch_id = $1 AND l.stage = 'lost' AND l.deleted_at IS NULL AND h.created_at >= $2 AND h.created_at < $3`+scope+`
 			ORDER BY l.id, h.created_at DESC
 		) lost
 		ORDER BY lost_at DESC LIMIT $4`, args...)
@@ -236,7 +407,7 @@ func (r *Repository) ListStageHistory(ctx context.Context, leadID uuid.UUID) ([]
 	rows, err := q.Query(ctx, `
 		SELECT h.id, h.lead_id, h.from_stage, h.to_stage, h.changed_by, h.note, h.created_at
 		FROM lead_stage_history h
-		WHERE h.lead_id=$1 AND EXISTS (SELECT 1 FROM leads l WHERE l.id = h.lead_id`+scope+`)
+		WHERE h.lead_id=$1 AND EXISTS (SELECT 1 FROM leads l WHERE l.id = h.lead_id AND l.deleted_at IS NULL`+scope+`)
 		ORDER BY h.created_at ASC`, args...)
 	if err != nil {
 		return nil, err
@@ -263,7 +434,7 @@ func (r *Repository) ListStageHistory(ctx context.Context, leadID uuid.UUID) ([]
 func (r *Repository) Analytics(ctx context.Context, branchID *uuid.UUID) (*domain.Analytics, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	a := &domain.Analytics{}
-	where := []string{"1=1"}
+	where := []string{"l.deleted_at IS NULL"}
 	var args []any
 	if branchID != nil {
 		args = append(args, *branchID)

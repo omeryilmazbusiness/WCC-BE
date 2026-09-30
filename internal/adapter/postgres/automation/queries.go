@@ -82,7 +82,7 @@ func (q *Queries) IdleLeads(ctx context.Context, now time.Time, limit int) ([]ap
 		SELECT l.id, l.branch_id, l.owner_id, l.full_name, l.updated_at
 		FROM leads l
 		LEFT JOIN alert_threshold_settings ats ON ats.branch_id = l.branch_id
-		WHERE l.stage NOT IN ('won', 'lost')
+		WHERE l.stage NOT IN ('won', 'lost') AND l.deleted_at IS NULL
 		  AND NOT l.no_follow_up
 		  AND l.updated_at <= $1 - make_interval(hours => COALESCE(ats.lead_no_followup_hours, $2))
 		  AND NOT EXISTS (

@@ -77,7 +77,7 @@ func (r *Repository) Search(ctx context.Context, branchID *uuid.UUID, query doma
 				'leads',
 				CASE WHEN lower(l.full_name) = lower($2) THEN 95 ELSE 65 END
 			FROM leads l
-			WHERE ($1::uuid IS NULL OR l.branch_id=$1)`+lsc+`
+			WHERE ($1::uuid IS NULL OR l.branch_id=$1) AND l.deleted_at IS NULL`+lsc+`
 			  AND ($6::text[] IS NULL OR 'lead' = ANY($6::text[]))
 			  AND (lower(l.full_name) LIKE $3 OR lower(l.phone) LIKE $3)
 		)
