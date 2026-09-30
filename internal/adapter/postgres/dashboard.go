@@ -2,10 +2,12 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
@@ -285,11 +287,8 @@ func (a *DashboardAggregator) MyWorkToday(ctx context.Context, branchID *uuid.UU
 
 func (a *DashboardAggregator) TargetProgress(ctx context.Context, branchID uuid.UUID, ownerID *uuid.UUID) (*dashboard.TargetProgress, error) {
 	q := tx.QuerierFrom(ctx, a.pool)
-	out := &dashboard.TargetProgress{
-		Label: "Season target", Currency: "USD", Status: "placeholder",
-		PeriodStart: time.Now().UTC().Format("2006-01-02"),
-		PeriodEnd:   time.Now().UTC().Format("2006-01-02"),
-	}
+	today := time.Now().UTC().Format("2006-01-02")
+	out := &dashboard.TargetProgress{Status: "placeholder", PeriodStart: today, PeriodEnd: today}
 
 	var targetID uuid.UUID
 	err := q.QueryRow(ctx, `
@@ -309,11 +308,12 @@ func (a *DashboardAggregator) TargetProgress(ctx context.Context, branchID uuid.
 		LIMIT 1`, branchID, ownerID).Scan(
 		&targetID, &out.Label, &out.TargetAmount, &out.Currency, &out.PeriodStart, &out.PeriodEnd,
 	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// No running target: report an honest placeholder instead of inventing a goal.
+		return out, nil
+	}
 	if err != nil {
-		// Fallback: no row — derive soft placeholder from branch bookings YTD.
-		out.TargetAmount = 100_000_000
-		out.PeriodStart = time.Date(time.Now().UTC().Year(), 1, 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
-		out.PeriodEnd = time.Date(time.Now().UTC().Year(), 12, 31, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+		return nil, err
 	}
 
 	periodStart, _ := time.Parse("2006-01-02", out.PeriodStart)

@@ -3,12 +3,15 @@ package revenuetarget
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
+	fxdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/revenuetarget"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
@@ -30,8 +33,9 @@ type CreateInput struct {
 	Metric       domain.Metric
 	ScopeType    domain.ScopeType
 	CurveType    domain.CurveType
+	PeriodKind   domain.PeriodKind
 	PeriodStart  time.Time
-	PeriodEnd    time.Time
+	PeriodEnd    time.Time // ignored for calendar kinds
 	ActorID      uuid.UUID
 }
 
@@ -48,6 +52,7 @@ type PatchInput struct {
 	Metric       *domain.Metric
 	ScopeType    *domain.ScopeType
 	CurveType    *domain.CurveType
+	PeriodKind   *domain.PeriodKind
 	PeriodStart  *time.Time
 	PeriodEnd    *time.Time
 	ActorID      uuid.UUID
@@ -61,6 +66,13 @@ type Service struct {
 	tasks  RecoveryTaskCreator
 	outbox events.Outbox
 	alerts BehindAlerts
+	cur    ReportingCurrency
+	fx     fxdomain.Converter
+}
+
+// ReportingCurrency resolves a branch's reporting currency (ISP).
+type ReportingCurrency interface {
+	GetFinanceSettings(ctx context.Context, branchID uuid.UUID) (string, error)
 }
 
 func NewService(repo domain.Repository, txm tx.Runner) *Service {
@@ -74,6 +86,11 @@ func (s *Service) SetAuditor(a audit.Recorder)          { s.audit = a }
 func (s *Service) SetTaskCreator(t RecoveryTaskCreator) { s.tasks = t }
 func (s *Service) SetOutbox(o events.Outbox)            { s.outbox = o }
 func (s *Service) SetBehindAlerts(a BehindAlerts)       { s.alerts = a }
+
+// SetMoneySources wires the reporting-currency default and FX conversion of actuals.
+func (s *Service) SetMoneySources(cur ReportingCurrency, fx fxdomain.Converter) {
+	s.cur, s.fx = cur, fx
+}
 
 // BehindAlerts tells branch managers a target is behind pace (DIP).
 type BehindAlerts interface {
@@ -91,8 +108,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Target, e
 	if in.BranchID == uuid.Nil {
 		return nil, shared.NewValidation("branch_id is required")
 	}
-	if in.PeriodEnd.Before(in.PeriodStart) {
-		return nil, shared.NewValidation("period_end must be >= period_start")
+	kind := in.PeriodKind
+	if kind == "" {
+		kind = domain.PeriodCustom
+	}
+	start, end, err := resolvePeriod(kind, in.PeriodStart, in.PeriodEnd)
+	if err != nil {
+		return nil, err
 	}
 	metric := in.Metric
 	if metric == "" {
@@ -113,20 +135,23 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Target, e
 	if curve == "" {
 		curve = domain.CurveLinear
 	}
-	currency := strings.ToUpper(strings.TrimSpace(in.Currency))
-	if currency == "" {
-		currency = "SAR"
+	if curve != domain.CurveLinear && curve != domain.CurveSeasonal {
+		return nil, shared.NewValidation("curve_type must be linear or seasonal")
+	}
+	currency, err := s.targetCurrency(ctx, in.BranchID, in.Currency)
+	if err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	actor := in.ActorID
 	t := &domain.Target{
 		ID: uuid.New(), BranchID: in.BranchID, OwnerID: in.OwnerID, TeamID: in.TeamID,
 		Label: label, TargetAmount: in.TargetAmount, Currency: currency,
-		Metric: metric, ScopeType: scope, CurveType: curve,
-		PeriodStart: truncateDate(in.PeriodStart), PeriodEnd: truncateDate(in.PeriodEnd),
+		Metric: metric, ScopeType: scope, CurveType: curve, PeriodKind: kind,
+		PeriodStart: start, PeriodEnd: end,
 		CreatedBy: &actor, CreatedAt: now, UpdatedAt: now,
 	}
-	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		if err := s.repo.Create(ctx, t); err != nil {
 			return err
 		}
@@ -169,7 +194,11 @@ func (s *Service) Update(ctx context.Context, in PatchInput) (*domain.Target, er
 		t.TargetAmount = *in.TargetAmount
 	}
 	if in.Currency != nil {
-		t.Currency = strings.ToUpper(strings.TrimSpace(*in.Currency))
+		cur := strings.ToUpper(strings.TrimSpace(*in.Currency))
+		if !validCurrency(cur) {
+			return nil, shared.NewValidation("currency must be a 3-letter ISO code")
+		}
+		t.Currency = cur
 	}
 	if in.Metric != nil {
 		if *in.Metric != domain.MetricCollected && *in.Metric != domain.MetricBooked {
@@ -181,16 +210,24 @@ func (s *Service) Update(ctx context.Context, in PatchInput) (*domain.Target, er
 		t.ScopeType = *in.ScopeType
 	}
 	if in.CurveType != nil {
+		if *in.CurveType != domain.CurveLinear && *in.CurveType != domain.CurveSeasonal {
+			return nil, shared.NewValidation("curve_type must be linear or seasonal")
+		}
 		t.CurveType = *in.CurveType
 	}
+	if in.PeriodKind != nil {
+		t.PeriodKind = *in.PeriodKind
+	} else if t.PeriodKind == "" {
+		t.PeriodKind = domain.PeriodCustom
+	}
 	if in.PeriodStart != nil {
-		t.PeriodStart = truncateDate(*in.PeriodStart)
+		t.PeriodStart = *in.PeriodStart
 	}
 	if in.PeriodEnd != nil {
-		t.PeriodEnd = truncateDate(*in.PeriodEnd)
+		t.PeriodEnd = *in.PeriodEnd
 	}
-	if t.PeriodEnd.Before(t.PeriodStart) {
-		return nil, shared.NewValidation("period_end must be >= period_start")
+	if t.PeriodStart, t.PeriodEnd, err = resolvePeriod(t.PeriodKind, t.PeriodStart, t.PeriodEnd); err != nil {
+		return nil, err
 	}
 	t.UpdatedAt = time.Now().UTC()
 
@@ -211,6 +248,20 @@ func (s *Service) Update(ctx context.Context, in PatchInput) (*domain.Target, er
 		return nil, err
 	}
 	return t, nil
+}
+
+// Delete removes a target with its weights, shares, snapshots and revisions.
+func (s *Service) Delete(ctx context.Context, id, actorID uuid.UUID) error {
+	t, err := s.repo.Get(ctx, id)
+	if err != nil || t == nil {
+		return shared.NewNotFound("revenue_target")
+	}
+	return s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.repo.Delete(ctx, id); err != nil {
+			return err
+		}
+		return s.auditTarget(ctx, actorID, "revenue_target.deleted", t, targetSnapshot(t), nil)
+	})
 }
 
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Target, error) {
@@ -267,13 +318,50 @@ func (s *Service) Progress(ctx context.Context, id uuid.UUID) (*domain.Progress,
 	if err != nil || t == nil {
 		return nil, shared.NewNotFound("revenue_target")
 	}
-	weights, err := s.repo.ListWeights(ctx, id)
+	return s.progress(ctx, t, truncateDate(time.Now().UTC()))
+}
+
+// Active returns progress for branch-wide targets whose period covers today,
+// shortest horizon first, then the one ending soonest.
+func (s *Service) Active(ctx context.Context, branchID *uuid.UUID) ([]domain.Progress, error) {
+	targets, err := s.repo.List(ctx, branchID)
 	if err != nil {
 		return nil, err
 	}
-	asOf := truncateDate(time.Now().UTC())
-	from, to := t.PeriodStart, minTime(asOf, t.PeriodEnd)
-	actual, err := s.repo.SumActual(ctx, t, from, to)
+	today := truncateDate(time.Now().UTC())
+	var active []domain.Target
+	for _, t := range targets {
+		if t.ScopeType == domain.ScopeBranch && domain.Covers(t.PeriodStart, t.PeriodEnd, today) {
+			active = append(active, t)
+		}
+	}
+	sort.SliceStable(active, func(i, j int) bool {
+		a, b := active[i], active[j]
+		if a.PeriodKind.Rank() != b.PeriodKind.Rank() {
+			return a.PeriodKind.Rank() < b.PeriodKind.Rank()
+		}
+		if !a.PeriodEnd.Equal(b.PeriodEnd) {
+			return a.PeriodEnd.Before(b.PeriodEnd)
+		}
+		return a.Label < b.Label
+	})
+	out := make([]domain.Progress, 0, len(active))
+	for i := range active {
+		p, err := s.progress(ctx, &active[i], today)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *p)
+	}
+	return out, nil
+}
+
+func (s *Service) progress(ctx context.Context, t *domain.Target, asOf time.Time) (*domain.Progress, error) {
+	weights, err := s.repo.ListWeights(ctx, t.ID)
+	if err != nil {
+		return nil, err
+	}
+	actual, missing, err := s.actual(ctx, t, asOf)
 	if err != nil {
 		return nil, err
 	}
@@ -292,16 +380,57 @@ func (s *Service) Progress(ctx context.Context, id uuid.UUID) (*domain.Progress,
 	if err := s.saveSnapshot(ctx, t, snap); err != nil {
 		return nil, err
 	}
-
+	daysLeft := 0
+	if !asOf.After(t.PeriodEnd) {
+		daysLeft = domain.DaysInclusive(maxTime(asOf, t.PeriodStart), t.PeriodEnd)
+	}
 	return &domain.Progress{
 		TargetID: t.ID, Label: t.Label, Currency: t.Currency, Metric: t.Metric,
-		ScopeType: t.ScopeType, CurveType: t.CurveType, TargetAmount: t.TargetAmount,
+		ScopeType: t.ScopeType, CurveType: t.CurveType, PeriodKind: t.PeriodKind, TargetAmount: t.TargetAmount,
 		ActualAmount: actual, ExpectedToDate: calc.ExpectedToDate, Variance: calc.Variance,
 		ProgressBps: calc.ProgressBps, PaceBps: calc.PaceBps, ForecastAmount: calc.ForecastAmount,
 		RequiredPaceDaily: calc.RequiredPaceDaily, Status: calc.Status,
 		PeriodStart: t.PeriodStart.Format("2006-01-02"), PeriodEnd: t.PeriodEnd.Format("2006-01-02"),
-		AsOf: asOf.Format("2006-01-02"),
+		AsOf:      asOf.Format("2006-01-02"),
+		DaysTotal: domain.DaysInclusive(t.PeriodStart, t.PeriodEnd), DaysLeft: daysLeft,
+		Unconverted: missing,
 	}, nil
+}
+
+// actual sums the metric from period start to asOf in the target currency.
+// Currencies without an effective rate are skipped and reported, not guessed.
+func (s *Service) actual(ctx context.Context, t *domain.Target, asOf time.Time) (int64, []string, error) {
+	to := minTime(asOf, t.PeriodEnd)
+	rows, err := s.repo.SumActual(ctx, t, t.PeriodStart, to)
+	if err != nil {
+		return 0, nil, err
+	}
+	var total int64
+	var missing []string
+	for _, r := range rows {
+		if r.Minor == 0 {
+			continue
+		}
+		if r.Currency == t.Currency {
+			total += r.Minor
+			continue
+		}
+		if s.fx == nil {
+			missing = append(missing, r.Currency)
+			continue
+		}
+		conv, err := s.fx.Convert(ctx, r.Minor, r.Currency, t.Currency, to)
+		if errors.Is(err, fxdomain.ErrRateNotFound) {
+			missing = append(missing, r.Currency)
+			continue
+		}
+		if err != nil {
+			return 0, nil, err
+		}
+		total += conv.Amount
+	}
+	sort.Strings(missing)
+	return total, missing, nil
 }
 
 func (s *Service) Contributions(ctx context.Context, id uuid.UUID) ([]domain.Contribution, error) {
@@ -368,8 +497,7 @@ func (s *Service) Series(ctx context.Context, id uuid.UUID) ([]domain.SeriesPoin
 		return nil, err
 	}
 	asOf := truncateDate(time.Now().UTC())
-	from, to := t.PeriodStart, minTime(asOf, t.PeriodEnd)
-	actual, err := s.repo.SumActual(ctx, t, from, to)
+	actual, _, err := s.actual(ctx, t, asOf)
 	if err != nil {
 		return nil, err
 	}
@@ -534,6 +662,7 @@ func targetSnapshot(t *domain.Target) map[string]any {
 		"id": t.ID, "branch_id": t.BranchID, "label": t.Label,
 		"target_amount": t.TargetAmount, "currency": t.Currency,
 		"metric": t.Metric, "scope_type": t.ScopeType, "curve_type": t.CurveType,
+		"period_kind":  t.PeriodKind,
 		"period_start": t.PeriodStart.Format("2006-01-02"),
 		"period_end":   t.PeriodEnd.Format("2006-01-02"),
 	}
@@ -544,6 +673,49 @@ func targetSnapshot(t *domain.Target) map[string]any {
 		m["team_id"] = *t.TeamID
 	}
 	return m
+}
+
+// resolvePeriod maps domain period errors to validation errors.
+func resolvePeriod(kind domain.PeriodKind, start, end time.Time) (time.Time, time.Time, error) {
+	s, e, err := domain.ResolvePeriod(kind, start, end)
+	if err != nil {
+		return time.Time{}, time.Time{}, shared.NewValidation(err.Error())
+	}
+	return s, e, nil
+}
+
+// targetCurrency validates an explicit currency or falls back to the branch
+// reporting currency so actuals line up with finance figures.
+func (s *Service) targetCurrency(ctx context.Context, branchID uuid.UUID, raw string) (string, error) {
+	cur := strings.ToUpper(strings.TrimSpace(raw))
+	if cur == "" && s.cur != nil {
+		reporting, err := s.cur.GetFinanceSettings(ctx, branchID)
+		if err != nil {
+			return "", err
+		}
+		cur = strings.ToUpper(strings.TrimSpace(reporting))
+	}
+	if cur == "" {
+		cur = defaultCurrency
+	}
+	if !validCurrency(cur) {
+		return "", shared.NewValidation("currency must be a 3-letter ISO code")
+	}
+	return cur, nil
+}
+
+const defaultCurrency = "SAR"
+
+func validCurrency(c string) bool {
+	if len(c) != 3 {
+		return false
+	}
+	for _, r := range c {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 func mustListWeights(ctx context.Context, repo domain.Repository, id uuid.UUID) []domain.Weight {
@@ -558,6 +730,13 @@ func mustListShares(ctx context.Context, repo domain.Repository, id uuid.UUID) [
 
 func truncateDate(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 func minTime(a, b time.Time) time.Time {

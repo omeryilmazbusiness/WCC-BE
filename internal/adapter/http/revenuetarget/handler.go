@@ -28,6 +28,7 @@ func mapTarget(t *domain.Target) map[string]any {
 		"id": t.ID, "branch_id": t.BranchID, "label": t.Label,
 		"target_amount": t.TargetAmount, "currency": t.Currency,
 		"metric": t.Metric, "scope_type": t.ScopeType, "curve_type": t.CurveType,
+		"period_kind":  t.PeriodKind,
 		"period_start": t.PeriodStart.Format("2006-01-02"),
 		"period_end":   t.PeriodEnd.Format("2006-01-02"),
 		"created_at":   t.CreatedAt.UTC().Format(time.RFC3339Nano),
@@ -109,6 +110,7 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		Metric       string     `json:"metric"`
 		ScopeType    string     `json:"scope_type"`
 		CurveType    string     `json:"curve_type"`
+		PeriodKind   string     `json:"period_kind"`
 		PeriodStart  string     `json:"period_start"`
 		PeriodEnd    string     `json:"period_end"`
 	}
@@ -121,16 +123,19 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("period_start must be YYYY-MM-DD"))
 		return
 	}
-	end, err := parseDate(body.PeriodEnd)
-	if err != nil {
-		response.Error(w, shared.NewValidation("period_end must be YYYY-MM-DD"))
-		return
+	var end time.Time
+	if body.PeriodEnd != "" {
+		if end, err = parseDate(body.PeriodEnd); err != nil {
+			response.Error(w, shared.NewValidation("period_end must be YYYY-MM-DD"))
+			return
+		}
 	}
 	t, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
 		BranchID: branchID, OwnerID: body.OwnerID, TeamID: body.TeamID,
 		Label: body.Label, TargetAmount: body.TargetAmount, Currency: body.Currency,
 		Metric: domain.Metric(body.Metric), ScopeType: domain.ScopeType(body.ScopeType),
-		CurveType: domain.CurveType(body.CurveType), PeriodStart: start, PeriodEnd: end,
+		CurveType: domain.CurveType(body.CurveType), PeriodKind: domain.PeriodKind(body.PeriodKind),
+		PeriodStart: start, PeriodEnd: end,
 		ActorID: claims.UserID,
 	})
 	if err != nil {
@@ -228,6 +233,12 @@ func (h Handler) Patch(w http.ResponseWriter, r *http.Request) {
 		m := domain.CurveType(v)
 		in.CurveType = &m
 	}
+	if raw, ok := body["period_kind"]; ok {
+		var v string
+		_ = json.Unmarshal(raw, &v)
+		k := domain.PeriodKind(v)
+		in.PeriodKind = &k
+	}
 	if raw, ok := body["period_start"]; ok {
 		var v string
 		_ = json.Unmarshal(raw, &v)
@@ -254,6 +265,39 @@ func (h Handler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusOK, mapTarget(t))
+}
+
+func (h Handler) Delete(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	if err := h.Svc.Delete(r.Context(), id, claims.UserID); err != nil {
+		response.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Active lists branch-wide targets running today, each with live progress.
+func (h Handler) Active(w http.ResponseWriter, r *http.Request) {
+	branchID, err := request.Branch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	items, err := h.Svc.Active(r.Context(), branchID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, items)
 }
 
 func (h Handler) ListWeights(w http.ResponseWriter, r *http.Request) {

@@ -49,6 +49,7 @@ type Target struct {
 	Metric       Metric
 	ScopeType    ScopeType
 	CurveType    CurveType
+	PeriodKind   PeriodKind
 	PeriodStart  time.Time // date
 	PeriodEnd    time.Time
 	CreatedBy    *uuid.UUID
@@ -91,24 +92,35 @@ type Revision struct {
 }
 
 type Progress struct {
-	TargetID          uuid.UUID `json:"target_id"`
-	Label             string    `json:"label"`
-	Currency          string    `json:"currency"`
-	Metric            Metric    `json:"metric"`
-	ScopeType         ScopeType `json:"scope_type"`
-	CurveType         CurveType `json:"curve_type"`
-	TargetAmount      int64     `json:"target_amount"`
-	ActualAmount      int64     `json:"actual_amount"`
-	ExpectedToDate    int64     `json:"expected_to_date"`
-	Variance          int64     `json:"variance"`
-	ProgressBps       int       `json:"progress_bps"`
-	PaceBps           int       `json:"pace_bps"`
-	ForecastAmount    int64     `json:"forecast_amount"`
-	RequiredPaceDaily int64     `json:"required_pace_daily"`
-	Status            Status    `json:"status"`
-	PeriodStart       string    `json:"period_start"`
-	PeriodEnd         string    `json:"period_end"`
-	AsOf              string    `json:"as_of"`
+	TargetID          uuid.UUID  `json:"target_id"`
+	Label             string     `json:"label"`
+	Currency          string     `json:"currency"`
+	Metric            Metric     `json:"metric"`
+	ScopeType         ScopeType  `json:"scope_type"`
+	CurveType         CurveType  `json:"curve_type"`
+	PeriodKind        PeriodKind `json:"period_kind"`
+	TargetAmount      int64      `json:"target_amount"`
+	ActualAmount      int64      `json:"actual_amount"`
+	ExpectedToDate    int64      `json:"expected_to_date"`
+	Variance          int64      `json:"variance"`
+	ProgressBps       int        `json:"progress_bps"`
+	PaceBps           int        `json:"pace_bps"`
+	ForecastAmount    int64      `json:"forecast_amount"`
+	RequiredPaceDaily int64      `json:"required_pace_daily"`
+	Status            Status     `json:"status"`
+	PeriodStart       string     `json:"period_start"`
+	PeriodEnd         string     `json:"period_end"`
+	AsOf              string     `json:"as_of"`
+	DaysTotal         int        `json:"days_total"`
+	DaysLeft          int        `json:"days_left"`
+	// Unconverted lists currencies left out of ActualAmount for lack of an FX rate.
+	Unconverted []string `json:"unconverted,omitempty"`
+}
+
+// CurrencyAmount is an actual total in one currency, in minor units.
+type CurrencyAmount struct {
+	Currency string
+	Minor    int64
 }
 
 type Contribution struct {
@@ -143,6 +155,7 @@ type Repository interface {
 	Create(ctx context.Context, t *Target) error
 	Update(ctx context.Context, t *Target) error
 	Get(ctx context.Context, id uuid.UUID) (*Target, error)
+	Delete(ctx context.Context, id uuid.UUID) error
 	List(ctx context.Context, branchID *uuid.UUID) ([]Target, error)
 	ReplaceWeights(ctx context.Context, targetID uuid.UUID, weights []Weight) error
 	ListWeights(ctx context.Context, targetID uuid.UUID) ([]Weight, error)
@@ -153,7 +166,9 @@ type Repository interface {
 	InsertRevision(ctx context.Context, r *Revision) error
 	ListRevisions(ctx context.Context, targetID uuid.UUID, limit int) ([]Revision, error)
 
-	SumActual(ctx context.Context, t *Target, from, to time.Time) (int64, error)
+	// SumActual totals actuals per currency, preferring rows already snapshotted
+	// in the target currency; the service converts the rest.
+	SumActual(ctx context.Context, t *Target, from, to time.Time) ([]CurrencyAmount, error)
 	SumActualByOwner(ctx context.Context, t *Target, from, to time.Time) ([]Contribution, error)
 	ListSources(ctx context.Context, t *Target, from, to time.Time, limit int) ([]SourceRow, error)
 	ListTargetsForBranch(ctx context.Context, branchID uuid.UUID) ([]Target, error)

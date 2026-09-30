@@ -27,7 +27,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 
 const targetCols = `id, branch_id, owner_id, team_id, label, target_amount, currency,
 	COALESCE(metric,'collected'), COALESCE(scope_type,'branch'), COALESCE(curve_type,'linear'),
-	period_start, period_end, created_by, created_at, COALESCE(updated_at, created_at)`
+	period_kind, period_start, period_end, created_by, created_at, COALESCE(updated_at, created_at)`
 
 // targetScope renders visibility for revenue targets aliased t. Branch and
 // global scopes see every target in reach; own scopes see branch-level goals
@@ -77,10 +77,10 @@ func (r *Repository) ensureTarget(ctx context.Context, targetID uuid.UUID) error
 
 func scanTarget(scan func(dest ...any) error) (*domain.Target, error) {
 	var t domain.Target
-	var metric, scope, curve string
+	var metric, scope, curve, kind string
 	err := scan(
 		&t.ID, &t.BranchID, &t.OwnerID, &t.TeamID, &t.Label, &t.TargetAmount, &t.Currency,
-		&metric, &scope, &curve, &t.PeriodStart, &t.PeriodEnd, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
+		&metric, &scope, &curve, &kind, &t.PeriodStart, &t.PeriodEnd, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -88,6 +88,7 @@ func scanTarget(scan func(dest ...any) error) (*domain.Target, error) {
 	t.Metric = domain.Metric(metric)
 	t.ScopeType = domain.ScopeType(scope)
 	t.CurveType = domain.CurveType(curve)
+	t.PeriodKind = domain.PeriodKind(kind)
 	return &t, nil
 }
 
@@ -99,11 +100,12 @@ func (r *Repository) Create(ctx context.Context, t *domain.Target) error {
 	_, err := q.Exec(ctx, `
 		INSERT INTO revenue_targets (
 			id, branch_id, owner_id, team_id, label, target_amount, currency,
-			metric, scope_type, curve_type, period_start, period_end, created_by, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+			metric, scope_type, curve_type, period_start, period_end, created_by, created_at, updated_at,
+			period_kind
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 		t.ID, t.BranchID, t.OwnerID, t.TeamID, t.Label, t.TargetAmount, t.Currency,
 		string(t.Metric), string(t.ScopeType), string(t.CurveType),
-		t.PeriodStart, t.PeriodEnd, t.CreatedBy, t.CreatedAt, t.UpdatedAt,
+		t.PeriodStart, t.PeriodEnd, t.CreatedBy, t.CreatedAt, t.UpdatedAt, string(t.PeriodKind),
 	)
 	return err
 }
@@ -113,7 +115,7 @@ func (r *Repository) Update(ctx context.Context, t *domain.Target) error {
 	clause, args, err := targetScope(ctx, []any{
 		t.ID, t.OwnerID, t.TeamID, t.Label, t.TargetAmount, t.Currency,
 		string(t.Metric), string(t.ScopeType), string(t.CurveType),
-		t.PeriodStart, t.PeriodEnd, t.UpdatedAt,
+		t.PeriodStart, t.PeriodEnd, t.UpdatedAt, string(t.PeriodKind),
 	})
 	if err != nil {
 		return err
@@ -121,8 +123,26 @@ func (r *Repository) Update(ctx context.Context, t *domain.Target) error {
 	ct, err := q.Exec(ctx, `
 		UPDATE revenue_targets t SET
 			owner_id=$2, team_id=$3, label=$4, target_amount=$5, currency=$6,
-			metric=$7, scope_type=$8, curve_type=$9, period_start=$10, period_end=$11, updated_at=$12
+			metric=$7, scope_type=$8, curve_type=$9, period_start=$10, period_end=$11, updated_at=$12,
+			period_kind=$13
 		WHERE t.id=$1`+clause, args...)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return shared.NewNotFound("revenue_target")
+	}
+	return nil
+}
+
+// Delete removes a visible target; weights, shares, snapshots and revisions cascade.
+func (r *Repository) Delete(ctx context.Context, id uuid.UUID) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	clause, args, err := targetScope(ctx, []any{id})
+	if err != nil {
+		return err
+	}
+	ct, err := q.Exec(ctx, `DELETE FROM revenue_targets t WHERE t.id=$1`+clause, args...)
 	if err != nil {
 		return err
 	}
@@ -369,55 +389,62 @@ func ownerFilter(t *domain.Target) (apply bool, ownerID uuid.UUID) {
 	return false, uuid.Nil
 }
 
-func (r *Repository) SumActual(ctx context.Context, t *domain.Target, from, to time.Time) (int64, error) {
+// Actuals prefer the FX snapshot frozen on each row when it is already in the
+// target currency ($2); other rows keep their own currency for the service to convert.
+const (
+	bookedCur = `CASE WHEN b.reporting_currency = $2 AND b.fx_rate_scaled IS NOT NULL THEN $2 ELSE COALESCE(b.currency, 'SAR') END`
+	bookedAmt = `CASE WHEN b.reporting_currency = $2 AND b.fx_rate_scaled IS NOT NULL
+		THEN ROUND(b.total_amount::numeric * b.fx_rate_scaled / 100000000)::bigint ELSE b.total_amount END`
+	paidCur = `CASE WHEN p.reporting_currency = $2 AND p.amount_reporting IS NOT NULL THEN $2 ELSE p.currency END`
+	paidAmt = `CASE WHEN p.reporting_currency = $2 AND p.amount_reporting IS NOT NULL THEN p.amount_reporting ELSE p.amount END`
+)
+
+// SumActual totals the metric over [from, to] by currency. Booked counts
+// confirmed-or-later bookings by creation time; collected nets verified and
+// approved ledger rows (charges, reversals, refunds) by their received date.
+func (r *Repository) SumActual(ctx context.Context, t *domain.Target, from, to time.Time) ([]domain.CurrencyAmount, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	applyOwner, ownerID := ownerFilter(t)
-	toExclusive := to.UTC().Truncate(24*time.Hour).AddDate(0, 0, 1)
-
-	if t.Metric == domain.MetricBooked {
-		var sum int64
-		var err error
-		if applyOwner {
-			err = q.QueryRow(ctx, `
-				SELECT COALESCE(SUM(total_amount),0) FROM bookings
-				WHERE branch_id=$1 AND owner_id=$2
-				  AND status IN ('confirmed','partially_paid','ready','travelled','completed')
-				  AND created_at >= $3 AND created_at < $4`,
-				t.BranchID, ownerID, from, toExclusive).Scan(&sum)
-		} else {
-			err = q.QueryRow(ctx, `
-				SELECT COALESCE(SUM(total_amount),0) FROM bookings
-				WHERE branch_id=$1
-				  AND status IN ('confirmed','partially_paid','ready','travelled','completed')
-				  AND created_at >= $2 AND created_at < $3`,
-				t.BranchID, from, toExclusive).Scan(&sum)
-		}
-		return sum, err
-	}
-
-	// collected (default)
-	var sum int64
-	var err error
+	fromDay := from.UTC().Truncate(24 * time.Hour)
+	toDay := to.UTC().Truncate(24 * time.Hour)
+	args := []any{t.BranchID, t.Currency, fromDay, toDay}
+	owner := ""
 	if applyOwner {
-		err = q.QueryRow(ctx, `
-			SELECT COALESCE(SUM(p.amount),0)
-			FROM payments p
-			JOIN bookings b ON b.id = p.booking_id
-			WHERE b.branch_id=$1 AND b.owner_id=$2
-			  AND p.status IN ('verified','approved')
-			  AND p.created_at >= $3 AND p.created_at < $4`,
-			t.BranchID, ownerID, from, toExclusive).Scan(&sum)
-	} else {
-		err = q.QueryRow(ctx, `
-			SELECT COALESCE(SUM(p.amount),0)
-			FROM payments p
-			JOIN bookings b ON b.id = p.booking_id
-			WHERE b.branch_id=$1
-			  AND p.status IN ('verified','approved')
-			  AND p.created_at >= $2 AND p.created_at < $3`,
-			t.BranchID, from, toExclusive).Scan(&sum)
+		args = append(args, ownerID)
+		owner = ` AND b.owner_id = $5`
 	}
-	return sum, err
+
+	var query string
+	if t.Metric == domain.MetricBooked {
+		query = `SELECT ` + bookedCur + `, COALESCE(SUM(` + bookedAmt + `), 0)
+			FROM bookings b
+			WHERE b.branch_id = $1` + owner + `
+			  AND b.status IN ('confirmed','partially_paid','ready','travelled','completed')
+			  AND b.created_at >= $3 AND b.created_at < $4::date + 1
+			GROUP BY 1`
+	} else {
+		query = `SELECT ` + paidCur + `, COALESCE(SUM(` + paidAmt + `), 0)
+			FROM payments p
+			JOIN bookings b ON b.id = p.booking_id
+			WHERE b.branch_id = $1` + owner + `
+			  AND p.status IN ('verified','approved')
+			  AND p.received_at >= $3::date AND p.received_at <= $4::date
+			GROUP BY 1`
+	}
+	rows, err := q.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.CurrencyAmount
+	for rows.Next() {
+		var a domain.CurrencyAmount
+		if err := rows.Scan(&a.Currency, &a.Minor); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 func (r *Repository) SumActualByOwner(ctx context.Context, t *domain.Target, from, to time.Time) ([]domain.Contribution, error) {

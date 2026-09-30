@@ -18,6 +18,7 @@ type memRepo struct {
 	shares  map[uuid.UUID][]domain.Share
 	snaps   map[string]*domain.Snapshot
 	actual  int64
+	sums    []domain.CurrencyAmount // overrides actual when set
 	byOwner []domain.Contribution
 }
 
@@ -100,8 +101,15 @@ func (m *memRepo) InsertRevision(ctx context.Context, r *domain.Revision) error 
 func (m *memRepo) ListRevisions(ctx context.Context, targetID uuid.UUID, limit int) ([]domain.Revision, error) {
 	return nil, nil
 }
-func (m *memRepo) SumActual(ctx context.Context, t *domain.Target, from, to time.Time) (int64, error) {
-	return m.actual, nil
+func (m *memRepo) SumActual(ctx context.Context, t *domain.Target, from, to time.Time) ([]domain.CurrencyAmount, error) {
+	if m.sums != nil {
+		return m.sums, nil
+	}
+	return []domain.CurrencyAmount{{Currency: t.Currency, Minor: m.actual}}, nil
+}
+func (m *memRepo) Delete(ctx context.Context, id uuid.UUID) error {
+	delete(m.targets, id)
+	return nil
 }
 func (m *memRepo) SumActualByOwner(ctx context.Context, t *domain.Target, from, to time.Time) ([]domain.Contribution, error) {
 	return m.byOwner, nil

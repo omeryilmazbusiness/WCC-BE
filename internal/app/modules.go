@@ -273,6 +273,7 @@ func (m *modules) build() error {
 		Repo: paymentRepo, Bookings: bookingRepo, Tasks: taskSeeder, Notifier: m.notify,
 	})
 	m.dashboard.SetRevenueSources(dashAgg, paymentRepo, m.finance.FX.Converter())
+	m.targets.SetMoneySources(paymentRepo, m.finance.FX.Converter())
 
 	reportRepo := pgreport.NewRepository(pool)
 	m.reports = appreport.NewService(reportRepo)

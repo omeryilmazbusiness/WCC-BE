@@ -228,10 +228,21 @@ Aggregator port in `internal/app/dashboard`; Postgres adapter; JWT RBAC (`dashbo
 | T-136 Drill-down sources | Done |
 | T-137 Revision audit | Done |
 
-- `GET/POST /v1/targets` · `PATCH /v1/targets/{id}` · `GET/PUT .../weights` · `PUT .../shares`
+- `GET/POST /v1/targets` · `PATCH|DELETE /v1/targets/{id}` · `GET/PUT .../weights` · `PUT .../shares`
+- `GET /v1/targets/active` — branch-wide targets running today with live progress, shortest horizon first
 - `GET .../progress|contributions|series|sources|revisions` · `POST .../recompute`
 
 Domain engine is pure (`domain/revenuetarget.Engine`); HTTP/app/adapters depend inward (SOLID).
+
+**Periods.** `period_kind` is `weekly`, `monthly`, `season`, `yearly` or `custom`. For weekly (ISO Mon–Sun),
+monthly and yearly the service snaps `period_start` to the calendar period containing it and ignores
+`period_end`; season and custom need both dates and may span at most 3 years (`domain.ResolvePeriod`).
+Any number of targets may overlap.
+
+**Money.** `currency` defaults to the branch reporting currency. Actuals use each row's FX snapshot when it is
+already in the target currency and convert the rest at the latest effective rate; currencies without a rate are
+left out and listed in `progress.unconverted`. Collected nets verified/approved ledger rows (charges, reversals,
+refunds) by `received_at`; booked counts confirmed-or-later bookings by creation time.
 
 ## Epic 11 Excel Import/Export
 
