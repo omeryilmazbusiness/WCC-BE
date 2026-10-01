@@ -101,16 +101,15 @@ func mapMessages(items []domain.Message) []map[string]any {
 	return out
 }
 
-func (h Handler) List(w http.ResponseWriter, r *http.Request) {
+// listFilter parses the queue/search query shared by List and Counts.
+func listFilter(r *http.Request) (domain.ListFilter, error) {
 	claims, ok := middleware.ClaimsFrom(r.Context())
 	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
-		return
+		return domain.ListFilter{}, shared.NewUnauthorized("unauthenticated")
 	}
 	branchID, err := request.Branch(r)
 	if err != nil {
-		response.Error(w, err)
-		return
+		return domain.ListFilter{}, err
 	}
 	q := r.URL.Query()
 	f := domain.ListFilter{
@@ -130,8 +129,7 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("owner_id"); v != "" && !f.UnassignedOnly {
 		id, err := uuid.Parse(v)
 		if err != nil {
-			response.Error(w, shared.NewValidation("invalid owner_id"))
-			return
+			return f, shared.NewValidation("invalid owner_id")
 		}
 		f.OwnerID = &id
 	}
@@ -142,12 +140,21 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("unanswered_minutes"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			response.Error(w, shared.NewValidation("invalid unanswered_minutes"))
-			return
+			return f, shared.NewValidation("invalid unanswered_minutes")
 		}
 		d := time.Duration(n) * time.Minute
 		f.UnansweredMin = &d
 	}
+	return f, nil
+}
+
+func (h Handler) List(w http.ResponseWriter, r *http.Request) {
+	f, err := listFilter(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	q := r.URL.Query()
 	if v := q.Get("limit"); v != "" {
 		n, _ := strconv.Atoi(v)
 		f.Limit = n
@@ -162,6 +169,27 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSONMeta(w, http.StatusOK, mapConversations(items), map[string]any{"total": total})
+}
+
+// Counts returns per-channel totals for the same filters as List (channel ignored).
+func (h Handler) Counts(w http.ResponseWriter, r *http.Request) {
+	f, err := listFilter(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	counts, err := h.Svc.ChannelCounts(r.Context(), f)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	byChannel := make(map[string]int64, len(counts))
+	var total int64
+	for ch, n := range counts {
+		byChannel[string(ch)] = n
+		total += n
+	}
+	response.JSON(w, http.StatusOK, map[string]any{"total": total, "channels": byChannel})
 }
 
 func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -342,6 +370,30 @@ func (h Handler) Health(w http.ResponseWriter, r *http.Request) {
 		"accounts": acctOut,
 		"live":     liveOut,
 	})
+}
+
+// Channels lists the branch's channel accounts for inbox users: which ones are
+// connected and their health, without credentials, ids or webhook details.
+func (h Handler) Channels(w http.ResponseWriter, r *http.Request) {
+	branchID, err := request.TargetBranch(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	accounts, err := h.Svc.ChannelAccounts(r.Context(), branchID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(accounts))
+	for i := range accounts {
+		a := &accounts[i]
+		out = append(out, map[string]any{
+			"provider": a.Provider, "display_name": a.DisplayName,
+			"status": a.Status, "connected": a.Connected,
+		})
+	}
+	response.JSON(w, http.StatusOK, out)
 }
 
 func (h Handler) ListAccounts(w http.ResponseWriter, r *http.Request) {

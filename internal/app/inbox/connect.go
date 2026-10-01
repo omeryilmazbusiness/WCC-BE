@@ -143,16 +143,32 @@ func (s *Service) Disconnect(ctx context.Context, branchID uuid.UUID, provider d
 }
 
 func (s *Service) IntegrationHealth(ctx context.Context, branchID uuid.UUID) ([]domain.IntegrationAccount, []domain.ProviderHealth, error) {
-	accounts, err := s.repo.ListAccounts(ctx, branchID)
+	out, err := s.ChannelAccounts(ctx, branchID)
 	if err != nil {
 		return nil, nil, err
+	}
+	var live []domain.ProviderHealth
+	if s.providers != nil {
+		for _, p := range s.providers.All() {
+			live = append(live, p.Health(ctx))
+		}
+	}
+	return out, live, nil
+}
+
+// ChannelAccounts lists every connectable channel for the branch from stored
+// state only (no provider calls); missing channels appear disconnected.
+func (s *Service) ChannelAccounts(ctx context.Context, branchID uuid.UUID) ([]domain.IntegrationAccount, error) {
+	accounts, err := s.repo.ListAccounts(ctx, branchID)
+	if err != nil {
+		return nil, err
 	}
 	// Ensure all connectable channels appear (disconnected placeholders).
 	by := map[domain.Channel]*domain.IntegrationAccount{}
 	for i := range accounts {
 		a := &accounts[i]
 		if err := s.enrichAccount(a); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		by[a.Provider] = a
 	}
@@ -169,13 +185,7 @@ func (s *Service) IntegrationHealth(ctx context.Context, branchID uuid.UUID) ([]
 			PublicMeta:  map[string]string{},
 		})
 	}
-	var live []domain.ProviderHealth
-	if s.providers != nil {
-		for _, p := range s.providers.All() {
-			live = append(live, p.Health(ctx))
-		}
-	}
-	return out, live, nil
+	return out, nil
 }
 
 // AccountPublic is a secrets-stripped integration account for list APIs (T-218).

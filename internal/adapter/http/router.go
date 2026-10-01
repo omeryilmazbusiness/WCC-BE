@@ -445,6 +445,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 
 			r.Route("/inbox", func(r chi.Router) {
 				r.With(middleware.RequirePermission(platformauth.PermInboxRead)).Get("/conversations", h.Inbox.List)
+				r.With(middleware.RequirePermission(platformauth.PermInboxRead)).Get("/conversations/counts", h.Inbox.Counts)
+				r.With(middleware.RequirePermission(platformauth.PermInboxRead)).Get("/channels", h.Inbox.Channels)
 				r.With(middleware.RequirePermission(platformauth.PermInboxRead)).Get("/conversations/{id}", h.Inbox.Get)
 				r.With(middleware.RequirePermission(platformauth.PermInboxRead)).Get("/conversations/{id}/messages", h.Inbox.Messages)
 				r.With(middleware.RequirePermission(platformauth.PermInboxWrite)).Post("/conversations/{id}/assign", h.Inbox.Assign)

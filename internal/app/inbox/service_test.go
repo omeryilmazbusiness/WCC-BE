@@ -145,6 +145,18 @@ func (m *memRepo) ListConversations(_ context.Context, f domain.ListFilter) ([]d
 	}
 	return out, int64(len(out)), nil
 }
+func (m *memRepo) CountByChannel(_ context.Context, f domain.ListFilter) (map[domain.Channel]int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[domain.Channel]int64{}
+	for _, c := range m.convs {
+		if f.Status != "" && c.Status != f.Status {
+			continue
+		}
+		out[c.Channel]++
+	}
+	return out, nil
+}
 func (m *memRepo) InsertMessage(_ context.Context, msg *domain.Message) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -250,6 +262,32 @@ func TestIngestDedupeAndReplyNote(t *testing.T) {
 	}
 	if note.Direction != domain.DirectionNote {
 		t.Fatalf("want note, got %s", note.Direction)
+	}
+}
+
+func TestAssignAndChannelCounts(t *testing.T) {
+	repo := newMem()
+	svc := inbox.NewService(repo, integration.NewRegistry(stub.New()), noopTx{}, nil)
+	branch := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	body := []byte(`{"event_id":"e1","message_id":"m1","phone":"+905551112233","display_name":"A","body":"hi"}`)
+	msg, err := svc.IngestWebhook(context.Background(), domain.ChannelStub, branch, nil, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := uuid.New()
+	c, err := svc.Assign(context.Background(), inbox.AssignInput{ConversationID: msg.ConversationID, OwnerID: owner, ActorID: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.OwnerID == nil || *c.OwnerID != owner {
+		t.Fatalf("want owner %s, got %v", owner, c.OwnerID)
+	}
+	counts, err := svc.ChannelCounts(context.Background(), domain.ListFilter{Status: domain.StatusOpen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts[domain.ChannelStub] != 1 {
+		t.Fatalf("want 1 stub conversation, got %v", counts)
 	}
 }
 

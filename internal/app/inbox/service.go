@@ -75,6 +75,11 @@ func (s *Service) List(ctx context.Context, f domain.ListFilter) ([]domain.Conve
 	return s.repo.ListConversations(ctx, f)
 }
 
+// ChannelCounts returns how many conversations match f in each channel.
+func (s *Service) ChannelCounts(ctx context.Context, f domain.ListFilter) (map[domain.Channel]int64, error) {
+	return s.repo.CountByChannel(ctx, f)
+}
+
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Conversation, error) {
 	c, err := s.repo.GetConversation(ctx, id)
 	if err != nil {
@@ -122,8 +127,12 @@ func (s *Service) Assign(ctx context.Context, in AssignInput) (*domain.Conversat
 		if err := s.repo.UpdateConversation(ctx, c); err != nil {
 			return err
 		}
-		out = c
-		return nil
+		// Re-read so owner_name reflects the new owner.
+		out, err = s.repo.GetConversation(ctx, c.ID)
+		if err == nil && out == nil {
+			err = shared.NewNotFound("conversation not found")
+		}
+		return err
 	})
 	if err != nil {
 		return nil, err

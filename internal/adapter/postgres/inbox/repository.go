@@ -344,8 +344,9 @@ func (r *Repository) FindOpenByIdentity(ctx context.Context, identityID uuid.UUI
 	return c, err
 }
 
-func (r *Repository) ListConversations(ctx context.Context, f domain.ListFilter) ([]domain.Conversation, int64, error) {
-	q := tx.QuerierFrom(ctx, r.pool)
+// conversationWhere builds the WHERE terms shared by the list and the counts;
+// the query must join channel_identities as ci.
+func conversationWhere(ctx context.Context, f domain.ListFilter) (string, []any, error) {
 	where := []string{"1=1"}
 	args := []any{}
 	add := func(cond string, v any) {
@@ -388,6 +389,42 @@ func (r *Repository) ListConversations(ctx context.Context, f domain.ListFilter)
 	}
 	where, args, err := pgscope.Append(ctx, convScope, where, args)
 	if err != nil {
+		return "", nil, err
+	}
+	return strings.Join(where, " AND "), args, nil
+}
+
+func (r *Repository) CountByChannel(ctx context.Context, f domain.ListFilter) (map[domain.Channel]int64, error) {
+	f.Channel = ""
+	wsql, args, err := conversationWhere(ctx, f)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.QuerierFrom(ctx, r.pool).Query(ctx, `
+		SELECT c.channel, COUNT(*) FROM conversations c
+		LEFT JOIN channel_identities ci ON ci.id = c.channel_identity_id
+		WHERE `+wsql+`
+		GROUP BY c.channel`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[domain.Channel]int64{}
+	for rows.Next() {
+		var ch string
+		var n int64
+		if err := rows.Scan(&ch, &n); err != nil {
+			return nil, err
+		}
+		out[domain.Channel(ch)] = n
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) ListConversations(ctx context.Context, f domain.ListFilter) ([]domain.Conversation, int64, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	wsql, args, err := conversationWhere(ctx, f)
+	if err != nil {
 		return nil, 0, err
 	}
 	limit := f.Limit
@@ -399,7 +436,6 @@ func (r *Repository) ListConversations(ctx context.Context, f domain.ListFilter)
 		offset = 0
 	}
 
-	wsql := strings.Join(where, " AND ")
 	var total int64
 	if err := q.QueryRow(ctx, `
 		SELECT COUNT(*) FROM conversations c

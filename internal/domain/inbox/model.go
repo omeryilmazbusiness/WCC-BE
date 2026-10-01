@@ -170,6 +170,9 @@ type Repository interface {
 	GetConversation(ctx context.Context, id uuid.UUID) (*Conversation, error)
 	FindOpenByIdentity(ctx context.Context, identityID uuid.UUID) (*Conversation, error)
 	ListConversations(ctx context.Context, f ListFilter) ([]Conversation, int64, error)
+	// CountByChannel counts conversations matching f per channel; f.Channel,
+	// Limit and Offset are ignored.
+	CountByChannel(ctx context.Context, f ListFilter) (map[Channel]int64, error)
 
 	InsertMessage(ctx context.Context, m *Message) error
 	FindMessageByEvent(ctx context.Context, provider Channel, eventID string) (*Message, error)
