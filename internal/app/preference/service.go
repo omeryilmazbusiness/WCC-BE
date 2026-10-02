@@ -44,5 +44,13 @@ func (s *Service) SetNavFavorites(ctx context.Context, userID uuid.UUID, favorit
 	if err := s.repo.Upsert(ctx, p); err != nil {
 		return nil, err
 	}
-	return p, nil
+	return s.Get(ctx, userID)
+}
+
+// MarkWelcomeSeen ends the first-login welcome for good; repeating it is a no-op.
+func (s *Service) MarkWelcomeSeen(ctx context.Context, userID uuid.UUID) (*domain.Preferences, error) {
+	if err := s.repo.MarkWelcomeSeen(ctx, userID, s.now().UTC()); err != nil {
+		return nil, err
+	}
+	return s.Get(ctx, userID)
 }

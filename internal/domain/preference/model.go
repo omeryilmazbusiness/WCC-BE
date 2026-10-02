@@ -20,15 +20,20 @@ var navRoute = regexp.MustCompile(`^(/[a-z0-9-]{1,32}){1,4}$`)
 
 // Preferences is one user's UI settings. A nil NavFavorites means the user
 // never customised the sidebar and the client applies its role default.
+// A nil WelcomeSeenAt means the user has not had their first-login welcome yet.
 type Preferences struct {
-	UserID       uuid.UUID
-	NavFavorites []string
-	UpdatedAt    time.Time
+	UserID        uuid.UUID
+	NavFavorites  []string
+	WelcomeSeenAt *time.Time
+	UpdatedAt     time.Time
 }
 
 type Repository interface {
 	Get(ctx context.Context, userID uuid.UUID) (*Preferences, error)
+	// Upsert stores NavFavorites only; WelcomeSeenAt is left untouched.
 	Upsert(ctx context.Context, p *Preferences) error
+	// MarkWelcomeSeen records the first time only; later calls keep it.
+	MarkWelcomeSeen(ctx context.Context, userID uuid.UUID, at time.Time) error
 }
 
 // NormalizeNavFavorites trims and de-duplicates the shortcuts, keeping order.

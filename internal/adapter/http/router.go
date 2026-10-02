@@ -154,6 +154,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			// Self-service UI preferences of the caller.
 			r.Get("/me/preferences", h.Preference.Get)
 			r.Put("/me/preferences", h.Preference.Update)
+			r.Post("/me/preferences/welcome", h.Preference.MarkWelcomeSeen)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Company.ListBranches)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Post("/branches", h.Company.CreateBranch)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Patch("/branches/{id}", h.Company.UpdateBranch)

@@ -53,8 +53,30 @@ func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, toJSON(p))
 }
 
+// MarkWelcomeSeen ends the caller's first-login welcome; idempotent.
+func (h Handler) MarkWelcomeSeen(w http.ResponseWriter, r *http.Request) {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	if !ok {
+		response.Error(w, shared.NewUnauthorized("unauthenticated"))
+		return
+	}
+	p, err := h.Svc.MarkWelcomeSeen(r.Context(), claims.UserID)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, toJSON(p))
+}
+
 func toJSON(p *domain.Preferences) map[string]any {
-	out := map[string]any{"nav_favorites": p.NavFavorites, "max_nav_favorites": domain.MaxNavFavorites}
+	out := map[string]any{
+		"nav_favorites":     p.NavFavorites,
+		"max_nav_favorites": domain.MaxNavFavorites,
+		"welcome_seen_at":   nil,
+	}
+	if p.WelcomeSeenAt != nil {
+		out["welcome_seen_at"] = p.WelcomeSeenAt.UTC().Format(time.RFC3339Nano)
+	}
 	if !p.UpdatedAt.IsZero() {
 		out["updated_at"] = p.UpdatedAt.UTC().Format(time.RFC3339Nano)
 	}

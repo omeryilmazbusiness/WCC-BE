@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -22,8 +23,49 @@ func (m memRepo) Get(_ context.Context, id uuid.UUID) (*domain.Preferences, erro
 }
 
 func (m memRepo) Upsert(_ context.Context, p *domain.Preferences) error {
-	m[p.UserID] = *p
+	cur := m[p.UserID]
+	cur.UserID, cur.NavFavorites, cur.UpdatedAt = p.UserID, p.NavFavorites, p.UpdatedAt
+	m[p.UserID] = cur
 	return nil
+}
+
+func (m memRepo) MarkWelcomeSeen(_ context.Context, id uuid.UUID, at time.Time) error {
+	cur := m[id]
+	cur.UserID = id
+	if cur.WelcomeSeenAt == nil {
+		cur.WelcomeSeenAt = &at
+	}
+	cur.UpdatedAt = at
+	m[id] = cur
+	return nil
+}
+
+func TestWelcomeSeen(t *testing.T) {
+	ctx := context.Background()
+	user := uuid.New()
+	svc := NewService(memRepo{})
+	first := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	svc.now = func() time.Time { return first }
+
+	p, err := svc.Get(ctx, user)
+	if err != nil || p.WelcomeSeenAt != nil {
+		t.Fatalf("new user must not have seen the welcome: %+v %v", p, err)
+	}
+
+	p, err = svc.MarkWelcomeSeen(ctx, user)
+	if err != nil || p.WelcomeSeenAt == nil || !p.WelcomeSeenAt.Equal(first) {
+		t.Fatalf("mark: %+v %v", p, err)
+	}
+
+	svc.now = func() time.Time { return first.Add(time.Hour) }
+	if p, err = svc.MarkWelcomeSeen(ctx, user); err != nil || !p.WelcomeSeenAt.Equal(first) {
+		t.Fatalf("repeat must keep the first time: %+v %v", p, err)
+	}
+
+	p, err = svc.SetNavFavorites(ctx, user, []string{"/inbox"})
+	if err != nil || p.WelcomeSeenAt == nil || len(p.NavFavorites) != 1 {
+		t.Fatalf("favorites must not reset the welcome: %+v %v", p, err)
+	}
 }
 
 func TestNavFavorites(t *testing.T) {
