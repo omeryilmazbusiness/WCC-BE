@@ -24,6 +24,11 @@ func TestNormalize(t *testing.T) {
 	if q.Origin != "IST" || q.Destination != "DXB" || q.Currency != "USD" {
 		t.Fatalf("normalized: %+v", q)
 	}
+	anyTime := validQuery()
+	anyTime.AnyTime = true
+	if err := anyTime.Normalize(today); err != nil || anyTime.Departure.Hour() != 0 || anyTime.Departure.Minute() != 0 {
+		t.Fatalf("any time keeps only the day: %v %v", err, anyTime.Departure)
+	}
 
 	cases := []struct {
 		field string
@@ -80,7 +85,7 @@ func TestRank(t *testing.T) {
 		{Airline: "D", DepartureAt: at("2026-10-20T14:00:00+03:00"), Price: 1},
 		{Airline: "E", DepartureAt: at("2026-10-10T14:00:00+03:00"), Price: 0},
 	}
-	got := Rank(fares, wanted, 0)
+	got := Rank(fares, wanted, false, 0)
 	if len(got) != 3 {
 		t.Fatalf("dedup, window and free fares dropped: %+v", got)
 	}
@@ -90,8 +95,22 @@ func TestRank(t *testing.T) {
 	if got[1].Airline != "B" || !got[1].Cheapest || got[2].Airline != "A" {
 		t.Fatalf("equal gaps by price, cheapest marked: %+v", got)
 	}
-	if len(Rank(fares, wanted, 1)) != 1 || len(Rank(nil, wanted, 5)) != 0 {
+	if len(Rank(fares, wanted, false, 1)) != 1 || len(Rank(nil, wanted, false, 5)) != 0 {
 		t.Fatal("limit / empty")
+	}
+
+	day := Rank(fares, time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC), true, 0)
+	if len(day) != 3 || day[0].Airline != "B" || day[0].GapMinutes != 0 || !day[0].Closest || !day[0].Cheapest {
+		t.Fatalf("any time: same-day fares by price, gap in whole days: %+v", day)
+	}
+	for _, r := range day {
+		if r.GapMinutes != 0 {
+			t.Fatalf("all on the wanted day: %+v", r)
+		}
+	}
+	late := []Fare{{Airline: "X", DepartureAt: at("2026-10-12T23:30:00+03:00"), Price: 50}, {Airline: "Y", DepartureAt: at("2026-10-14T00:10:00+03:00"), Price: 60}}
+	if got := Rank(late, time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC), true, 0); len(got) != 1 || got[0].GapMinutes != 2*1440 {
+		t.Fatalf("any time window counts whole days: %+v", got)
 	}
 }
 

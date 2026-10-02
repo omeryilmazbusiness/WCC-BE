@@ -86,6 +86,17 @@ func TestSearchHandler(t *testing.T) {
 		t.Fatalf("bad input: %d %+v", code, env.Error)
 	}
 
+	before := len(fares.got)
+	code, env, raw = call(t, h.Search, "/v1/flights/search?origin=IST&destination=DXB&date=2026-12-10&currency=EUR&direct=1")
+	if code != http.StatusOK || len(fares.got) != before {
+		t.Fatalf("any time served from cache (same months): %d %s", code, raw)
+	}
+	q = env.Data["query"].(map[string]any)
+	o = env.Data["offers"].([]any)[0].(map[string]any)
+	if q["any_time"] != true || q["departure"] != "2026-12-10T00:00" || o["gap_minutes"] != float64(0) {
+		t.Fatalf("any time: %v %v", q, o)
+	}
+
 	off := Handler{Svc: appflight.NewService(fares, stubPlaces{}, stubAirlines{}, linker, appflight.Options{})}
 	code, env, _ = call(t, off.Search, "/v1/flights/search?origin=IST&destination=DXB&date=2026-12-10")
 	if code != http.StatusServiceUnavailable || env.Error.Code != "flights_not_configured" ||

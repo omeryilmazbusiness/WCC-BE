@@ -15,8 +15,9 @@ type Ranked struct {
 }
 
 // Rank keeps unique fares within SearchWindow of the wanted time, ordered by
-// closeness and then price, and marks the cheapest and the closest one.
-func Rank(fares []Fare, wanted time.Time, limit int) []Ranked {
+// closeness and then price, and marks the cheapest and the closest one. With
+// anyTime closeness is measured in whole days, so the wanted day comes first.
+func Rank(fares []Fare, wanted time.Time, anyTime bool, limit int) []Ranked {
 	seen := make(map[string]struct{}, len(fares))
 	out := make([]Ranked, 0, len(fares))
 	for _, f := range fares {
@@ -25,6 +26,9 @@ func Rank(fares []Fare, wanted time.Time, limit int) []Ranked {
 		}
 		seen[f.Key()] = struct{}{}
 		gap := f.LocalDeparture().Sub(wanted)
+		if anyTime {
+			gap = dayOf(f.LocalDeparture()).Sub(dayOf(wanted))
+		}
 		if gap < -SearchWindow || gap > SearchWindow || f.Price <= 0 {
 			continue
 		}

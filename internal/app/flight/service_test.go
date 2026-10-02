@@ -56,7 +56,9 @@ func (fakeLinker) BookingURL(f domain.Fare, p domain.Passengers) string {
 	return "https://book/" + f.Airline + "?adults=" + string(rune('0'+p.Adults))
 }
 
-func (fakeLinker) SearchURL(q domain.Query) string { return "https://search/" + q.Origin + q.Destination }
+func (fakeLinker) SearchURL(q domain.Query) string {
+	return "https://search/" + q.Origin + q.Destination
+}
 
 func dep(s string) time.Time {
 	t, err := time.Parse(time.RFC3339, s)

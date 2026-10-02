@@ -41,10 +41,12 @@ func (p Passengers) Total() int { return p.Adults + p.Children + p.Infants }
 
 // Query is a one-way search. Departure is the wanted local wall-clock time at
 // the origin, stored as UTC fields (no zone): fares are compared on the clock.
+// With AnyTime only Departure's day counts and fares are compared by day.
 type Query struct {
 	Origin      string
 	Destination string
 	Departure   time.Time
+	AnyTime     bool
 	Passengers  Passengers
 	Currency    string
 	DirectOnly  bool
@@ -69,6 +71,9 @@ func (q *Query) Normalize(today time.Time) error {
 		fields["destination"] = "must differ from origin"
 	}
 	day := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, time.UTC)
+	if q.AnyTime {
+		q.Departure = dayOf(q.Departure)
+	}
 	switch {
 	case q.Departure.IsZero():
 		fields["departure"] = "required"
@@ -139,6 +144,10 @@ type Fare struct {
 // Key identifies the same ticket returned by overlapping provider queries.
 func (f Fare) Key() string {
 	return f.Airline + f.FlightNumber + f.OriginAirport + f.DestinationAirport + f.DepartureAt.Format(time.RFC3339)
+}
+
+func dayOf(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 // LocalDeparture is the departure on the origin's wall clock, as stored in Query.

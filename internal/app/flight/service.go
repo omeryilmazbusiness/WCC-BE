@@ -101,7 +101,7 @@ func (s *Service) Search(ctx context.Context, q domain.Query) (*Result, error) {
 	if err != nil {
 		return nil, s.withSearchURL(err, q)
 	}
-	ranked := domain.Rank(fares, q.Departure, resultLimit)
+	ranked := domain.Rank(fares, q.Departure, q.AnyTime, resultLimit)
 	offers := make([]Offer, len(ranked))
 	for i, r := range ranked {
 		offers[i] = Offer{Ranked: r, AirlineName: s.airlines.AirlineName(ctx, r.Airline), BookingURL: s.linker.BookingURL(r.Fare, q.Passengers)}
