@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,10 +25,10 @@ const (
 	KindPayment  Kind = "payment"
 	KindCustom   Kind = "custom"
 
-	PriorityLow    Priority = "low"
-	PriorityNormal Priority = "normal"
-	PriorityHigh   Priority = "high"
-	PriorityUrgent Priority = "urgent"
+	// Importance of a task, most to least pressing.
+	PriorityCritical Priority = "critical"
+	PriorityMajor    Priority = "major"
+	PriorityMinor    Priority = "minor"
 
 	// DefaultGrace is how long after due_at before a task is escalated (T-077).
 	DefaultGrace = 24 * time.Hour
@@ -157,8 +158,8 @@ func (t *Task) ShouldEscalate(now time.Time, grace time.Duration) bool {
 
 func (t *Task) Escalate(now time.Time) {
 	t.EscalatedAt = &now
-	if t.Priority != PriorityUrgent {
-		t.Priority = PriorityHigh
+	if t.Priority != PriorityCritical {
+		t.Priority = PriorityMajor
 	}
 	t.UpdatedAt = now
 }
@@ -174,12 +175,65 @@ func ValidKind(k Kind) bool {
 
 func ValidPriority(p Priority) bool {
 	switch p {
-	case PriorityLow, PriorityNormal, PriorityHigh, PriorityUrgent, "":
+	case PriorityCritical, PriorityMajor, PriorityMinor:
 		return true
 	default:
 		return false
 	}
 }
+
+// ParsePriority reads an importance level. Empty means minor, and the retired
+// low/normal/high/urgent values map onto the new scale so older clients keep working.
+func ParsePriority(raw string) (Priority, error) {
+	switch Priority(strings.ToLower(strings.TrimSpace(raw))) {
+	case "", PriorityMinor, "low", "normal":
+		return PriorityMinor, nil
+	case PriorityMajor, "high":
+		return PriorityMajor, nil
+	case PriorityCritical, "urgent":
+		return PriorityCritical, nil
+	default:
+		return "", shared.NewValidation("priority must be critical, major or minor")
+	}
+}
+
+// ValidateRelated accepts a task linked to a record (type and id together) or a
+// standalone one (neither); a half-filled link is rejected.
+func ValidateRelated(relatedType string, relatedID uuid.UUID) error {
+	if (strings.TrimSpace(relatedType) == "") != (relatedID == uuid.Nil) {
+		return shared.NewValidation("related_type and related_id must be set together")
+	}
+	return nil
+}
+
+// MaxTitleLength bounds a task title (runes) so cards and notifications stay readable.
+const MaxTitleLength = 200
+
+// NormalizeTitle trims a title and rejects empty or overlong ones.
+func NormalizeTitle(raw string) (string, error) {
+	title := strings.TrimSpace(raw)
+	if title == "" {
+		return "", shared.NewValidation("title is required")
+	}
+	if len([]rune(title)) > MaxTitleLength {
+		return "", shared.NewValidation("title is too long")
+	}
+	return title, nil
+}
+
+// dueSkew tolerates clock drift between the client that picked a deadline and the server.
+const dueSkew = 5 * time.Minute
+
+// ValidateNewDue rejects a deadline already in the past when a task is created.
+func ValidateNewDue(due *time.Time, now time.Time) error {
+	if due != nil && due.Before(now.Add(-dueSkew)) {
+		return shared.NewValidation("due_at must be in the future")
+	}
+	return nil
+}
+
+// HasRelated reports whether the task points at a record; manual tasks may stand alone.
+func (t *Task) HasRelated() bool { return t.RelatedID != uuid.Nil }
 
 type Repository interface {
 	Create(ctx context.Context, t *Task) error

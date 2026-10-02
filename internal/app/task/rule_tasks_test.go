@@ -27,7 +27,7 @@ func TestRuleTasksAreIdempotentAndCloseByRule(t *testing.T) {
 		}
 	}
 	open, _ := tasks.ListOpenByRule(ctx, domain.RuleUnansweredMessage, apptask.RelatedConversation, conv)
-	if len(open) != 1 || open[0].Priority != domain.PriorityUrgent {
+	if len(open) != 1 || open[0].Priority != domain.PriorityCritical {
 		t.Fatalf("want one urgent unanswered task, got %+v", open)
 	}
 

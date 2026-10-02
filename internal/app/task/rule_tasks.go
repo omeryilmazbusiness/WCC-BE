@@ -27,7 +27,7 @@ func (s *Seeder) EnsureUnansweredTask(ctx context.Context, branchID, conversatio
 	due := now.Add(30 * time.Minute)
 	return s.ensureTask(ctx, domain.Task{
 		ID: uuid.New(), BranchID: branchID, Title: "Reply to unanswered conversation",
-		Kind: domain.KindFollowUp, Priority: domain.PriorityUrgent, Status: domain.StatusOpen,
+		Kind: domain.KindFollowUp, Priority: domain.PriorityCritical, Status: domain.StatusOpen,
 		AssigneeID: assigneeID, RelatedType: RelatedConversation, RelatedID: conversationID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("conv:%s:unanswered:%d", conversationID, since.UTC().Unix()),
 		SourceRule:     domain.RuleUnansweredMessage,
@@ -46,7 +46,7 @@ func (s *Seeder) EnsureVisaFollowUpTask(ctx context.Context, branchID, applicati
 	}
 	return s.ensureTask(ctx, domain.Task{
 		ID: uuid.New(), BranchID: branchID, Title: title,
-		Kind: domain.KindFollowUp, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+		Kind: domain.KindFollowUp, Priority: domain.PriorityMajor, Status: domain.StatusOpen,
 		AssigneeID: assigneeID, RelatedType: RelatedVisaApplication, RelatedID: applicationID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("visa:%s:follow-up", applicationID),
 		SourceRule:     domain.RuleVisaFollowUp,
@@ -64,7 +64,7 @@ func (s *Seeder) EnsureSupplierConfirmTask(ctx context.Context, branchID, linkID
 	}
 	return s.ensureTask(ctx, domain.Task{
 		ID: uuid.New(), BranchID: branchID, Title: title,
-		Kind: domain.KindCustom, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+		Kind: domain.KindCustom, Priority: domain.PriorityMajor, Status: domain.StatusOpen,
 		AssigneeID: assigneeID, RelatedType: RelatedSupplierLink, RelatedID: linkID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("supplier:%s:confirm", linkID),
 		SourceRule:     domain.RuleSupplierConfirm,
@@ -79,7 +79,7 @@ func (s *Seeder) EnsureMissingDocTask(ctx context.Context, branchID, bookingID, 
 	due := now.Add(24 * time.Hour)
 	return s.ensureTask(ctx, domain.Task{
 		ID: uuid.New(), BranchID: branchID, Title: "Collect missing documents: " + strings.Join(missing, ", "),
-		Kind: domain.KindDocument, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+		Kind: domain.KindDocument, Priority: domain.PriorityMajor, Status: domain.StatusOpen,
 		AssigneeID: ownerID, RelatedType: RelatedBooking, RelatedID: bookingID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("booking:%s:missing-docs", bookingID),
 		SourceRule:     domain.RuleMissingDocument,

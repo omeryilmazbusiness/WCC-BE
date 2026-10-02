@@ -93,23 +93,26 @@ func NewService(repo domain.Repository, txm tx.Runner, bus *events.Bus) *Service
 
 func (s *Service) SetConversationReader(r ConversationReader) { s.conv = r }
 
+// Create opens a task by hand. It may link a record (lead, booking, ...) or stand
+// alone; importance defaults to minor and a deadline must not lie in the past.
 func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, error) {
-	title := strings.TrimSpace(in.Title)
-	if title == "" {
-		return nil, shared.NewValidation("title is required")
+	title, err := domain.NormalizeTitle(in.Title)
+	if err != nil {
+		return nil, err
 	}
 	if !domain.ValidKind(in.Kind) {
 		return nil, shared.NewValidation("invalid kind")
 	}
-	if !domain.ValidPriority(in.Priority) {
-		return nil, shared.NewValidation("invalid priority")
-	}
-	if in.RelatedID == uuid.Nil {
-		return nil, shared.NewValidation("assignee_id and related_id are required")
+	prio, err := domain.ParsePriority(string(in.Priority))
+	if err != nil {
+		return nil, err
 	}
 	relatedType := strings.TrimSpace(in.RelatedType)
-	if relatedType == "" {
-		return nil, shared.NewValidation("related_type is required")
+	if err := domain.ValidateRelated(relatedType, in.RelatedID); err != nil {
+		return nil, err
+	}
+	if err := domain.ValidateNewDue(in.DueAt, s.now()); err != nil {
+		return nil, err
 	}
 	scope, err := access.Require(ctx)
 	if err != nil {
@@ -124,13 +127,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, err
 		return nil, err
 	}
 	if assigneeID == uuid.Nil {
-		return nil, shared.NewValidation("assignee_id and related_id are required")
+		return nil, shared.NewValidation("assignee_id is required")
 	}
-	prio := in.Priority
-	if prio == "" {
-		prio = domain.PriorityNormal
-	}
-	now := time.Now().UTC()
+	now := s.now()
 	t := &domain.Task{
 		ID: uuid.New(), BranchID: branchID, Title: title, Kind: in.Kind, Priority: prio,
 		Status: domain.StatusOpen, AssigneeID: assigneeID, RelatedType: relatedType,
@@ -511,11 +510,11 @@ func mapSuggestionKind(k string) domain.Kind {
 func mapSuggestionPriority(p int) domain.Priority {
 	switch {
 	case p <= 1:
-		return domain.PriorityHigh
+		return domain.PriorityMajor
 	case p == 2:
-		return domain.PriorityNormal
+		return domain.PriorityMinor
 	default:
-		return domain.PriorityLow
+		return domain.PriorityMinor
 	}
 }
 
@@ -543,7 +542,7 @@ func (s *Seeder) onLeadCreated(ctx context.Context, ev events.Event) error {
 	due := now.Add(24 * time.Hour)
 	return s.ensureTask(ctx, domain.Task{
 		ID: uuid.New(), BranchID: l.BranchID, Title: "Follow up lead",
-		Kind: domain.KindFollowUp, Priority: domain.PriorityNormal, Status: domain.StatusOpen,
+		Kind: domain.KindFollowUp, Priority: domain.PriorityMinor, Status: domain.StatusOpen,
 		AssigneeID: l.OwnerID, RelatedType: "lead", RelatedID: l.ID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("lead:%s:followup", l.ID), SourceRule: domain.RuleLeadFollowUp,
 		CreatedAt: now, UpdatedAt: now,
@@ -561,14 +560,14 @@ func (s *Seeder) onBookingConfirmed(ctx context.Context, ev events.Event) error 
 	seeds := []domain.Task{
 		{
 			ID: uuid.New(), BranchID: b.BranchID, Title: "Collect documents",
-			Kind: domain.KindDocument, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+			Kind: domain.KindDocument, Priority: domain.PriorityMajor, Status: domain.StatusOpen,
 			AssigneeID: b.OwnerID, RelatedType: "booking", RelatedID: b.ID, DueAt: &dueDoc,
 			IdempotencyKey: fmt.Sprintf("booking:%s:document", b.ID), SourceRule: domain.RuleBookingDocuments,
 			CreatedAt: now, UpdatedAt: now,
 		},
 		{
 			ID: uuid.New(), BranchID: b.BranchID, Title: "Collect payment",
-			Kind: domain.KindPayment, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+			Kind: domain.KindPayment, Priority: domain.PriorityMajor, Status: domain.StatusOpen,
 			AssigneeID: b.OwnerID, RelatedType: "booking", RelatedID: b.ID, DueAt: &duePay,
 			IdempotencyKey: fmt.Sprintf("booking:%s:payment", b.ID), SourceRule: domain.RuleBookingPayment,
 			CreatedAt: now, UpdatedAt: now,
@@ -607,7 +606,7 @@ func (s *Seeder) EnsurePaymentDueTask(ctx context.Context, branchID, bookingID, 
 	title := fmt.Sprintf("Payment due %d %s", amount, currency)
 	return s.ensureTask(ctx, domain.Task{
 		ID: uuid.New(), BranchID: branchID, Title: title,
-		Kind: domain.KindPayment, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+		Kind: domain.KindPayment, Priority: domain.PriorityMajor, Status: domain.StatusOpen,
 		AssigneeID: actorID, RelatedType: "booking", RelatedID: bookingID, DueAt: &dueAt,
 		IdempotencyKey: fmt.Sprintf("booking:%s:payment-due:%s", bookingID, dueAt.UTC().Format("2006-01-02")),
 		SourceRule:     domain.RulePaymentDue,
@@ -622,7 +621,7 @@ func (s *Seeder) EnsureHoldExpiredTask(ctx context.Context, branchID, bookingID,
 	due := now.Add(24 * time.Hour)
 	return s.ensureTask(ctx, domain.Task{
 		ID: uuid.New(), BranchID: branchID, Title: "Option hold expired: follow up with customer",
-		Kind: domain.KindFollowUp, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+		Kind: domain.KindFollowUp, Priority: domain.PriorityMajor, Status: domain.StatusOpen,
 		AssigneeID: ownerID, RelatedType: "booking", RelatedID: bookingID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("booking:%s:hold-expired:%s", bookingID, expiredAt.UTC().Format(time.RFC3339)),
 		SourceRule:     domain.RuleHoldExpired,
@@ -638,7 +637,7 @@ func (s *Seeder) EnsureTargetRecoveryTask(ctx context.Context, branchID, targetI
 	title := fmt.Sprintf("Recover target: %s (deficit %d)", label, deficit)
 	return s.ensureTask(ctx, domain.Task{
 		ID: uuid.New(), BranchID: branchID, Title: title,
-		Kind: domain.KindCustom, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+		Kind: domain.KindCustom, Priority: domain.PriorityMajor, Status: domain.StatusOpen,
 		AssigneeID: assigneeID, RelatedType: "revenue_target", RelatedID: targetID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("target:%s:recovery:%s", targetID, asOf),
 		SourceRule:     domain.RuleTargetRecovery,

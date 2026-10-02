@@ -27,9 +27,11 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-const taskCols = `id, branch_id, title, kind, status, priority, outcome, assignee_id, related_type, related_id,
+const taskCols = `id, branch_id, title, kind, status, priority, outcome, assignee_id,
+	COALESCE(related_type, ''), COALESCE(related_id, '00000000-0000-0000-0000-000000000000'::uuid),
 	due_at, escalated_at, COALESCE(idempotency_key, ''), source_rule, created_by, overdue_notified_at,
-	created_at, updated_at, completed_at`
+	created_at, updated_at, completed_at,
+	COALESCE((SELECT u.full_name FROM users u WHERE u.id = tasks.assignee_id), '')`
 
 func (r *Repository) Create(ctx context.Context, t *domain.Task) error {
 	if err := pgscope.EnsureBranch(ctx, t.BranchID); err != nil {
@@ -37,15 +39,15 @@ func (r *Repository) Create(ctx context.Context, t *domain.Task) error {
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	if t.Priority == "" {
-		t.Priority = domain.PriorityNormal
+		t.Priority = domain.PriorityMinor
 	}
 	_, err := q.Exec(ctx, `
 		INSERT INTO tasks (
 			id, branch_id, title, kind, status, priority, outcome, assignee_id, related_type, related_id,
 			due_at, escalated_at, idempotency_key, source_rule, created_by, created_at, updated_at, completed_at
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
-		t.ID, t.BranchID, t.Title, t.Kind, t.Status, t.Priority, t.Outcome, t.AssigneeID, t.RelatedType, t.RelatedID,
-		t.DueAt, t.EscalatedAt, nullIfEmpty(t.IdempotencyKey), t.SourceRule, t.CreatedBy, t.CreatedAt, t.UpdatedAt, t.CompletedAt,
+		t.ID, t.BranchID, t.Title, t.Kind, t.Status, t.Priority, t.Outcome, t.AssigneeID,
+		nullIfEmpty(t.RelatedType), nullUUID(t.RelatedID), t.DueAt, t.EscalatedAt, nullIfEmpty(t.IdempotencyKey), t.SourceRule, t.CreatedBy, t.CreatedAt, t.UpdatedAt, t.CompletedAt,
 	)
 	return err
 }
@@ -55,6 +57,13 @@ func nullIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+func nullUUID(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
 }
 
 func (r *Repository) Update(ctx context.Context, t *domain.Task) error {
@@ -151,7 +160,7 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Ta
 	}
 	listSQL := fmt.Sprintf(`SELECT %s FROM tasks WHERE %s
 		ORDER BY CASE WHEN escalated_at IS NOT NULL THEN 0 ELSE 1 END,
-			CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END,
+			CASE priority WHEN 'critical' THEN 0 WHEN 'major' THEN 1 ELSE 2 END,
 			due_at NULLS LAST, created_at DESC
 		LIMIT $%d OFFSET $%d`, taskCols, clause, i, i+1)
 	args = append(args, limit, offset)
@@ -268,7 +277,7 @@ func scan(row pgx.Row) (*domain.Task, error) {
 		&t.ID, &t.BranchID, &t.Title, &kind, &status, &priority, &t.Outcome, &t.AssigneeID,
 		&t.RelatedType, &t.RelatedID, &t.DueAt, &t.EscalatedAt, &t.IdempotencyKey,
 		&t.SourceRule, &t.CreatedBy, &t.OverdueNotifiedAt,
-		&t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
+		&t.CreatedAt, &t.UpdatedAt, &t.CompletedAt, &t.AssigneeName,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
@@ -289,7 +298,7 @@ func scanRows(rows pgx.Rows) (*domain.Task, error) {
 		&t.ID, &t.BranchID, &t.Title, &kind, &status, &priority, &t.Outcome, &t.AssigneeID,
 		&t.RelatedType, &t.RelatedID, &t.DueAt, &t.EscalatedAt, &t.IdempotencyKey,
 		&t.SourceRule, &t.CreatedBy, &t.OverdueNotifiedAt,
-		&t.CreatedAt, &t.UpdatedAt, &t.CompletedAt,
+		&t.CreatedAt, &t.UpdatedAt, &t.CompletedAt, &t.AssigneeName,
 	)
 	if err != nil {
 		return nil, err

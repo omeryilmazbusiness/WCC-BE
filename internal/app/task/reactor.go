@@ -69,7 +69,7 @@ func (r *Reactor) onLeadConverted(ctx context.Context, ev events.Event) error {
 		BranchID:       l.BranchID,
 		Title:          "Create booking from won lead",
 		Kind:           domain.KindCustom,
-		Priority:       domain.PriorityHigh,
+		Priority:       domain.PriorityMajor,
 		Status:         domain.StatusOpen,
 		AssigneeID:     l.OwnerID,
 		RelatedType:    "lead",

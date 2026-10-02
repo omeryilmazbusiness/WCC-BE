@@ -13,7 +13,7 @@ import (
 // attentionTask is shared by the three task-backed kinds: it resolves who the
 // task is about and which record the row should open.
 const attentionTask = `
-	SELECT t.id, %[1]s AS kind, %[2]s AS severity, t.title, t.related_type, t.related_id,
+	SELECT t.id, %[1]s AS kind, %[2]s AS severity, t.title, COALESCE(t.related_type, ''), COALESCE(t.related_id, '00000000-0000-0000-0000-000000000000'::uuid),
 		GREATEST(0, EXTRACT(EPOCH FROM (NOW() - %[3]s))/3600)::int AS age_hours,
 		'tasks'::text AS href_hint,
 		COALESCE(tc.full_name, tl.full_name, tr.label, NULLIF(cvc.full_name, ''), NULLIF(cvi.display_name, ''), cvi.phone, '') AS context,

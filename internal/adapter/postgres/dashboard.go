@@ -194,11 +194,11 @@ func (a *DashboardAggregator) MyWorkToday(ctx context.Context, branchID *uuid.UU
 				CASE
 					WHEN t.escalated_at IS NOT NULL THEN 0
 					WHEN t.due_at IS NOT NULL AND t.due_at < NOW() THEN 1
-					WHEN t.priority='urgent' THEN 2
-					WHEN t.priority='high' THEN 3
+					WHEN t.priority='critical' THEN 2
+					WHEN t.priority='major' THEN 3
 					ELSE 4
 				END,
-				t.due_at, t.related_type, t.related_id,
+				t.due_at, COALESCE(t.related_type, ''), COALESCE(t.related_id, '00000000-0000-0000-0000-000000000000'::uuid),
 				(t.due_at IS NOT NULL AND t.due_at < NOW()),
 				(t.escalated_at IS NOT NULL)
 			FROM tasks t

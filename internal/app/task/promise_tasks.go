@@ -19,7 +19,7 @@ func (s *Seeder) EnsurePromiseFollowUp(ctx context.Context, p *paymentdomain.Pro
 	return s.ensureTaskID(ctx, domain.Task{
 		ID: uuid.New(), BranchID: p.BranchID,
 		Title: fmt.Sprintf("Payment promised %d %s", p.Amount, p.Currency),
-		Kind:  domain.KindPayment, Priority: domain.PriorityNormal, Status: domain.StatusOpen,
+		Kind:  domain.KindPayment, Priority: domain.PriorityMinor, Status: domain.StatusOpen,
 		AssigneeID: assigneeID, RelatedType: "booking", RelatedID: p.BookingID, DueAt: &dueAt,
 		IdempotencyKey: "payment-promise:" + p.ID.String() + ":follow-up",
 		SourceRule:     domain.RulePaymentPromise,
@@ -34,7 +34,7 @@ func (s *Seeder) EnsurePromiseBroken(ctx context.Context, p *paymentdomain.Promi
 	_, err := s.ensureTaskID(ctx, domain.Task{
 		ID: uuid.New(), BranchID: p.BranchID,
 		Title: fmt.Sprintf("Broken payment promise %d %s (%s)", p.Amount, p.Currency, p.PromisedOn.Format(time.DateOnly)),
-		Kind:  domain.KindPayment, Priority: domain.PriorityHigh, Status: domain.StatusOpen,
+		Kind:  domain.KindPayment, Priority: domain.PriorityMajor, Status: domain.StatusOpen,
 		AssigneeID: assigneeID, RelatedType: "booking", RelatedID: p.BookingID, DueAt: &due,
 		IdempotencyKey: "payment-promise:" + p.ID.String() + ":broken",
 		SourceRule:     domain.RulePaymentPromiseBroken,
