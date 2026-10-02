@@ -11,6 +11,7 @@ import (
 	pgcompany "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/company"
 	pgsetup "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/setup"
 	appai "github.com/wodi-crm/wodi-crm-be/internal/app/ai"
+	appbranding "github.com/wodi-crm/wodi-crm-be/internal/app/branding"
 	appcompany "github.com/wodi-crm/wodi-crm-be/internal/app/company"
 	appinbox "github.com/wodi-crm/wodi-crm-be/internal/app/inbox"
 	appsetup "github.com/wodi-crm/wodi-crm-be/internal/app/setup"
@@ -29,6 +30,7 @@ type tenancyModule struct {
 	companies  *appcompany.Service
 	workspaces *appcompany.WorkspaceCache
 	setup      *appsetup.Service
+	branding   *appbranding.Service
 }
 
 func newTenancyModule(pool *pgxpool.Pool, users *appuser.Service, ai *appai.Service, inbox *appinbox.Service, txm tx.Runner, auditRec audit.Recorder) tenancyModule {
@@ -38,6 +40,7 @@ func newTenancyModule(pool *pgxpool.Pool, users *appuser.Service, ai *appai.Serv
 	return tenancyModule{
 		companies:  appcompany.NewService(repo, gmCreator{users: users}, txm, auditRec, cache),
 		workspaces: cache,
+		branding:   appbranding.NewService(repo, auditRec),
 		setup: appsetup.NewService(appsetup.Deps{
 			Repo: setupRepo, Companies: repo, Staff: setupRepo,
 			AI: setupAIBridge{svc: ai}, Channels: setupChannelBridge{svc: inbox},

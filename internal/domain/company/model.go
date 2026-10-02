@@ -45,6 +45,10 @@ var reservedSlugs = map[string]struct{}{
 	"en": {}, "ar": {}, "www": {}, "help": {}, "support": {}, "status": {},
 }
 
+// reservedBranchSlugs would shadow company pages in /{locale}/{company}/{segment}
+// URLs, such as the company sign-in page.
+var reservedBranchSlugs = map[string]struct{}{"login": {}}
+
 var latinFold = strings.NewReplacer(
 	"ç", "c", "ğ", "g", "ı", "i", "\u0307", "", "ö", "o", "ş", "s", "ü", "u",
 	"à", "a", "á", "a", "â", "a", "ä", "a", "ã", "a", "å", "a", "è", "e", "é", "e", "ê", "e", "ë", "e",
@@ -302,6 +306,8 @@ func (b *Branch) Normalize() error {
 	}
 	if !validSlug(b.Slug) {
 		fields["slug"] = "2-48 lowercase letters, digits or dashes"
+	} else if _, reserved := reservedBranchSlugs[b.Slug]; reserved {
+		fields["slug"] = "reserved word"
 	}
 	if !codePattern.MatchString(b.Code) {
 		fields["code"] = "2-16 letters, digits, dash or underscore"
@@ -353,6 +359,8 @@ type Summary struct {
 	BranchCount int
 	UserCount   int
 	GMEmail     string
+	// LogoUpdatedAt is nil when the company has no logo.
+	LogoUpdatedAt *time.Time
 }
 
 // Repository persists companies and branches (DIP).

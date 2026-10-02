@@ -12,6 +12,7 @@ import (
 
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/authsec"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -28,8 +29,11 @@ const (
 )
 
 type LoginInput struct {
-	Email     string
-	Password  string
+	Email    string
+	Password string
+	// Company is the slug of the company sign-in page used; empty for the
+	// generic page. A user of another company gets invalid credentials.
+	Company   string
 	IP        string
 	UserAgent string
 }
@@ -103,7 +107,10 @@ type Deps struct {
 	SessionCache SessionInvalidator
 	Cipher       crypto.Cipher
 	Limiter      ratelimit.Window
-	Options      Options
+	// Companies resolves a user's company for company sign-in pages; nil
+	// disables the check.
+	Companies company.Directory
+	Options   Options
 }
 
 type Service struct {
@@ -120,6 +127,7 @@ type Service struct {
 	cipher     crypto.Cipher
 	limiter    ratelimit.Window
 	opts       Options
+	companies  company.Directory
 	now        func() time.Time
 }
 
@@ -151,7 +159,7 @@ func NewService(d Deps) *Service {
 		users: d.Users, audit: d.Audit, tokens: d.Tokens, tx: d.Tx,
 		lockouts: d.Lockouts, mfa: d.MFA, challenges: d.Challenges, refresh: d.Refresh,
 		sessions: d.Sessions, cache: d.SessionCache,
-		cipher: d.Cipher, limiter: d.Limiter, opts: d.Options,
+		cipher: d.Cipher, limiter: d.Limiter, opts: d.Options, companies: d.Companies,
 		now: func() time.Time { return time.Now().UTC() },
 	}
 }
@@ -199,6 +207,12 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error
 	if !user.IsActive {
 		return nil, shared.NewForbidden("user is inactive")
 	}
+	if !s.belongsTo(ctx, user, in.Company) {
+		// The password was right, so this is not a guessing failure and does not
+		// count towards lockout; the answer still reveals nothing.
+		s.record(ctx, user.ID, user, "auth.login_wrong_company", meta, map[string]any{"company": in.Company})
+		return nil, errInvalidCredentials
+	}
 
 	switch {
 	case st.MFAEnabled && st.MFASecretEnc != "":
@@ -228,6 +242,20 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error
 		return nil, err
 	}
 	return &LoginResult{Tokens: pair, User: publicUser(user, st)}, nil
+}
+
+// belongsTo reports whether user may sign in on the given company page; the
+// generic page (empty slug) admits everyone.
+func (s *Service) belongsTo(ctx context.Context, user *identity.User, companySlug string) bool {
+	slug := strings.ToLower(strings.TrimSpace(companySlug))
+	if slug == "" || s.companies == nil {
+		return true
+	}
+	if user.BranchID == uuid.Nil {
+		return false
+	}
+	got, err := s.companies.CompanySlugOfBranch(ctx, user.BranchID)
+	return err == nil && got == slug
 }
 
 func (s *Service) VerifyMFA(ctx context.Context, in MFAVerifyInput) (*LoginResult, error) {

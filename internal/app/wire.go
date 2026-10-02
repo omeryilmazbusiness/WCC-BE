@@ -19,6 +19,7 @@ import (
 	audithttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/audithttp"
 	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
+	brandinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/branding"
 	companyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/company"
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
@@ -130,6 +131,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Import:       importhttp.Handler{Svc: m.imports},
 		Notification: notificationhttp.Handler{Svc: m.notify},
 		Preference:   preferencehttp.Handler{Svc: m.preferences},
+		Branding:     brandinghttp.Handler{Svc: m.tenancy.branding},
 		Report:       reporthttp.Handler{Svc: m.reports, Schedules: m.schedules},
 		AI:           aihttp.Handler{Svc: m.ai},
 		FileSync:     filesynchttp.Handler{Svc: m.fileSync},

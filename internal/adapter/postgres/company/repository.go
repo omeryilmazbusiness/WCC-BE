@@ -144,6 +144,7 @@ func (r *Repository) ListCompanies(ctx context.Context, query string, limit, off
 		       (SELECT count(*) FROM users u JOIN branches b ON b.id = u.branch_id WHERE b.company_id = c.id),
 		       COALESCE((SELECT u.email FROM users u JOIN branches b ON b.id = u.branch_id
 		                 WHERE b.company_id = c.id AND u.role = 'gm' ORDER BY u.created_at LIMIT 1), ''),
+		       (SELECT l.updated_at FROM company_logos l WHERE l.company_id = c.id),
 		       count(*) OVER ()
 		FROM companies c
 		WHERE lower(c.name_en) LIKE $1 OR c.slug LIKE $1
@@ -159,7 +160,7 @@ func (r *Repository) ListCompanies(ctx context.Context, query string, limit, off
 		c := &s.Company
 		if err := rows.Scan(&c.ID, &c.Slug, &c.NameEN, &c.NameAR, &c.LegalName, &c.Phone, &c.Email, &c.Website,
 			&c.Country, &c.City, &c.Address, &c.Currency, &c.Timezone, &c.IsActive, &c.CreatedAt, &c.UpdatedAt,
-			&s.BranchCount, &s.UserCount, &s.GMEmail, &page.Total); err != nil {
+			&s.BranchCount, &s.UserCount, &s.GMEmail, &s.LogoUpdatedAt, &page.Total); err != nil {
 			return domain.Page{}, err
 		}
 		page.Items = append(page.Items, s)

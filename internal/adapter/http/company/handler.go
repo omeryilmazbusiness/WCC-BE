@@ -231,6 +231,10 @@ func (h Handler) ListCompanies(w http.ResponseWriter, r *http.Request) {
 		item["branch_count"] = res.Items[i].BranchCount
 		item["user_count"] = res.Items[i].UserCount
 		item["gm_email"] = res.Items[i].GMEmail
+		item["has_logo"], item["logo_version"] = false, nil
+		if at := res.Items[i].LogoUpdatedAt; at != nil {
+			item["has_logo"], item["logo_version"] = true, domain.LogoVersion(*at)
+		}
 		out = append(out, item)
 	}
 	meta := shared.NewPageMeta(int64(res.Total), page)

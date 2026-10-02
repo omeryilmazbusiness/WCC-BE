@@ -23,6 +23,7 @@ import (
 	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgautomation "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/automation"
 	pgbooking "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/booking"
+	pgcompany "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/company"
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
 	pgdocument "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/document"
 	pgextint "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/extint"
@@ -214,7 +215,7 @@ func (m *modules) build() error {
 	if err != nil {
 		return fmt.Errorf("access tokens: %w", err)
 	}
-	m.auth = newAuthService(cfg, identityRepo, securityRepo, m.audit, m.tokens, txm, m.keyring, m.limiter, m.sessionCheck)
+	m.auth = newAuthService(cfg, identityRepo, securityRepo, pgcompany.NewRepository(pool), m.audit, m.tokens, txm, m.keyring, m.limiter, m.sessionCheck)
 	m.users = appuser.NewService(identityRepo, m.audit, txm, m.sessionCheck)
 	m.retention = retention.NewService(securityRepo, pgwebhook.NewRepository(pool), m.audit, retention.DefaultPolicy)
 

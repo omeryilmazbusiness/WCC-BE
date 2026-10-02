@@ -25,14 +25,15 @@ import (
 var permissionExempt = []string{
 	"/v1/auth/",     // login, refresh, MFA and self-service endpoints
 	"/v1/webhooks/", // authenticated by provider signature instead
+	"/v1/public/",   // pre sign-in company branding (no tenant data)
 }
 
 // Exact routes open to every authenticated caller, by design.
 var authOnly = map[string]bool{
-	"GET /v1/fx/live":        true, // public market rates
-	"GET /v1/stream":         true, // user-scoped realtime signals, filtered by scope
-	"GET /v1/me/preferences": true, // the caller's own UI preferences
-	"PUT /v1/me/preferences": true,
+	"GET /v1/fx/live":                 true, // public market rates
+	"GET /v1/stream":                  true, // user-scoped realtime signals, filtered by scope
+	"GET /v1/me/preferences":          true, // the caller's own UI preferences
+	"PUT /v1/me/preferences":          true,
 	"POST /v1/me/preferences/welcome": true,
 }
 
@@ -119,6 +120,7 @@ func TestEveryBusinessRouteRequiresPermission(t *testing.T) {
 		"POST /v1/tasks/escalate-overdue": false,
 		"POST /v1/branches":               false, "PATCH /v1/branches/{id}": false,
 		"GET /v1/platform/companies/": false, "POST /v1/platform/companies/": false,
+		"PUT /v1/platform/companies/{id}/logo": false, "DELETE /v1/platform/companies/{id}/logo": false,
 	}
 
 	routes, ok := router.(chi.Routes)

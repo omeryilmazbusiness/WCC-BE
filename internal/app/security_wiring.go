@@ -17,6 +17,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/authsec"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	domaininbox "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/crypto"
@@ -51,6 +52,7 @@ func newAuthService(
 	cfg config.Config,
 	identityRepo *pgidentity.Repository,
 	sec *pgidentity.SecurityRepository,
+	companies company.Directory,
 	auditor audit.Recorder,
 	tokens appauth.AccessTokenIssuer,
 	txm tx.Runner,
@@ -65,7 +67,7 @@ func newAuthService(
 	return appauth.NewService(appauth.Deps{
 		Users: identityRepo, Audit: auditor, Tokens: tokens, Tx: txm,
 		Lockouts: sec, MFA: sec, Challenges: sec, Refresh: sec, Sessions: sec, SessionCache: sessionCache,
-		Cipher: cipher, Limiter: limiter,
+		Cipher: cipher, Limiter: limiter, Companies: companies,
 		Options: appauth.Options{
 			Lockout: authsec.LockoutPolicy{
 				MaxAttempts: cfg.Auth.LoginMaxAttempts,

@@ -13,6 +13,7 @@ import (
 	audithttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/audithttp"
 	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
+	brandinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/branding"
 	companyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/company"
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
@@ -68,6 +69,7 @@ type Handlers struct {
 	Import       importhttp.Handler
 	Notification notificationhttp.Handler
 	Preference   preferencehttp.Handler
+	Branding     brandinghttp.Handler
 	Report       reporthttp.Handler
 	AI           aihttp.Handler
 	FileSync     filesynchttp.Handler
@@ -145,6 +147,12 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			})
 		})
 
+		// A company's sign-in page identity, read before anyone is signed in.
+		r.Route("/public/companies/{slug}", func(r chi.Router) {
+			r.Get("/", h.Branding.Public)
+			r.Get("/logo", h.Branding.PublicLogo)
+		})
+
 		r.Group(func(r chi.Router) {
 			r.Use(authenticate)
 
@@ -162,6 +170,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.Use(middleware.RequirePermission(platformauth.PermCompaniesManage))
 				r.Get("/", h.Company.ListCompanies)
 				r.Post("/", h.Company.Register)
+				r.Put("/{id}/logo", h.Branding.PlatformUploadLogo)
+				r.Delete("/{id}/logo", h.Branding.PlatformDeleteLogo)
 			})
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/teams", h.Users.ListTeams)
 			r.With(middleware.RequirePermission(platformauth.PermRolesRead)).Get("/permissions", h.Users.PermissionsMatrix)
@@ -170,6 +180,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.Use(middleware.RequirePermission(platformauth.PermSetupManage))
 				r.Get("/", h.Setup.Get)
 				r.Put("/company", h.Setup.SaveCompany)
+				r.Put("/company/logo", h.Branding.UploadLogo)
+				r.Delete("/company/logo", h.Branding.DeleteLogo)
 				r.Post("/steps/{step}", h.Setup.AdvanceStep)
 				r.Post("/complete", h.Setup.Complete)
 				r.Post("/dismiss", h.Setup.Dismiss)
