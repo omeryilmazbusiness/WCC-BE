@@ -33,6 +33,7 @@ import (
 	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
+	preferencehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/preference"
 	privacyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/privacy"
 	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
@@ -128,6 +129,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Inbox:        inboxhttp.Handler{Svc: m.inbox},
 		Import:       importhttp.Handler{Svc: m.imports},
 		Notification: notificationhttp.Handler{Svc: m.notify},
+		Preference:   preferencehttp.Handler{Svc: m.preferences},
 		Report:       reporthttp.Handler{Svc: m.reports, Schedules: m.schedules},
 		AI:           aihttp.Handler{Svc: m.ai},
 		FileSync:     filesynchttp.Handler{Svc: m.fileSync},

@@ -28,6 +28,7 @@ import (
 	notificationhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/notification"
 	opshttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ops"
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
+	preferencehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/preference"
 	privacyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/privacy"
 	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
@@ -66,6 +67,7 @@ type Handlers struct {
 	Inbox        inboxhttp.Handler
 	Import       importhttp.Handler
 	Notification notificationhttp.Handler
+	Preference   preferencehttp.Handler
 	Report       reporthttp.Handler
 	AI           aihttp.Handler
 	FileSync     filesynchttp.Handler
@@ -149,6 +151,9 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			// Every signed-in user gets their own notifications; the hub
 			// filters branch signals by the caller's scope.
 			r.Get("/stream", h.Stream.Stream)
+			// Self-service UI preferences of the caller.
+			r.Get("/me/preferences", h.Preference.Get)
+			r.Put("/me/preferences", h.Preference.Update)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Company.ListBranches)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Post("/branches", h.Company.CreateBranch)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Patch("/branches/{id}", h.Company.UpdateBranch)

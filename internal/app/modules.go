@@ -35,6 +35,7 @@ import (
 	pgoutbox "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/outbox"
 	pgpayment "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/payment"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgpii"
+	pgpreference "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/preference"
 	pgrealtime "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/realtime"
 	pgreport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/report"
 	pgrevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/revenuetarget"
@@ -67,6 +68,7 @@ import (
 	appnotification "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
 	appoutbox "github.com/wodi-crm/wodi-crm-be/internal/app/outbox"
 	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
+	apppreference "github.com/wodi-crm/wodi-crm-be/internal/app/preference"
 	appprivacy "github.com/wodi-crm/wodi-crm-be/internal/app/privacy"
 	appreport "github.com/wodi-crm/wodi-crm-be/internal/app/report"
 	"github.com/wodi-crm/wodi-crm-be/internal/app/retention"
@@ -127,6 +129,7 @@ type modules struct {
 	visas        *appvisa.Service
 	suppliers    *appsupplier.Service
 	notify       *appnotification.Service
+	preferences  *apppreference.Service
 	reports      *appreport.Service
 	schedules    *appreport.Scheduler
 	ai           *appai.Service
@@ -227,6 +230,7 @@ func (m *modules) build() error {
 	m.leads.SetPackageChecker(leadPackageBridge{repo: pkgRepo})
 
 	m.notify = appnotification.NewService(pgnotification.NewRepository(pool), txm, log)
+	m.preferences = apppreference.NewService(pgpreference.NewRepository(pool))
 	m.notify.SetUserDirectory(directory)
 	m.notify.SetExternal(appnotification.LogExternal{Log: log})
 

@@ -29,8 +29,10 @@ var permissionExempt = []string{
 
 // Exact routes open to every authenticated caller, by design.
 var authOnly = map[string]bool{
-	"GET /v1/fx/live": true, // public market rates
-	"GET /v1/stream":  true, // user-scoped realtime signals, filtered by scope
+	"GET /v1/fx/live":        true, // public market rates
+	"GET /v1/stream":         true, // user-scoped realtime signals, filtered by scope
+	"GET /v1/me/preferences": true, // the caller's own UI preferences
+	"PUT /v1/me/preferences": true,
 }
 
 func exempt(pattern string) bool {
