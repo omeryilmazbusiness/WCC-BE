@@ -51,7 +51,7 @@ func call(t *testing.T, h http.HandlerFunc, target string) (int, envelope, []byt
 
 func TestSearchHandler(t *testing.T) {
 	fares := &stubFares{}
-	linker := domain.AviasalesLinker{BaseURL: "https://www.aviasales.com", Marker: "578591"}
+	linker := domain.AviasalesLinker{BaseURL: "https://www.aviasales.com", Marker: "784605"}
 	h := Handler{Svc: appflight.NewService(fares, stubPlaces{}, stubAirlines{}, linker, appflight.Options{Enabled: true})}
 
 	code, env, raw := call(t, h.Search, "/v1/flights/search?origin=ist&destination=dxb&date=2026-12-10&time=14:00&adults=2&children=1&currency=eur&direct=1")
@@ -71,10 +71,10 @@ func TestSearchHandler(t *testing.T) {
 		o["gap_minutes"] != float64(-55) || o["airline_name"] != "Pegasus" || o["price"] != 182.5 || o["closest"] != true {
 		t.Fatalf("offer: %v", o)
 	}
-	if o["booking_url"] != "https://www.aviasales.com/search/IST1012DXB21?marker=578591&t=x" {
+	if o["booking_url"] != "https://www.aviasales.com/search/IST1012DXB21?marker=784605&t=x" {
 		t.Fatalf("booking link with travellers and marker: %v", o["booking_url"])
 	}
-	if env.Data["search_url"] != "https://www.aviasales.com/search/IST1012DXB21?marker=578591" {
+	if env.Data["search_url"] != "https://www.aviasales.com/search/IST1012DXB21?marker=784605" {
 		t.Fatalf("provider search link: %v", env.Data["search_url"])
 	}
 	if env.Data["window_hours"] != float64(72) {
@@ -89,7 +89,7 @@ func TestSearchHandler(t *testing.T) {
 	off := Handler{Svc: appflight.NewService(fares, stubPlaces{}, stubAirlines{}, linker, appflight.Options{})}
 	code, env, _ = call(t, off.Search, "/v1/flights/search?origin=IST&destination=DXB&date=2026-12-10")
 	if code != http.StatusServiceUnavailable || env.Error.Code != "flights_not_configured" ||
-		env.Error.Details["search_url"] != "https://www.aviasales.com/search/IST1012DXB1?marker=578591" {
+		env.Error.Details["search_url"] != "https://www.aviasales.com/search/IST1012DXB1?marker=784605" {
 		t.Fatalf("not configured still links to the provider search: %d %+v", code, env.Error)
 	}
 }

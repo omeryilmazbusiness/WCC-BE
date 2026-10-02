@@ -763,7 +763,7 @@ places 6 h. The booking URL is the fare's Aviasales link with the traveller code
   currency in USD/EUR/SAR/AED/TRY/GBP/QAR/KWD/JOD/EGP); `503 flights_not_configured` (no or rejected token);
   `503 flights_unavailable` + `Retry-After` when every upstream call failed.
 
-**Config** — `TRAVELPAYOUTS_TOKEN` (secret; empty disables search), `TRAVELPAYOUTS_MARKER` (`578591`),
+**Config** — `TRAVELPAYOUTS_TOKEN` (secret; empty disables search), `TRAVELPAYOUTS_MARKER` (`784605`),
 `TRAVELPAYOUTS_MARKET`, `TRAVELPAYOUTS_TIMEOUT` (`10s`), `TRAVELPAYOUTS_API_URL` (`https://api.travelpayouts.com`),
 `TRAVELPAYOUTS_AUTOCOMPLETE_URL` (`https://autocomplete.travelpayouts.com`), `AVIASALES_URL` (`https://www.aviasales.com`).
 

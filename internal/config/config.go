@@ -271,7 +271,7 @@ func Load() (Config, error) {
 		},
 		Flights: FlightsConfig{
 			TravelpayoutsToken:  strings.TrimSpace(os.Getenv("TRAVELPAYOUTS_TOKEN")),
-			TravelpayoutsMarker: strings.TrimSpace(getEnv("TRAVELPAYOUTS_MARKER", "578591")),
+			TravelpayoutsMarker: strings.TrimSpace(getEnv("TRAVELPAYOUTS_MARKER", "784605")),
 			APIURL:              strings.TrimSpace(getEnv("TRAVELPAYOUTS_API_URL", "https://api.travelpayouts.com")),
 			AutocompleteURL:     strings.TrimSpace(getEnv("TRAVELPAYOUTS_AUTOCOMPLETE_URL", "https://autocomplete.travelpayouts.com")),
 			AviasalesURL:        strings.TrimSpace(getEnv("AVIASALES_URL", "https://www.aviasales.com")),

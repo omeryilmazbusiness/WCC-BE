@@ -96,17 +96,17 @@ func TestRank(t *testing.T) {
 }
 
 func TestAviasalesLinker(t *testing.T) {
-	l := AviasalesLinker{BaseURL: "https://www.aviasales.com/", Marker: "578591"}
+	l := AviasalesLinker{BaseURL: "https://www.aviasales.com/", Marker: "784605"}
 	f := Fare{Origin: "IST", Destination: "DXB", DepartureAt: at("2026-11-01T09:00:00+03:00"), Link: "/search/IST1012DXB1?t=x"}
 	cases := []struct {
 		p    Passengers
 		link string
 		want string
 	}{
-		{Passengers{Adults: 2, Children: 1}, f.Link, "https://www.aviasales.com/search/IST1012DXB21?marker=578591&t=x"},
-		{Passengers{Adults: 1, Infants: 1}, f.Link, "https://www.aviasales.com/search/IST1012DXB101?marker=578591&t=x"},
-		{Passengers{Adults: 1}, "/search/IST1012DXB21512?t=y", "https://www.aviasales.com/search/IST1012DXB11512?marker=578591&t=y"},
-		{Passengers{Adults: 3}, "", "https://www.aviasales.com/search/IST0111DXB3?marker=578591"},
+		{Passengers{Adults: 2, Children: 1}, f.Link, "https://www.aviasales.com/search/IST1012DXB21?marker=784605&t=x"},
+		{Passengers{Adults: 1, Infants: 1}, f.Link, "https://www.aviasales.com/search/IST1012DXB101?marker=784605&t=x"},
+		{Passengers{Adults: 1}, "/search/IST1012DXB21512?t=y", "https://www.aviasales.com/search/IST1012DXB11512?marker=784605&t=y"},
+		{Passengers{Adults: 3}, "", "https://www.aviasales.com/search/IST0111DXB3?marker=784605"},
 	}
 	for _, c := range cases {
 		f.Link = c.link
@@ -116,7 +116,7 @@ func TestAviasalesLinker(t *testing.T) {
 	}
 
 	q := Query{Origin: "IST", Destination: "DAM", Departure: time.Date(2026, 10, 5, 14, 0, 0, 0, time.UTC), Passengers: Passengers{Adults: 2, Infants: 1}}
-	if got := l.SearchURL(q); got != "https://www.aviasales.com/search/IST0510DAM201?marker=578591" {
+	if got := l.SearchURL(q); got != "https://www.aviasales.com/search/IST0510DAM201?marker=784605" {
 		t.Fatalf("search url: %s", got)
 	}
 	if (AviasalesLinker{}).SearchURL(q) != "" {
