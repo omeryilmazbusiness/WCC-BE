@@ -121,6 +121,7 @@ func TestEveryBusinessRouteRequiresPermission(t *testing.T) {
 		"POST /v1/branches":               false, "PATCH /v1/branches/{id}": false,
 		"GET /v1/platform/companies/": false, "POST /v1/platform/companies/": false,
 		"PUT /v1/platform/companies/{id}/logo": false, "DELETE /v1/platform/companies/{id}/logo": false,
+		"GET /v1/flights/places": false, "GET /v1/flights/search": false,
 	}
 
 	routes, ok := router.(chi.Routes)

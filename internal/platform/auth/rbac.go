@@ -65,6 +65,8 @@ const (
 	PermBranchesManage Permission = "branches.manage"
 	// PermCompaniesManage registers tenant companies (platform operators only).
 	PermCompaniesManage Permission = "companies.manage"
+	// PermFlightsSearch looks up flight fares for customers.
+	PermFlightsSearch Permission = "flights.search"
 )
 
 const (
@@ -112,6 +114,7 @@ func PermissionsFor(role Role) []Permission {
 			PermFXManage,
 			PermBookingsOverride, PermBookingsDiscount,
 			PermSetupManage, PermBranchesManage,
+			PermFlightsSearch,
 		}
 	case RoleAdmin:
 		return []Permission{
@@ -136,6 +139,7 @@ func PermissionsFor(role Role) []Permission {
 			PermFileSyncRead, PermFileSyncWrite,
 			PermSettingsRead, PermSettingsWrite,
 			PermBookingsOverride, PermBookingsDiscount,
+			PermFlightsSearch,
 		}
 	case RoleEmployee:
 		return []Permission{
@@ -147,6 +151,7 @@ func PermissionsFor(role Role) []Permission {
 			PermReportsRead,
 			PermAIRead, PermAIWrite,
 			PermFileSyncRead,
+			PermFlightsSearch,
 		}
 	case RoleFinance:
 		return []Permission{
@@ -172,6 +177,7 @@ func PermissionsFor(role Role) []Permission {
 			PermAIRead, PermAIWrite,
 			PermFileSyncRead, PermFileSyncWrite,
 			PermSettingsRead,
+			PermFlightsSearch,
 		}
 	default:
 		return nil

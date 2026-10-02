@@ -738,6 +738,35 @@ manual rate.
 (`https://open.er-api.com/v6`), `LIRASCOPE_API_KEY` / `LIRASCOPE_API_SECRET` (optional secrets),
 `FX_ACCOUNTING_SOURCE` (`off`). Migration `00028_fx_live_snapshots.sql`.
 
+### Flight search (Travelpayouts)
+
+Agents look up indicative fares closest to a customer's wanted departure and hand off to Aviasales for booking.
+`internal/domain/flight` holds the pure rules (validation, ranking, booking link) and ports; `internal/adapter/travelpayouts`
+implements them; `internal/app/flight` orchestrates (parallel month queries, caches).
+
+**Sources** — fares: `GET {TRAVELPAYOUTS_API_URL}/aviasales/v3/prices_for_dates` (token in `X-Access-Token`, never in
+the URL). Prices are cached from recent Aviasales searches, so they are indicative, not live. Places:
+`{TRAVELPAYOUTS_AUTOCOMPLETE_URL}/places2` (no token). Airline names: `{TRAVELPAYOUTS_API_URL}/data/en/airlines.json`
+(loaded lazily, 24 h).
+
+**Search** — the wanted time is the origin's local wall clock. Every month within ±72 h is queried (direct, plus
+with-stops unless `direct=true`); fares outside the window are dropped, the rest sorted by `|gap|` then price (max 30),
+the first marked `closest` and the lowest `cheapest`. Partial upstream failures are tolerated. Caches: fares 10 min,
+places 6 h. The booking URL is the fare's Aviasales link with the traveller code (adults, children, infants) and
+`marker=TRAVELPAYOUTS_MARKER`.
+
+**API** (`flights.search`: GM, manager, employee, operations)
+- `GET /v1/flights/places?term=ist&locale=en|ar` → `{"data":[{"code","type":"city|airport","name","city_code","city_name","country_code","country_name"}]}` (≤ 8; terms < 2 chars → `[]`).
+- `GET /v1/flights/search?origin=IST&destination=DXB&date=YYYY-MM-DD&time=HH:MM&adults=1&children=0&infants=0&currency=USD&direct=false`
+  → `{"data":{"query":{...},"window_hours":72,"fetched_at","offers":[{"origin","destination","origin_airport","destination_airport","airline","airline_name","flight_number","departure_at","local_departure","duration_minutes","transfers","price","currency","gap_minutes","closest","cheapest","booking_url"}]}}`.
+  `400 validation_error` (IATA codes differ, departure today … +1 year, adults ≥ 1, infants ≤ adults, ≤ 9 travellers,
+  currency in USD/EUR/SAR/AED/TRY/GBP/QAR/KWD/JOD/EGP); `503 flights_not_configured` (no or rejected token);
+  `503 flights_unavailable` + `Retry-After` when every upstream call failed.
+
+**Config** — `TRAVELPAYOUTS_TOKEN` (secret; empty disables search), `TRAVELPAYOUTS_MARKER` (`578591`),
+`TRAVELPAYOUTS_MARKET`, `TRAVELPAYOUTS_TIMEOUT` (`10s`), `TRAVELPAYOUTS_API_URL` (`https://api.travelpayouts.com`),
+`TRAVELPAYOUTS_AUTOCOMPLETE_URL` (`https://autocomplete.travelpayouts.com`), `AVIASALES_URL` (`https://www.aviasales.com`).
+
 ## Epic 21 — Booking lifecycle
 
 | Task | Status |

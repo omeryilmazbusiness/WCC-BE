@@ -63,6 +63,7 @@ import (
 	appdocument "github.com/wodi-crm/wodi-crm-be/internal/app/document"
 	appextint "github.com/wodi-crm/wodi-crm-be/internal/app/extint"
 	appfilesync "github.com/wodi-crm/wodi-crm-be/internal/app/filesync"
+	appflight "github.com/wodi-crm/wodi-crm-be/internal/app/flight"
 	appimportexport "github.com/wodi-crm/wodi-crm-be/internal/app/importexport"
 	appinbox "github.com/wodi-crm/wodi-crm-be/internal/app/inbox"
 	applead "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
@@ -141,6 +142,7 @@ type modules struct {
 	adminConfig  *appadminconfig.Service
 	rooming      *approoming.Service
 	search       *appsearch.Service
+	flights      *appflight.Service
 	tenancy      tenancyModule
 	imports      *appimportexport.Service
 	backfill     *dataprotection.Service
@@ -330,6 +332,7 @@ func (m *modules) build() error {
 
 	m.rooming = approoming.NewService(pgrooming.NewRepository(pool, passports))
 	m.search = appsearch.NewService(pgsearch.NewRepository(pool, passports))
+	m.flights = newFlightService(cfg.Flights, log)
 	m.tenancy = newTenancyModule(pool, m.users, m.ai, m.inbox, txm, m.audit)
 	m.imports = appimportexport.NewService(pgimportexport.NewRepository(pool, passports), customerRepo, txm)
 	m.imports.SetEnqueuer(m.queue)

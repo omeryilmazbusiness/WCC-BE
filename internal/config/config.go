@@ -22,6 +22,19 @@ type Config struct {
 	Storage  StorageConfig
 	Log      LogConfig
 	FX       FXConfig
+	Flights  FlightsConfig
+}
+
+// FlightsConfig configures the flight finder (Travelpayouts Data API). An
+// empty token keeps place suggestions but disables fare search.
+type FlightsConfig struct {
+	TravelpayoutsToken  string
+	TravelpayoutsMarker string
+	APIURL              string
+	AutocompleteURL     string
+	AviasalesURL        string
+	Market              string
+	Timeout             time.Duration
 }
 
 // FXConfig configures the optional generic rate provider (an empty
@@ -255,6 +268,15 @@ func Load() (Config, error) {
 			LiraScopeAPISecret: strings.TrimSpace(os.Getenv("LIRASCOPE_API_SECRET")),
 			ERAPIBaseURL:       strings.TrimSpace(getEnv("ERAPI_BASE_URL", "https://open.er-api.com/v6")),
 			AccountingSource:   strings.ToLower(strings.TrimSpace(getEnv("FX_ACCOUNTING_SOURCE", "off"))),
+		},
+		Flights: FlightsConfig{
+			TravelpayoutsToken:  strings.TrimSpace(os.Getenv("TRAVELPAYOUTS_TOKEN")),
+			TravelpayoutsMarker: strings.TrimSpace(getEnv("TRAVELPAYOUTS_MARKER", "578591")),
+			APIURL:              strings.TrimSpace(getEnv("TRAVELPAYOUTS_API_URL", "https://api.travelpayouts.com")),
+			AutocompleteURL:     strings.TrimSpace(getEnv("TRAVELPAYOUTS_AUTOCOMPLETE_URL", "https://autocomplete.travelpayouts.com")),
+			AviasalesURL:        strings.TrimSpace(getEnv("AVIASALES_URL", "https://www.aviasales.com")),
+			Market:              strings.ToLower(strings.TrimSpace(os.Getenv("TRAVELPAYOUTS_MARKET"))),
+			Timeout:             getDuration("TRAVELPAYOUTS_TIMEOUT", 10*time.Second),
 		},
 	}
 

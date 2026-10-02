@@ -41,7 +41,7 @@ var reservedSlugs = map[string]struct{}{
 	"manager": {}, "workspace": {}, "pipeline": {}, "inbox": {}, "tasks": {}, "notifications": {},
 	"customers": {}, "packages": {}, "bookings": {}, "finance": {}, "targets": {}, "reports": {},
 	"suppliers": {}, "rooming": {}, "integrations": {}, "security": {}, "settings": {},
-	"import-export": {}, "missing-docs": {}, "static": {}, "public": {}, "assets": {},
+	"import-export": {}, "missing-docs": {}, "flights": {}, "static": {}, "public": {}, "assets": {},
 	"en": {}, "ar": {}, "www": {}, "help": {}, "support": {}, "status": {},
 }
 

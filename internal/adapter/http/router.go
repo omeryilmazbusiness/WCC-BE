@@ -20,6 +20,7 @@ import (
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
+	flighthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/flight"
 	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
 	importhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/importexport"
@@ -78,6 +79,7 @@ type Handlers struct {
 	AdminConfig  adminconfighttp.Handler
 	Rooming      roominghttp.Handler
 	Search       searchhttp.Handler
+	Flight       flighthttp.Handler
 	Setup        setuphttp.Handler
 	Company      companyhttp.Handler
 	Privacy      privacyhttp.Handler
@@ -174,6 +176,11 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.Delete("/{id}/logo", h.Branding.PlatformDeleteLogo)
 			})
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/teams", h.Users.ListTeams)
+			r.Route("/flights", func(r chi.Router) {
+				r.Use(middleware.RequirePermission(platformauth.PermFlightsSearch))
+				r.Get("/places", h.Flight.Places)
+				r.Get("/search", h.Flight.Search)
+			})
 			r.With(middleware.RequirePermission(platformauth.PermRolesRead)).Get("/permissions", h.Users.PermissionsMatrix)
 
 			r.Route("/setup", func(r chi.Router) {

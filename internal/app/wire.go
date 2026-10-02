@@ -26,6 +26,7 @@ import (
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
+	flighthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/flight"
 	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
 	importhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/importexport"
@@ -139,6 +140,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		AdminConfig:  adminconfighttp.Handler{Svc: m.adminConfig},
 		Rooming:      roominghttp.Handler{Svc: m.rooming},
 		Search:       searchhttp.Handler{Svc: m.search},
+		Flight:       flighthttp.Handler{Svc: m.flights},
 		Setup:        setuphttp.Handler{Svc: m.tenancy.setup},
 		Company:      companyhttp.Handler{Svc: m.tenancy.companies},
 		Privacy:      privacyhttp.Handler{Svc: m.privacy},
