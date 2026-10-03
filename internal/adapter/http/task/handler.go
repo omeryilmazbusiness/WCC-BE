@@ -24,6 +24,7 @@ type Handler struct {
 
 type createRequest struct {
 	Title       string     `json:"title"`
+	Description string     `json:"description"`
 	Kind        string     `json:"kind"`
 	Priority    string     `json:"priority"`
 	AssigneeID  *uuid.UUID `json:"assignee_id"`
@@ -36,12 +37,12 @@ type statusRequest struct {
 	Status string `json:"status"`
 }
 
-type rescheduleRequest struct {
-	DueAt *string `json:"due_at"`
-}
-
 type completeRequest struct {
 	Outcome string `json:"outcome"`
+}
+
+type cancelRequest struct {
+	Reason string `json:"reason"`
 }
 
 type assignRequest struct {
@@ -67,6 +68,7 @@ func mapTask(t *domain.Task) map[string]any {
 		"id":              t.ID,
 		"branch_id":       t.BranchID,
 		"title":           t.Title,
+		"description":     t.Description,
 		"kind":            t.Kind,
 		"status":          t.Status,
 		"priority":        t.Priority,
@@ -197,7 +199,7 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
-		Title: req.Title, Kind: domain.Kind(req.Kind),
+		Title: req.Title, Description: req.Description, Kind: domain.Kind(req.Kind),
 		Priority: domain.Priority(req.Priority), AssigneeID: assignee,
 		RelatedType: req.RelatedType, RelatedID: req.RelatedID, DueAt: due,
 	})
@@ -257,23 +259,15 @@ func (h Handler) Complete(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, mapTask(t))
 }
 
-func (h Handler) Reschedule(w http.ResponseWriter, r *http.Request) {
+func (h Handler) Cancel(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		response.Error(w, shared.NewValidation("invalid id"))
 		return
 	}
-	var req rescheduleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Error(w, shared.NewValidation("invalid json"))
-		return
-	}
-	due, err := parseDue(req.DueAt)
-	if err != nil {
-		response.Error(w, shared.NewValidation("invalid due_at"))
-		return
-	}
-	t, err := h.Svc.Reschedule(r.Context(), id, due)
+	var req cancelRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	t, err := h.Svc.Cancel(r.Context(), id, appsvc.CancelInput{Reason: req.Reason})
 	if err != nil {
 		response.Error(w, err)
 		return

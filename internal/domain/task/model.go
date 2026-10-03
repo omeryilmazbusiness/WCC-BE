@@ -42,6 +42,7 @@ type Task struct {
 	ID             uuid.UUID
 	BranchID       uuid.UUID
 	Title          string
+	Description    string
 	Kind           Kind
 	Status         Status
 	Priority       Priority
@@ -102,16 +103,6 @@ func (t *Task) TransitionTo(to Status) error {
 	return shared.NewInvalidState("cannot transition task from " + string(t.Status) + " to " + string(to))
 }
 
-func (t *Task) Reschedule(due *time.Time) error {
-	if t.Status == StatusDone || t.Status == StatusCancelled {
-		return shared.NewInvalidState("cannot reschedule a closed task")
-	}
-	t.DueAt = due
-	t.EscalatedAt = nil
-	t.UpdatedAt = time.Now().UTC()
-	return nil
-}
-
 func (t *Task) Assign(assigneeID uuid.UUID) error {
 	if assigneeID == uuid.Nil {
 		return shared.NewValidation("assignee_id is required")
@@ -129,6 +120,14 @@ func (t *Task) CompleteWithOutcome(outcome string) error {
 		return err
 	}
 	t.Outcome = outcome
+	return nil
+}
+
+func (t *Task) CancelWithReason(reason string) error {
+	if err := t.TransitionTo(StatusCancelled); err != nil {
+		return err
+	}
+	t.Outcome = reason
 	return nil
 }
 
@@ -219,6 +218,18 @@ func NormalizeTitle(raw string) (string, error) {
 		return "", shared.NewValidation("title is too long")
 	}
 	return title, nil
+}
+
+// MaxDescriptionLength bounds a task description (runes); mirrors the DB check.
+const MaxDescriptionLength = 4000
+
+// NormalizeDescription trims an optional description and rejects overlong ones.
+func NormalizeDescription(raw string) (string, error) {
+	desc := strings.TrimSpace(raw)
+	if len([]rune(desc)) > MaxDescriptionLength {
+		return "", shared.NewValidation("description is too long")
+	}
+	return desc, nil
 }
 
 // dueSkew tolerates clock drift between the client that picked a deadline and the server.

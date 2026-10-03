@@ -20,6 +20,7 @@ import (
 type CreateInput struct {
 	BranchID    uuid.UUID
 	Title       string
+	Description string
 	Kind        domain.Kind
 	Priority    domain.Priority
 	AssigneeID  uuid.UUID
@@ -39,6 +40,10 @@ type BulkAssignInput struct {
 
 type CompleteInput struct {
 	Outcome string
+}
+
+type CancelInput struct {
+	Reason string
 }
 
 type ListInput struct {
@@ -100,6 +105,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, err
 	if err != nil {
 		return nil, err
 	}
+	description, err := domain.NormalizeDescription(in.Description)
+	if err != nil {
+		return nil, err
+	}
 	if !domain.ValidKind(in.Kind) {
 		return nil, shared.NewValidation("invalid kind")
 	}
@@ -131,7 +140,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, err
 	}
 	now := s.now()
 	t := &domain.Task{
-		ID: uuid.New(), BranchID: branchID, Title: title, Kind: in.Kind, Priority: prio,
+		ID: uuid.New(), BranchID: branchID, Title: title, Description: description, Kind: in.Kind, Priority: prio,
 		Status: domain.StatusOpen, AssigneeID: assigneeID, RelatedType: relatedType,
 		RelatedID: in.RelatedID, DueAt: in.DueAt, CreatedAt: now, UpdatedAt: now,
 	}
@@ -225,14 +234,14 @@ func (s *Service) Complete(ctx context.Context, id uuid.UUID, in CompleteInput) 
 	return out, err
 }
 
-func (s *Service) Reschedule(ctx context.Context, id uuid.UUID, due *time.Time) (*domain.Task, error) {
+func (s *Service) Cancel(ctx context.Context, id uuid.UUID, in CancelInput) (*domain.Task, error) {
 	var out *domain.Task
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		t, err := s.repo.FindByID(ctx, id)
 		if err != nil {
 			return shared.NewNotFound("task")
 		}
-		if err := t.Reschedule(due); err != nil {
+		if err := t.CancelWithReason(strings.TrimSpace(in.Reason)); err != nil {
 			return err
 		}
 		if err := s.repo.Update(ctx, t); err != nil {
@@ -362,7 +371,7 @@ func (s *Service) graceFor(ctx context.Context, t domain.Task) (time.Duration, b
 	return s.grace.Grace(ctx, t.BranchID, t.SourceRule)
 }
 
-// AnnounceOverdue records task.overdue once per overdue episode (a reschedule
+// AnnounceOverdue records task.overdue once per overdue episode (a due_at change
 // starts a new one); the stamp and the event commit together.
 func (s *Service) AnnounceOverdue(ctx context.Context, limit int) (int, error) {
 	now := s.now()

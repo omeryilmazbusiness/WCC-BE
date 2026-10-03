@@ -2,6 +2,7 @@ package task_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,14 +28,16 @@ func TestTaskTransitions(t *testing.T) {
 	}
 }
 
-func TestReschedule(t *testing.T) {
+func TestCancelWithReason(t *testing.T) {
 	task := &domain.Task{Status: domain.StatusOpen}
-	due := time.Now().UTC().Add(24 * time.Hour)
-	if err := task.Reschedule(&due); err != nil {
+	if err := task.CancelWithReason("customer unreachable"); err != nil {
 		t.Fatal(err)
 	}
-	task.Status = domain.StatusDone
-	if err := task.Reschedule(&due); err == nil {
+	if task.Status != domain.StatusCancelled || task.Outcome != "customer unreachable" || task.CompletedAt != nil {
+		t.Fatalf("cancel failed %#v", task)
+	}
+	done := &domain.Task{Status: domain.StatusDone}
+	if err := done.CancelWithReason(""); err == nil {
 		t.Fatal("expected error")
 	} else {
 		var app *shared.AppError
@@ -103,6 +106,12 @@ func TestNormalizeTitleAndNewDue(t *testing.T) {
 	}
 	if _, err := domain.NormalizeTitle(" "); err == nil {
 		t.Fatal("empty title must be rejected")
+	}
+	if got, err := domain.NormalizeDescription("  Bring passports\n"); err != nil || got != "Bring passports" {
+		t.Fatalf("description: got %q err %v", got, err)
+	}
+	if _, err := domain.NormalizeDescription(strings.Repeat("ü", domain.MaxDescriptionLength+1)); err == nil {
+		t.Fatal("overlong description must be rejected")
 	}
 	now := time.Now().UTC()
 	soon, slightlyPast, past := now.Add(time.Hour), now.Add(-time.Minute), now.Add(-time.Hour)

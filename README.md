@@ -154,7 +154,7 @@ Demo users (password `ChangeMe123!`):
 - `GET /v1/bookings/{id}/payments`
 - `POST /v1/payments` (immutable ledger; GM/Manager)
 - `GET|POST /v1/tasks` · `GET /v1/tasks/mine` · `POST /v1/tasks/assign` · `POST /v1/tasks/escalate-overdue`
-- `GET /v1/tasks/{id}` · `POST .../status|complete|reschedule|assign`
+- `GET /v1/tasks/{id}` · `POST .../status|complete|cancel|assign`
 - `GET /v1/dashboard/kpis` · `GET /v1/dashboard/team` · `GET /v1/dashboard/attention` · `GET /v1/dashboard/attention/summary` (gm/manager)
 - `GET /v1/dashboard/team?from&to` — per member: role, leads handled and won, open and overdue tasks, and money collected on their bookings in the period, converted to the branch reporting currency (`currency`); currencies without a rate are listed in `unconverted`
 - `GET /v1/dashboard/my-work` · `GET /v1/dashboard/my-target` (authenticated; `?scope=branch` for managers)

@@ -34,13 +34,17 @@ func TestCreateStandaloneManualTask(t *testing.T) {
 	due := time.Now().UTC().Add(3 * time.Hour)
 
 	got, err := svc.Create(ctx, apptask.CreateInput{
-		Title: "  Prepare visa checklist  ", Kind: domain.KindCustom, Priority: domain.PriorityCritical, DueAt: &due,
+		Title: "  Prepare visa checklist  ", Description: "  Include the hotel letter.\n", Kind: domain.KindCustom,
+		Priority: domain.PriorityCritical, DueAt: &due,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Title != "Prepare visa checklist" || got.Priority != domain.PriorityCritical {
 		t.Fatalf("title/priority not kept: %+v", got)
+	}
+	if got.Description != "Include the hotel letter." {
+		t.Fatalf("description not trimmed and kept: %q", got.Description)
 	}
 	if got.AssigneeID != user || got.BranchID != branch || got.CreatedBy == nil || *got.CreatedBy != user {
 		t.Fatalf("ownership not defaulted to caller: %+v", got)
@@ -100,13 +104,14 @@ func TestCreateRejectsInvalidInput(t *testing.T) {
 	svc := apptask.NewService(newTaskMem(), tx.Nop{}, events.NewBus(nil))
 	past := time.Now().UTC().Add(-time.Hour)
 	cases := map[string]apptask.CreateInput{
-		"empty title":     {Title: "   ", Kind: domain.KindCustom},
-		"long title":      {Title: strings.Repeat("x", domain.MaxTitleLength+1), Kind: domain.KindCustom},
-		"bad kind":        {Title: "x", Kind: "meeting"},
-		"bad priority":    {Title: "x", Kind: domain.KindCustom, Priority: "blocker"},
-		"type without id": {Title: "x", Kind: domain.KindCustom, RelatedType: "lead"},
-		"id without type": {Title: "x", Kind: domain.KindCustom, RelatedID: uuid.New()},
-		"past deadline":   {Title: "x", Kind: domain.KindCustom, DueAt: &past},
+		"empty title":      {Title: "   ", Kind: domain.KindCustom},
+		"long title":       {Title: strings.Repeat("x", domain.MaxTitleLength+1), Kind: domain.KindCustom},
+		"long description": {Title: "x", Kind: domain.KindCustom, Description: strings.Repeat("x", domain.MaxDescriptionLength+1)},
+		"bad kind":         {Title: "x", Kind: "meeting"},
+		"bad priority":     {Title: "x", Kind: domain.KindCustom, Priority: "blocker"},
+		"type without id":  {Title: "x", Kind: domain.KindCustom, RelatedType: "lead"},
+		"id without type":  {Title: "x", Kind: domain.KindCustom, RelatedID: uuid.New()},
+		"past deadline":    {Title: "x", Kind: domain.KindCustom, DueAt: &past},
 	}
 	for name, in := range cases {
 		if _, err := svc.Create(ctx, in); !isValidation(err) {

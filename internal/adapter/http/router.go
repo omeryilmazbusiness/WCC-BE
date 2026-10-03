@@ -282,7 +282,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermTasksRead)).Get("/{id}", h.Task.Get)
 				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/status", h.Task.ChangeStatus)
 				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/complete", h.Task.Complete)
-				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/reschedule", h.Task.Reschedule)
+				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/cancel", h.Task.Cancel)
 				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/assign", h.Task.Assign)
 			})
 
