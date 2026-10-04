@@ -448,6 +448,9 @@ Event reactors and worker jobs run with `access.System()`; verified webhooks wit
 `{mfa_enrollment_required, enrollment_token}` (GM/Admin without MFA get no tokens until
 `/v1/auth/mfa/setup` + `/v1/auth/mfa/setup/confirm`). Locked: `423 account_locked` + `Retry-After`;
 throttled: `429 rate_limited`. Refresh rotates on every call; reusing an old token revokes the family.
+The body names the sign-in page: `{"company":"<slug>"}` admits only that company's users,
+`{"platform":true}` only platform admins, and neither (generic page) every company user but no
+platform admin. A wrong page answers `401 invalid credentials` without counting towards lockout.
 
 - Migration: `00022_epic19_security.sql` (MFA columns/challenges/recovery codes, lockout columns,
   `refresh_tokens` + revoke trigger, `integration_accounts.external_account_id`, `webhook_events`).

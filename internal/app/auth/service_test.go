@@ -353,7 +353,9 @@ func newHarness(t *testing.T, role platformauth.Role, forced ...platformauth.Rol
 }
 
 func (h *harness) login(password string) (*LoginResult, error) {
-	return h.svc.Login(context.Background(), LoginInput{Email: "USER@wodi.test ", Password: password, IP: "10.0.0.1"})
+	return h.svc.Login(context.Background(), LoginInput{
+		Email: "USER@wodi.test ", Password: password, Platform: h.user.Role == platformauth.RoleAdmin, IP: "10.0.0.1",
+	})
 }
 
 func TestLoginLockoutAndUnlock(t *testing.T) {

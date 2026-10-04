@@ -33,7 +33,10 @@ type LoginInput struct {
 	Password string
 	// Company is the slug of the company sign-in page used; empty for the
 	// generic page. A user of another company gets invalid credentials.
-	Company   string
+	Company string
+	// Platform marks the platform operator sign-in page: only platform admins
+	// pass it, and they never pass a company page.
+	Platform  bool
 	IP        string
 	UserAgent string
 }
@@ -207,10 +210,11 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error
 	if !user.IsActive {
 		return nil, shared.NewForbidden("user is inactive")
 	}
-	if !s.belongsTo(ctx, user, in.Company) {
+	if !s.belongsTo(ctx, user, in) {
 		// The password was right, so this is not a guessing failure and does not
 		// count towards lockout; the answer still reveals nothing.
-		s.record(ctx, user.ID, user, "auth.login_wrong_company", meta, map[string]any{"company": in.Company})
+		s.record(ctx, user.ID, user, "auth.login_wrong_company", meta,
+			map[string]any{"company": in.Company, "platform": in.Platform})
 		return nil, errInvalidCredentials
 	}
 
@@ -244,10 +248,14 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (*LoginResult, error
 	return &LoginResult{Tokens: pair, User: publicUser(user, st)}, nil
 }
 
-// belongsTo reports whether user may sign in on the given company page; the
-// generic page (empty slug) admits everyone.
-func (s *Service) belongsTo(ctx context.Context, user *identity.User, companySlug string) bool {
-	slug := strings.ToLower(strings.TrimSpace(companySlug))
+// belongsTo reports whether user may sign in on the page of in: the platform
+// page admits platform admins only, a company page its own users, and the
+// generic page (no company) every company user.
+func (s *Service) belongsTo(ctx context.Context, user *identity.User, in LoginInput) bool {
+	if in.Platform || user.Role == platformauth.RoleAdmin {
+		return in.Platform && user.Role == platformauth.RoleAdmin
+	}
+	slug := strings.ToLower(strings.TrimSpace(in.Company))
 	if slug == "" || s.companies == nil {
 		return true
 	}

@@ -28,6 +28,7 @@ type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	Company  string `json:"company"`
+	Platform bool   `json:"platform"`
 }
 
 type refreshRequest struct {
@@ -63,7 +64,7 @@ func (h Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, err := h.Svc.Login(r.Context(), appsvc.LoginInput{
-		Email: req.Email, Password: req.Password, Company: req.Company,
+		Email: req.Email, Password: req.Password, Company: req.Company, Platform: req.Platform,
 		IP: middleware.ClientIP(r), UserAgent: r.UserAgent(),
 	})
 	if err != nil {

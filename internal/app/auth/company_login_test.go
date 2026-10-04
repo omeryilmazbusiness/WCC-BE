@@ -60,3 +60,29 @@ func TestCompanySignInPage(t *testing.T) {
 		t.Fatalf("a user without a company (platform admin) cannot use a company page: %v", err)
 	}
 }
+
+func TestPlatformSignInPage(t *testing.T) {
+	platformLogin := func(h *harness) (*LoginResult, error) {
+		return h.svc.Login(context.Background(), LoginInput{
+			Email: "user@wodi.test", Password: "correct-horse", Platform: true, IP: "10.0.0.8",
+		})
+	}
+
+	staff := newHarness(t, platformauth.RoleGM)
+	staff.svc.companies = fakeDirectory{staff.user.BranchID: "acme"}
+	if _, err := platformLogin(staff); !errors.Is(err, shared.ErrUnauthorized) {
+		t.Fatalf("company staff must not pass the platform page: %v", err)
+	}
+	if !staff.audit.has("auth.login_wrong_company") {
+		t.Fatal("platform page refusal must be audited")
+	}
+
+	admin := newHarness(t, platformauth.RoleAdmin)
+	if res, err := platformLogin(admin); err != nil || res.Tokens == nil {
+		t.Fatalf("platform admin on the platform page: %v", err)
+	}
+	_, err := admin.svc.Login(context.Background(), LoginInput{Email: "user@wodi.test", Password: "correct-horse", IP: "10.0.0.8"})
+	if !errors.Is(err, shared.ErrUnauthorized) {
+		t.Fatalf("platform admin must not pass the generic page: %v", err)
+	}
+}
