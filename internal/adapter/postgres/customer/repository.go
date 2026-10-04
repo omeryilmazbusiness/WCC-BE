@@ -366,13 +366,14 @@ func (r *Repository) ListTimeline(ctx context.Context, customerID uuid.UUID, lim
 		UNION ALL
 		(
 			SELECT 'booking', b.id, 'Booking '||left(b.id::text,8), b.status, b.updated_at,
-				jsonb_build_object('balance', b.balance_amt, 'currency', b.currency, 'pax', b.pax_count)
+				jsonb_build_object('balance', b.balance_amt, 'total', b.total_amount, 'collected', b.collected_amt,
+					'currency', b.currency, 'pax', b.pax_count)
 			FROM bookings b WHERE b.customer_id=$1`+clauses[1]+`
 		)
 		UNION ALL
 		(
 			SELECT 'payment', p.id, 'Payment '||p.amount::text, p.method, p.created_at,
-				jsonb_build_object('currency', p.currency, 'booking_id', p.booking_id)
+				jsonb_build_object('amount', p.amount, 'currency', p.currency, 'booking_id', p.booking_id)
 			FROM payments p
 			JOIN bookings b ON b.id = p.booking_id
 			WHERE b.customer_id=$1`+clauses[2]+`
