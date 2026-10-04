@@ -60,6 +60,7 @@ type Lead struct {
 	LostReasonCode     string
 	LostReason         string
 	Notes              string
+	Profile            Profile
 	Interest           TripInterest
 	NoFollowUp         bool
 	ConvertedBookingID *uuid.UUID
@@ -93,6 +94,7 @@ type ListFilter struct {
 	CustomerID *uuid.UUID
 	Stage      Stage
 	Source     string
+	Priority   Priority
 	Query      string
 	NoFollowUp *bool
 	// CreatedFrom and CreatedTo bound created_at as [from, to).

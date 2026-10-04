@@ -34,23 +34,66 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 const leadCols = `l.id, l.branch_id, l.customer_id, l.full_name, l.phone, l.source, l.stage, l.owner_id,
 	COALESCE(u.full_name, ''), l.lost_reason_code, l.lost_reason, l.notes, l.no_follow_up,
 	l.converted_booking_id, l.created_at, l.updated_at,
-	l.travel_date, l.travel_window, l.pax_count, l.budget_amount, l.budget_currency, l.package_id, l.package_interest`
+	l.travel_date, l.travel_window, l.pax_count, l.budget_amount, l.budget_currency, l.package_id, l.package_interest,
+	l.email, l.segment, l.company_name, l.tax_number, l.tax_office, l.priority, l.intent, l.next_follow_up_at,
+	l.services, l.origin, l.destination, l.return_date, l.flex_days, l.adults, l.child_ages, l.infants,
+	l.cabin_class, l.board_type, l.preferences`
 
 func scanLead(row pgx.Row) (*domain.Lead, error) {
 	var l domain.Lead
-	var stage string
+	var stage, segment, priority, intent string
+	p, t := &l.Profile, &l.Interest
 	err := row.Scan(
 		&l.ID, &l.BranchID, &l.CustomerID, &l.FullName, &l.Phone, &l.Source, &stage, &l.OwnerID,
 		&l.OwnerName, &l.LostReasonCode, &l.LostReason, &l.Notes, &l.NoFollowUp,
 		&l.ConvertedBookingID, &l.CreatedAt, &l.UpdatedAt,
-		&l.Interest.TravelDate, &l.Interest.TravelWindow, &l.Interest.PaxCount, &l.Interest.BudgetAmount,
-		&l.Interest.BudgetCurrency, &l.Interest.PackageID, &l.Interest.PackageInterest,
+		&t.TravelDate, &t.TravelWindow, &t.PaxCount, &t.BudgetAmount,
+		&t.BudgetCurrency, &t.PackageID, &t.PackageInterest,
+		&p.Email, &segment, &p.CompanyName, &p.TaxNumber, &p.TaxOffice, &priority, &intent, &p.NextFollowUpAt,
+		&t.Services, &t.Origin, &t.Destination, &t.ReturnDate, &t.FlexDays, &t.Adults, &t.ChildAges, &t.Infants,
+		&t.CabinClass, &t.BoardType, &t.Preferences,
 	)
 	if err != nil {
 		return nil, err
 	}
 	l.Stage = domain.Stage(stage)
+	p.Segment, p.Priority, p.Intent = domain.Segment(segment), domain.Priority(priority), domain.Intent(intent)
 	return &l, nil
+}
+
+// detailArgs are the profile and trip columns shared by Create and Update, in
+// the order of detailCols.
+func detailArgs(l *domain.Lead) []any {
+	p, t := l.Profile, l.Interest
+	return []any{
+		t.TravelDate, t.TravelWindow, t.PaxCount, t.BudgetAmount, t.BudgetCurrency, t.PackageID, t.PackageInterest,
+		p.Email, string(p.Segment), p.CompanyName, p.TaxNumber, p.TaxOffice, string(p.Priority), string(p.Intent), p.NextFollowUpAt,
+		emptyIfNil(t.Services), t.Origin, t.Destination, t.ReturnDate, t.FlexDays, t.Adults, emptyIfNil(t.ChildAges), t.Infants,
+		t.CabinClass, t.BoardType, emptyIfNil(t.Preferences),
+	}
+}
+
+var detailCols = []string{
+	"travel_date", "travel_window", "pax_count", "budget_amount", "budget_currency", "package_id", "package_interest",
+	"email", "segment", "company_name", "tax_number", "tax_office", "priority", "intent", "next_follow_up_at",
+	"services", "origin", "destination", "return_date", "flex_days", "adults", "child_ages", "infants",
+	"cabin_class", "board_type", "preferences",
+}
+
+func emptyIfNil[T any](s []T) []T {
+	if s == nil {
+		return []T{}
+	}
+	return s
+}
+
+// placeholders renders "$from, $from+1, ..." for n values.
+func placeholders(from, n int) string {
+	parts := make([]string, n)
+	for i := range parts {
+		parts[i] = fmt.Sprintf("$%d", from+i)
+	}
+	return strings.Join(parts, ",")
 }
 
 func (r *Repository) Create(ctx context.Context, l *domain.Lead) error {
@@ -58,17 +101,16 @@ func (r *Repository) Create(ctx context.Context, l *domain.Lead) error {
 		return err
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
+	args := append([]any{
+		l.ID, l.BranchID, l.CustomerID, l.FullName, l.Phone, l.Source, l.Stage, l.OwnerID,
+		l.LostReasonCode, l.LostReason, l.Notes, l.NoFollowUp, l.ConvertedBookingID, l.CreatedAt, l.UpdatedAt,
+	}, detailArgs(l)...)
 	_, err := q.Exec(ctx, `
 		INSERT INTO leads (
 			id, branch_id, customer_id, full_name, phone, source, stage, owner_id,
 			lost_reason_code, lost_reason, notes, no_follow_up, converted_booking_id, created_at, updated_at,
-			travel_date, travel_window, pax_count, budget_amount, budget_currency, package_id, package_interest
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)`,
-		l.ID, l.BranchID, l.CustomerID, l.FullName, l.Phone, l.Source, l.Stage, l.OwnerID,
-		l.LostReasonCode, l.LostReason, l.Notes, l.NoFollowUp, l.ConvertedBookingID, l.CreatedAt, l.UpdatedAt,
-		l.Interest.TravelDate, l.Interest.TravelWindow, l.Interest.PaxCount, l.Interest.BudgetAmount,
-		l.Interest.BudgetCurrency, l.Interest.PackageID, l.Interest.PackageInterest,
-	)
+			`+strings.Join(detailCols, ", ")+`
+		) VALUES (`+placeholders(1, len(args))+`)`, args...)
 	return err
 }
 
@@ -77,9 +119,12 @@ func (r *Repository) Update(ctx context.Context, l *domain.Lead) error {
 	args := []any{
 		l.ID, l.CustomerID, l.FullName, l.Phone, l.Source, l.Stage, l.OwnerID,
 		l.LostReasonCode, l.LostReason, l.Notes, l.NoFollowUp, l.ConvertedBookingID, l.UpdatedAt,
-		l.Interest.TravelDate, l.Interest.TravelWindow, l.Interest.PaxCount, l.Interest.BudgetAmount,
-		l.Interest.BudgetCurrency, l.Interest.PackageID, l.Interest.PackageInterest,
 	}
+	sets := make([]string, len(detailCols))
+	for i, col := range detailCols {
+		sets[i] = fmt.Sprintf("%s=$%d", col, len(args)+i+1)
+	}
+	args = append(args, detailArgs(l)...)
 	scope, args, err := pgscope.Clause(ctx, scopeBare, args)
 	if err != nil {
 		return err
@@ -87,8 +132,7 @@ func (r *Repository) Update(ctx context.Context, l *domain.Lead) error {
 	tag, err := q.Exec(ctx, `
 		UPDATE leads SET customer_id=$2, full_name=$3, phone=$4, source=$5, stage=$6, owner_id=$7,
 			lost_reason_code=$8, lost_reason=$9, notes=$10, no_follow_up=$11, converted_booking_id=$12, updated_at=$13,
-			travel_date=$14, travel_window=$15, pax_count=$16, budget_amount=$17, budget_currency=$18,
-			package_id=$19, package_interest=$20
+			`+strings.Join(sets, ", ")+`
 		WHERE id=$1 AND deleted_at IS NULL`+scope, args...)
 	if err != nil {
 		return err
@@ -140,6 +184,9 @@ func filter(ctx context.Context, f domain.ListFilter) ([]string, []any, error) {
 	if src := strings.TrimSpace(f.Source); src != "" {
 		add("lower(l.source)=lower($%d)", src)
 	}
+	if f.Priority != "" {
+		add("l.priority=$%d", string(f.Priority))
+	}
 	if f.NoFollowUp != nil {
 		add("l.no_follow_up=$%d", *f.NoFollowUp)
 	}
@@ -153,8 +200,8 @@ func filter(ctx context.Context, f domain.ListFilter) ([]string, []any, error) {
 		args = append(args, "%"+qstr+"%")
 		i := len(args)
 		where = append(where, fmt.Sprintf(
-			`(l.full_name ILIKE $%d OR l.phone ILIKE $%d OR l.source ILIKE $%d OR COALESCE(u.full_name,'') ILIKE $%d)`,
-			i, i, i, i,
+			`(l.full_name ILIKE $%d OR l.phone ILIKE $%d OR l.email ILIKE $%d OR l.company_name ILIKE $%d OR l.source ILIKE $%d OR COALESCE(u.full_name,'') ILIKE $%d)`,
+			i, i, i, i, i, i,
 		))
 	}
 	return pgscope.Append(ctx, scopeAliased, where, args)

@@ -23,6 +23,7 @@ type CreateInput struct {
 	Source     string
 	OwnerID    uuid.UUID
 	Notes      string
+	Profile    domain.Profile
 	Interest   domain.TripInterest
 	ActorID    uuid.UUID
 	IP         string
@@ -140,6 +141,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Lead, err
 		return nil, err
 	}
 	now := time.Now().UTC()
+	profile, err := in.Profile.Normalize(now, interest.TravelDate, nil)
+	if err != nil {
+		return nil, err
+	}
 	l := &domain.Lead{
 		ID:         uuid.New(),
 		BranchID:   branchID,
@@ -150,6 +155,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Lead, err
 		Stage:      domain.StageNew,
 		OwnerID:    ownerID,
 		Notes:      in.Notes,
+		Profile:    profile,
 		Interest:   interest,
 		CreatedAt:  now,
 		UpdatedAt:  now,
@@ -171,6 +177,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Lead, err
 		return nil, err
 	}
 	s.bus.Publish(ctx, events.Event{Name: events.LeadCreated, Payload: l})
+	if enriched, err := s.repo.FindByID(ctx, l.ID); err == nil {
+		return enriched, nil
+	}
 	return l, nil
 }
 

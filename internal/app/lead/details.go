@@ -18,13 +18,14 @@ type PackageChecker interface {
 
 func (s *Service) SetPackageChecker(p PackageChecker) { s.packages = p }
 
-// UpdateDetailsInput edits a lead's contact and trip interest. Nil fields are
-// left unchanged; a non-nil Interest replaces the interest as a whole.
+// UpdateDetailsInput edits a lead's contact, profile and trip interest. Nil
+// fields are left unchanged; a non-nil Profile or Interest replaces it whole.
 type UpdateDetailsInput struct {
 	LeadID    uuid.UUID
 	FullName  *string
 	Phone     *string
 	Notes     *string
+	Profile   *domain.Profile
 	Interest  *domain.TripInterest
 	ActorID   uuid.UUID
 	IP        string
@@ -62,6 +63,13 @@ func (s *Service) UpdateDetails(ctx context.Context, in UpdateDetailsInput) (*do
 				return err
 			}
 			l.Interest = interest
+		}
+		if in.Profile != nil {
+			profile, err := in.Profile.Normalize(time.Now().UTC(), l.Interest.TravelDate, l.Profile.NextFollowUpAt)
+			if err != nil {
+				return err
+			}
+			l.Profile = profile
 		}
 		l.UpdatedAt = time.Now().UTC()
 		if err := s.repo.Update(ctx, l); err != nil {

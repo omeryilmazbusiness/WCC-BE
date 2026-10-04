@@ -29,6 +29,7 @@ type createRequest struct {
 	Source     string           `json:"source"`
 	Notes      string           `json:"notes"`
 	OwnerID    *uuid.UUID       `json:"owner_id"`
+	Profile    *profileRequest  `json:"profile"`
 	Interest   *interestRequest `json:"interest"`
 }
 
@@ -72,6 +73,7 @@ func mapLead(l *domain.Lead) map[string]any {
 		"lost_reason_code":     l.LostReasonCode,
 		"lost_reason":          l.LostReason,
 		"notes":                l.Notes,
+		"profile":              mapProfile(l.Profile),
 		"interest":             mapInterest(l.Interest),
 		"no_follow_up":         l.NoFollowUp,
 		"converted_booking_id": l.ConvertedBookingID,
@@ -116,9 +118,15 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	profile, err := req.Profile.toDomain()
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
 	l, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
 		CustomerID: req.CustomerID, FullName: req.FullName,
-		Phone: req.Phone, Source: req.Source, OwnerID: owner, Notes: req.Notes, Interest: interest,
+		Phone: req.Phone, Source: req.Source, OwnerID: owner, Notes: req.Notes,
+		Profile: profile, Interest: interest,
 		ActorID: claims.UserID, IP: r.RemoteAddr, UserAgent: r.UserAgent(),
 	})
 	if err != nil {
@@ -153,6 +161,12 @@ func listFilter(r *http.Request) (domain.ListFilter, error) {
 	}
 	if !domain.ValidSort(f.Sort) {
 		return f, shared.NewValidation("invalid sort")
+	}
+	if p := request.FilterString(r, "priority"); p != "" {
+		f.Priority = domain.Priority(p)
+		if !domain.ValidPriority(f.Priority) {
+			return f, shared.NewValidation("invalid priority")
+		}
 	}
 	if nf := request.FilterString(r, "no_follow_up"); nf != "" {
 		v := nf == "1" || strings.EqualFold(nf, "true")

@@ -549,13 +549,27 @@ func (s *Seeder) onLeadCreated(ctx context.Context, ev events.Event) error {
 	}
 	now := time.Now().UTC()
 	due := now.Add(24 * time.Hour)
+	if at := l.Profile.NextFollowUpAt; at != nil && at.After(now) {
+		due = at.UTC()
+	}
 	return s.ensureTask(ctx, domain.Task{
 		ID: uuid.New(), BranchID: l.BranchID, Title: "Follow up lead",
-		Kind: domain.KindFollowUp, Priority: domain.PriorityMinor, Status: domain.StatusOpen,
+		Kind: domain.KindFollowUp, Priority: followUpPriority(l.Profile.Priority), Status: domain.StatusOpen,
 		AssigneeID: l.OwnerID, RelatedType: "lead", RelatedID: l.ID, DueAt: &due,
 		IdempotencyKey: fmt.Sprintf("lead:%s:followup", l.ID), SourceRule: domain.RuleLeadFollowUp,
 		CreatedAt: now, UpdatedAt: now,
 	})
+}
+
+func followUpPriority(p leaddomain.Priority) domain.Priority {
+	switch p {
+	case leaddomain.PriorityHigh:
+		return domain.PriorityCritical
+	case leaddomain.PriorityMedium:
+		return domain.PriorityMajor
+	default:
+		return domain.PriorityMinor
+	}
 }
 
 func (s *Seeder) onBookingConfirmed(ctx context.Context, ev events.Event) error {
