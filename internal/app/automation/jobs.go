@@ -27,6 +27,7 @@ const (
 	JobDocumentExpiry  shared.JobName = "document.expiry_reminders"
 	JobPassportExpiry  shared.JobName = "customer.passport_expiry"
 	JobSupplierConfirm shared.JobName = "supplier.confirm_reminders"
+	JobSupplierExpiry  shared.JobName = "supplier.contract_expiry"
 	JobVisaFollowUp    shared.JobName = "visa.follow_up"
 	JobTargetRecompute shared.JobName = "target.recompute"
 	JobMissingDocs     shared.JobName = "booking.missing_docs"
@@ -68,6 +69,7 @@ type (
 	}
 	SupplierSweeper interface {
 		ProcessUnconfirmedReminders(ctx context.Context, branchID *uuid.UUID, limit int) (int, error)
+		ContractExpirySweep(ctx context.Context, branchID *uuid.UUID) (int, error)
 	}
 	VisaSweeper interface {
 		ProcessFollowUps(ctx context.Context, now time.Time, limit int) (int, error)
@@ -148,6 +150,7 @@ func (j *Jobs) Handlers() map[shared.JobName]Handler {
 		JobDocumentExpiry:             j.DocumentExpiry,
 		JobPassportExpiry:             j.PassportExpiry,
 		JobSupplierConfirm:            j.SupplierConfirm,
+		JobSupplierExpiry:             j.SupplierExpiry,
 		JobVisaFollowUp:               j.VisaFollowUp,
 		JobTargetRecompute:            j.TargetRecompute,
 		JobMissingDocs:                j.MissingDocs,
@@ -201,6 +204,11 @@ func (j *Jobs) DocumentExpiry(ctx context.Context, _ []byte) error {
 func (j *Jobs) SupplierConfirm(ctx context.Context, _ []byte) error {
 	n, err := j.d.Suppliers.ProcessUnconfirmedReminders(ctx, nil, sweepBatch)
 	return j.logCount(ctx, "supplier confirmation follow-ups", n, err)
+}
+
+func (j *Jobs) SupplierExpiry(ctx context.Context, _ []byte) error {
+	n, err := j.d.Suppliers.ContractExpirySweep(ctx, nil)
+	return j.logCount(ctx, "supplier contract expiry alerts", n, err)
 }
 
 func (j *Jobs) VisaFollowUp(ctx context.Context, _ []byte) error {

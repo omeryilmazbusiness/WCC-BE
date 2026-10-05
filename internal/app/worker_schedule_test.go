@@ -41,6 +41,7 @@ func TestScheduleCoversEpic22Table(t *testing.T) {
 		automation.JobDocumentExpiry:  "0 6 * * *",
 		automation.JobPassportExpiry:  "15 6 * * *",
 		automation.JobSupplierConfirm: "30 6 * * *",
+		automation.JobSupplierExpiry:  "35 6 * * *",
 		shared.JobAISummaryDaily:      "5 * * * *",
 		automation.JobTargetRecompute: "20 * * * *",
 		shared.JobReportGenerate:      "30 * * * *",

@@ -43,6 +43,7 @@ func defaultSchedule(cfg config.Config) []worker.ScheduleEntry {
 		{Spec: "0 6 * * *", Job: automation.JobDocumentExpiry},
 		{Spec: "15 6 * * *", Job: automation.JobPassportExpiry},
 		{Spec: "30 6 * * *", Job: automation.JobSupplierConfirm},
+		{Spec: "35 6 * * *", Job: automation.JobSupplierExpiry},
 		{Spec: "45 6 * * *", Job: automation.JobVisaFollowUp},
 		{Spec: "0 8 * * *", Job: paymentdomain.JobPromisesCheck},
 	}

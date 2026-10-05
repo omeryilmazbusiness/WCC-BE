@@ -70,6 +70,8 @@ const (
 	KindAISummary           = "ai.summary"
 	KindAILostLeads         = "ai.lost_leads"
 	KindTaskReminder        = "task.reminder"
+	KindSupplierLowBalance  = "supplier.low_balance"
+	KindSupplierContract    = "supplier.contract_expiring"
 )
 
 // metaEscalatedFrom marks a notification produced by escalation; escalated
@@ -240,6 +242,10 @@ func GroupLabel(kind string, count int, baseTitle string) string {
 		return c + " integration issues"
 	case KindSupplierUnconfirmed:
 		return c + " unconfirmed suppliers"
+	case KindSupplierLowBalance:
+		return c + " supplier accounts running low"
+	case KindSupplierContract:
+		return c + " supplier contracts ending"
 	case KindMessageSLAWarning:
 		return c + " conversations near SLA"
 	case KindPaymentDue:

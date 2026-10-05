@@ -22,18 +22,22 @@ const (
 )
 
 const (
-	KindPassport = "passport"
-	KindVisa     = "visa"
-	KindReceipt  = "receipt"
-	KindPhoto    = "photo"
-	KindOther    = "other"
-	KindContract = "contract"
+	KindPassport  = "passport"
+	KindVisa      = "visa"
+	KindReceipt   = "receipt"
+	KindPhoto     = "photo"
+	KindOther     = "other"
+	KindContract  = "contract"
+	KindNDA       = "nda"
+	KindSLA       = "sla"
+	KindCorporate = "corporate"
 
 	RelatedCustomer    = "customer"
 	RelatedBooking     = "booking"
 	RelatedLead        = "lead"
 	RelatedParticipant = "participant"
 	RelatedHotel       = "hotel"
+	RelatedSupplier    = "supplier"
 )
 
 // Document stores metadata only; bytes live in S3-compatible storage.
@@ -204,7 +208,7 @@ func (d *Document) NewReplacement(uploadedBy uuid.UUID, fileName, contentType, s
 
 func ValidKind(kind string) bool {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
-	case KindPassport, KindVisa, KindReceipt, KindPhoto, KindOther, KindContract:
+	case KindPassport, KindVisa, KindReceipt, KindPhoto, KindOther, KindContract, KindNDA, KindSLA, KindCorporate:
 		return true
 	default:
 		return false
@@ -213,7 +217,7 @@ func ValidKind(kind string) bool {
 
 func ValidRelatedType(t string) bool {
 	switch strings.ToLower(strings.TrimSpace(t)) {
-	case RelatedCustomer, RelatedBooking, RelatedLead, RelatedParticipant, RelatedHotel:
+	case RelatedCustomer, RelatedBooking, RelatedLead, RelatedParticipant, RelatedHotel, RelatedSupplier:
 		return true
 	default:
 		return false

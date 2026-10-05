@@ -12,6 +12,7 @@ import (
 	aiprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/ai"
 	extintadapter "github.com/wodi-crm/wodi-crm-be/internal/adapter/extint"
 	filesyncprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/filesync"
+	"github.com/wodi-crm/wodi-crm-be/internal/adapter/healthprobe"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/email"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/instagram"
@@ -280,6 +281,10 @@ func (m *modules) build() error {
 	m.visas.SetFollowUps(alerts)
 	m.suppliers = appsupplier.NewService(pgsupplier.NewRepository(pool), txm)
 	m.suppliers.SetFollowUp(alerts)
+	m.suppliers.SetFundsAlerts(alerts)
+	m.suppliers.SetAuditor(m.audit)
+	m.suppliers.SetSecrets(secretBox)
+	m.suppliers.SetProber(healthprobe.New(healthprobe.DefaultTimeout))
 
 	m.finance = newFinanceModule(financeDeps{
 		Cfg: cfg, Log: log, Pool: pool, Tx: txm, Auditor: m.audit, Payments: m.payments,

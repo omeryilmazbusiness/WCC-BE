@@ -21,17 +21,6 @@ type Handler struct {
 	Svc *appsvc.Service
 }
 
-func mapSupplier(s *domain.Supplier) map[string]any {
-	return map[string]any{
-		"id": s.ID, "branch_id": s.BranchID, "code": s.Code,
-		"name_en": s.NameEn, "name_ar": s.NameAr,
-		"contact_name": s.ContactName, "contact_phone": s.ContactPhone, "contact_email": s.ContactEmail,
-		"terms": s.Terms, "is_active": s.IsActive,
-		"created_at": s.CreatedAt.UTC().Format(time.RFC3339Nano),
-		"updated_at": s.UpdatedAt.UTC().Format(time.RFC3339Nano),
-	}
-}
-
 func mapLink(l *domain.Link) map[string]any {
 	m := map[string]any{
 		"id": l.ID, "supplier_id": l.SupplierID, "link_type": l.LinkType, "link_id": l.LinkID,
@@ -45,88 +34,6 @@ func mapLink(l *domain.Link) map[string]any {
 		m["confirmed_at"] = l.ConfirmedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return m
-}
-
-func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
-		return
-	}
-	branchID, err := request.TargetBranch(r)
-	if err != nil {
-		response.Error(w, err)
-		return
-	}
-	var body appsvc.CreateInput
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		response.Error(w, shared.NewValidation("invalid json"))
-		return
-	}
-	body.BranchID = branchID
-	s, err := h.Svc.Create(r.Context(), body)
-	if err != nil {
-		response.Error(w, err)
-		return
-	}
-	response.JSON(w, http.StatusCreated, mapSupplier(s))
-}
-
-func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	_, ok := middleware.ClaimsFrom(r.Context())
-	if !ok {
-		response.Error(w, shared.NewUnauthorized("unauthenticated"))
-		return
-	}
-	branchID, err := request.Branch(r)
-	if err != nil {
-		response.Error(w, err)
-		return
-	}
-	activeOnly := r.URL.Query().Get("active") == "1" || r.URL.Query().Get("active") == "true"
-	items, err := h.Svc.List(r.Context(), branchID, activeOnly)
-	if err != nil {
-		response.Error(w, err)
-		return
-	}
-	out := make([]map[string]any, 0, len(items))
-	for i := range items {
-		out = append(out, mapSupplier(&items[i]))
-	}
-	response.JSON(w, http.StatusOK, out)
-}
-
-func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		response.Error(w, shared.NewValidation("invalid id"))
-		return
-	}
-	s, err := h.Svc.Get(r.Context(), id)
-	if err != nil {
-		response.Error(w, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, mapSupplier(s))
-}
-
-func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(chi.URLParam(r, "id"))
-	if err != nil {
-		response.Error(w, shared.NewValidation("invalid id"))
-		return
-	}
-	var body appsvc.UpdateInput
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		response.Error(w, shared.NewValidation("invalid json"))
-		return
-	}
-	s, err := h.Svc.Update(r.Context(), id, body)
-	if err != nil {
-		response.Error(w, err)
-		return
-	}
-	response.JSON(w, http.StatusOK, mapSupplier(s))
 }
 
 func (h Handler) Link(w http.ResponseWriter, r *http.Request) {

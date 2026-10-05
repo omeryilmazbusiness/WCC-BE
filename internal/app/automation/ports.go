@@ -119,5 +119,6 @@ type Checklists interface {
 var (
 	managerRoles     = []string{"manager", "gm"}
 	operationsRoles  = []string{"operations", "manager"}
+	financeRoles     = []string{"finance", "manager"}
 	integrationRoles = []string{"gm", "manager", "admin"}
 )

@@ -9,29 +9,7 @@ import (
 
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/supplier"
-	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
-
-type CreateInput struct {
-	BranchID     uuid.UUID `json:"-"`
-	Code         string    `json:"code"`
-	NameEn       string    `json:"name_en"`
-	NameAr       string    `json:"name_ar"`
-	ContactName  string    `json:"contact_name"`
-	ContactPhone string    `json:"contact_phone"`
-	ContactEmail string    `json:"contact_email"`
-	Terms        string    `json:"terms"`
-}
-
-type UpdateInput struct {
-	NameEn       *string `json:"name_en"`
-	NameAr       *string `json:"name_ar"`
-	ContactName  *string `json:"contact_name"`
-	ContactPhone *string `json:"contact_phone"`
-	ContactEmail *string `json:"contact_email"`
-	Terms        *string `json:"terms"`
-	IsActive     *bool   `json:"is_active"`
-}
 
 type LinkInput struct {
 	SupplierID uuid.UUID       `json:"-"`
@@ -49,86 +27,6 @@ type LinkInput struct {
 type ConfirmationFollowUp interface {
 	SupplierUnconfirmed(ctx context.Context, sup *domain.Supplier, link *domain.Link) error
 	SupplierConfirmed(ctx context.Context, link *domain.Link) error
-}
-
-type Service struct {
-	repo     domain.Repository
-	tx       tx.Runner
-	followUp ConfirmationFollowUp
-}
-
-func NewService(repo domain.Repository, txm tx.Runner) *Service {
-	return &Service{repo: repo, tx: txm}
-}
-
-func (s *Service) SetFollowUp(f ConfirmationFollowUp) { s.followUp = f }
-
-func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Supplier, error) {
-	now := time.Now().UTC()
-	sup := &domain.Supplier{
-		ID: uuid.New(), BranchID: in.BranchID, Code: in.Code,
-		NameEn: in.NameEn, NameAr: in.NameAr, ContactName: in.ContactName,
-		ContactPhone: in.ContactPhone, ContactEmail: in.ContactEmail,
-		Terms: in.Terms, IsActive: true, CreatedAt: now, UpdatedAt: now,
-	}
-	if err := sup.Normalize(); err != nil {
-		return nil, err
-	}
-	if in.BranchID == uuid.Nil {
-		return nil, shared.NewValidation("branch_id is required")
-	}
-	if err := s.repo.Create(ctx, sup); err != nil {
-		return nil, err
-	}
-	return sup, nil
-}
-
-func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*domain.Supplier, error) {
-	sup, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return nil, shared.NewNotFound("supplier")
-	}
-	if in.NameEn != nil {
-		sup.NameEn = *in.NameEn
-	}
-	if in.NameAr != nil {
-		sup.NameAr = *in.NameAr
-	}
-	if in.ContactName != nil {
-		sup.ContactName = *in.ContactName
-	}
-	if in.ContactPhone != nil {
-		sup.ContactPhone = *in.ContactPhone
-	}
-	if in.ContactEmail != nil {
-		sup.ContactEmail = *in.ContactEmail
-	}
-	if in.Terms != nil {
-		sup.Terms = *in.Terms
-	}
-	if in.IsActive != nil {
-		sup.IsActive = *in.IsActive
-	}
-	if err := sup.Normalize(); err != nil {
-		return nil, err
-	}
-	sup.UpdatedAt = time.Now().UTC()
-	if err := s.repo.Update(ctx, sup); err != nil {
-		return nil, err
-	}
-	return sup, nil
-}
-
-func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Supplier, error) {
-	sup, err := s.repo.FindByID(ctx, id)
-	if err != nil {
-		return nil, shared.NewNotFound("supplier")
-	}
-	return sup, nil
-}
-
-func (s *Service) List(ctx context.Context, branchID *uuid.UUID, activeOnly bool) ([]domain.Supplier, error) {
-	return s.repo.List(ctx, branchID, activeOnly)
 }
 
 func (s *Service) Link(ctx context.Context, in LinkInput) (*domain.Link, error) {

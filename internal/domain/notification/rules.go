@@ -85,6 +85,18 @@ func DefaultRules() []Rule {
 			DefaultHref: "/suppliers", EntityType: "supplier",
 		},
 		{
+			Kind: KindSupplierLowBalance, Severity: SeverityWarning,
+			EscalateAfter: 12 * time.Hour, EscalateToRoles: []string{"manager", "gm"},
+			Groupable: true, DefaultTitle: "Supplier balance low",
+			DefaultHref: "/suppliers", EntityType: "supplier",
+		},
+		{
+			Kind: KindSupplierContract, Severity: SeverityWarning,
+			EscalateAfter: 72 * time.Hour, EscalateToRoles: []string{"manager"},
+			Groupable: true, DefaultTitle: "Supplier contract ending",
+			DefaultHref: "/suppliers", EntityType: "supplier",
+		},
+		{
 			Kind: KindMessageSLAWarning, Severity: SeverityWarning,
 			EscalateAfter: 0, EscalateToRoles: nil,
 			Groupable: true, DefaultTitle: "Conversation nearing SLA",

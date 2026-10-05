@@ -44,36 +44,32 @@ func ValidConfirmStatus(s ConfirmationStatus) bool {
 	}
 }
 
+// Supplier is a provider of inventory or services: its identity and account
+// manager (Contact*), integration, financial account and service rules.
 type Supplier struct {
-	ID           uuid.UUID
-	BranchID     uuid.UUID
-	Code         string
-	NameEn       string
-	NameAr       string
-	ContactName  string
-	ContactPhone string
-	ContactEmail string
-	Terms        string
-	IsActive     bool
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-}
-
-func (s *Supplier) Normalize() error {
-	s.Code = strings.ToUpper(strings.TrimSpace(s.Code))
-	s.NameEn = strings.TrimSpace(s.NameEn)
-	s.NameAr = strings.TrimSpace(s.NameAr)
-	s.ContactName = strings.TrimSpace(s.ContactName)
-	s.ContactPhone = strings.TrimSpace(s.ContactPhone)
-	s.ContactEmail = strings.TrimSpace(s.ContactEmail)
-	s.Terms = strings.TrimSpace(s.Terms)
-	if s.Code == "" {
-		return shared.NewValidation("code is required")
-	}
-	if s.NameEn == "" && s.NameAr == "" {
-		return shared.NewValidation("name_en or name_ar is required")
-	}
-	return nil
+	ID             uuid.UUID
+	BranchID       uuid.UUID
+	Code           string
+	NameEn         string
+	NameAr         string
+	Category       string
+	ContactName    string
+	ContactPhone   string
+	ContactEmail   string
+	EmergencyPhone string
+	// Terms holds the cancellation SLA and other service rules as text.
+	Terms           string
+	Integration     Integration
+	Health          Health
+	Finance         Finance
+	Markups         Markups
+	Regions         []string
+	FreeCancelHours int
+	ContractStart   *time.Time
+	ContractEnd     *time.Time
+	IsActive        bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type Link struct {
@@ -140,4 +136,42 @@ type Repository interface {
 
 	CreateIssue(ctx context.Context, e *IssueEvent) error
 	ListIssues(ctx context.Context, supplierID uuid.UUID, limit int) ([]IssueEvent, error)
+
+	// FindForUpdate locks the supplier row for the rest of the transaction.
+	FindForUpdate(ctx context.Context, id uuid.UUID) (*Supplier, error)
+	ListSummaries(ctx context.Context, f ListFilter) ([]Summary, error)
+	// LoadCredentials returns the sealed credential bag ("" when none).
+	LoadCredentials(ctx context.Context, id uuid.UUID) (string, error)
+	StoreCredentials(ctx context.Context, id uuid.UUID, sealed string) error
+	ListContractsEnding(ctx context.Context, branchID *uuid.UUID, from, to time.Time) ([]Supplier, error)
+
+	CreateLedgerEntry(ctx context.Context, e *LedgerEntry) error
+	ListLedger(ctx context.Context, supplierID uuid.UUID, limit int) ([]LedgerEntry, error)
+	VolumeSince(ctx context.Context, supplierID uuid.UUID, since time.Time) (Volume, error)
+
+	AddUsage(ctx context.Context, u *Usage) error
+	MetricsSince(ctx context.Context, supplierID uuid.UUID, since time.Time) (Metrics, error)
+
+	CreateDispute(ctx context.Context, d *Dispute) error
+	UpdateDispute(ctx context.Context, d *Dispute) error
+	FindDispute(ctx context.Context, id uuid.UUID) (*Dispute, error)
+	ListDisputes(ctx context.Context, supplierID uuid.UUID) ([]Dispute, error)
+}
+
+// ListFilter narrows the supplier directory.
+type ListFilter struct {
+	BranchID   *uuid.UUID
+	Query      string
+	Category   string
+	ActiveOnly bool
+	Since      time.Time
+}
+
+// Summary is a directory row: the supplier plus figures for list views.
+type Summary struct {
+	Supplier       Supplier
+	HasCredentials bool
+	OpenDisputes   int
+	Spend          int64
+	Bookings       int
 }

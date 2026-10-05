@@ -2,11 +2,13 @@ package supplier
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
@@ -58,35 +60,112 @@ func (r *Repository) ensureSupplier(ctx context.Context, supplierID uuid.UUID, b
 	return nil
 }
 
+const supplierColumns = `s.id, s.branch_id, s.code, s.name_en, s.name_ar, s.category, s.contact_name, s.contact_phone,
+	s.contact_email, s.emergency_phone, s.terms, s.integration_type, s.environment, s.api_base_url, s.webhook_url,
+	s.health_status, s.health_latency_ms, s.health_checked_at, s.health_note, s.payment_model, s.currency,
+	s.deposit_balance, s.credit_limit, s.credit_used, s.low_balance_threshold, s.payment_terms, s.markups,
+	s.regions, s.free_cancel_hours, s.contract_start, s.contract_end, s.is_active, s.created_at, s.updated_at`
+
+func scanSupplier(row pgx.Row, extra ...any) (*domain.Supplier, error) {
+	var s domain.Supplier
+	var markups []byte
+	dest := []any{
+		&s.ID, &s.BranchID, &s.Code, &s.NameEn, &s.NameAr, &s.Category, &s.ContactName, &s.ContactPhone,
+		&s.ContactEmail, &s.EmergencyPhone, &s.Terms, &s.Integration.Type, &s.Integration.Environment,
+		&s.Integration.BaseURL, &s.Integration.WebhookURL, &s.Health.Status, &s.Health.LatencyMs,
+		&s.Health.CheckedAt, &s.Health.Note, &s.Finance.Model, &s.Finance.Currency, &s.Finance.DepositBalance,
+		&s.Finance.CreditLimit, &s.Finance.CreditUsed, &s.Finance.LowBalanceThreshold, &s.Finance.PaymentTerms,
+		&markups, &s.Regions, &s.FreeCancelHours, &s.ContractStart, &s.ContractEnd, &s.IsActive,
+		&s.CreatedAt, &s.UpdatedAt,
+	}
+	if err := row.Scan(append(dest, extra...)...); err != nil {
+		return nil, err
+	}
+	s.Markups = domain.Markups{}
+	if len(markups) > 0 {
+		if err := json.Unmarshal(markups, &s.Markups); err != nil {
+			return nil, err
+		}
+	}
+	if s.Regions == nil {
+		s.Regions = []string{}
+	}
+	return &s, nil
+}
+
+func markupsJSON(m domain.Markups) ([]byte, error) {
+	if m == nil {
+		m = domain.Markups{}
+	}
+	return json.Marshal(m)
+}
+
+// mapUniqueCode turns the (branch_id, code) unique violation into a field error.
+func mapUniqueCode(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		e := shared.NewConflict("supplier code already exists")
+		e.Details = map[string]any{"code": "supplier code already exists"}
+		return e
+	}
+	return err
+}
+
 func (r *Repository) Create(ctx context.Context, s *domain.Supplier) error {
 	if err := pgscope.EnsureBranch(ctx, s.BranchID); err != nil {
 		return err
 	}
+	markups, err := markupsJSON(s.Markups)
+	if err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
+	_, err = q.Exec(ctx, `
 		INSERT INTO suppliers (
-			id, branch_id, code, name_en, name_ar, contact_name, contact_phone, contact_email,
-			terms, is_active, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-		s.ID, s.BranchID, s.Code, s.NameEn, s.NameAr, s.ContactName, s.ContactPhone, s.ContactEmail,
-		s.Terms, s.IsActive, s.CreatedAt, s.UpdatedAt,
+			id, branch_id, code, name_en, name_ar, category, contact_name, contact_phone, contact_email,
+			emergency_phone, terms, integration_type, environment, api_base_url, webhook_url, health_status,
+			health_latency_ms, health_checked_at, health_note, payment_model, currency, deposit_balance,
+			credit_limit, credit_used, low_balance_threshold, payment_terms, markups, regions, free_cancel_hours,
+			contract_start, contract_end, is_active, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,
+			$26,$27,$28,$29,$30,$31,$32,$33,$34)`,
+		s.ID, s.BranchID, s.Code, s.NameEn, s.NameAr, s.Category, s.ContactName, s.ContactPhone, s.ContactEmail,
+		s.EmergencyPhone, s.Terms, s.Integration.Type, s.Integration.Environment, s.Integration.BaseURL,
+		s.Integration.WebhookURL, s.Health.Status, s.Health.LatencyMs, s.Health.CheckedAt, s.Health.Note,
+		s.Finance.Model, s.Finance.Currency, s.Finance.DepositBalance, s.Finance.CreditLimit, s.Finance.CreditUsed,
+		s.Finance.LowBalanceThreshold, s.Finance.PaymentTerms, markups, s.Regions, s.FreeCancelHours,
+		s.ContractStart, s.ContractEnd, s.IsActive, s.CreatedAt, s.UpdatedAt,
 	)
-	return err
+	return mapUniqueCode(err)
 }
 
+// Update writes every editable column; the code and credentials are not
+// changed here.
 func (r *Repository) Update(ctx context.Context, s *domain.Supplier) error {
+	markups, err := markupsJSON(s.Markups)
+	if err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	clause, args, err := pgscope.Clause(ctx, supplierScope, []any{
-		s.ID, s.NameEn, s.NameAr, s.ContactName, s.ContactPhone, s.ContactEmail,
-		s.Terms, s.IsActive, s.UpdatedAt,
+		s.ID, s.NameEn, s.NameAr, s.Category, s.ContactName, s.ContactPhone, s.ContactEmail, s.EmergencyPhone,
+		s.Terms, s.Integration.Type, s.Integration.Environment, s.Integration.BaseURL, s.Integration.WebhookURL,
+		s.Health.Status, s.Health.LatencyMs, s.Health.CheckedAt, s.Health.Note, s.Finance.Model, s.Finance.Currency,
+		s.Finance.DepositBalance, s.Finance.CreditLimit, s.Finance.CreditUsed, s.Finance.LowBalanceThreshold,
+		s.Finance.PaymentTerms, markups, s.Regions, s.FreeCancelHours, s.ContractStart, s.ContractEnd,
+		s.IsActive, s.UpdatedAt,
 	})
 	if err != nil {
 		return err
 	}
 	ct, err := q.Exec(ctx, `
 		UPDATE suppliers SET
-			name_en=$2, name_ar=$3, contact_name=$4, contact_phone=$5, contact_email=$6,
-			terms=$7, is_active=$8, updated_at=$9
+			name_en=$2, name_ar=$3, category=$4, contact_name=$5, contact_phone=$6, contact_email=$7,
+			emergency_phone=$8, terms=$9, integration_type=$10, environment=$11, api_base_url=$12, webhook_url=$13,
+			health_status=$14, health_latency_ms=$15, health_checked_at=$16, health_note=$17, payment_model=$18,
+			currency=$19, deposit_balance=$20, credit_limit=$21, credit_used=$22, low_balance_threshold=$23,
+			payment_terms=$24, markups=$25, regions=$26, free_cancel_hours=$27, contract_start=$28,
+			contract_end=$29, is_active=$30, updated_at=$31
 		WHERE id=$1`+clause, args...)
 	if err != nil {
 		return err
@@ -97,56 +176,53 @@ func (r *Repository) Update(ctx context.Context, s *domain.Supplier) error {
 	return nil
 }
 
-func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Supplier, error) {
+func (r *Repository) find(ctx context.Context, id uuid.UUID, lock string) (*domain.Supplier, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	clause, args, err := pgscope.Clause(ctx, supplierScope, []any{id})
+	clause, args, err := pgscope.Clause(ctx, parentScope, []any{id})
 	if err != nil {
 		return nil, err
 	}
-	row := q.QueryRow(ctx, `
-		SELECT id, branch_id, code, name_en, name_ar, contact_name, contact_phone, contact_email,
-			terms, is_active, created_at, updated_at
-		FROM suppliers WHERE id=$1`+clause, args...)
-	var s domain.Supplier
-	err = row.Scan(
-		&s.ID, &s.BranchID, &s.Code, &s.NameEn, &s.NameAr, &s.ContactName, &s.ContactPhone, &s.ContactEmail,
-		&s.Terms, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
-	)
+	s, err := scanSupplier(q.QueryRow(ctx, `SELECT `+supplierColumns+` FROM suppliers s WHERE s.id=$1`+clause+lock, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
 	}
-	return &s, err
+	return s, err
+}
+
+func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Supplier, error) {
+	return r.find(ctx, id, "")
+}
+
+func (r *Repository) FindForUpdate(ctx context.Context, id uuid.UUID) (*domain.Supplier, error) {
+	s, err := r.find(ctx, id, " FOR UPDATE")
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, shared.NewNotFound("supplier")
+	}
+	return s, err
 }
 
 func (r *Repository) List(ctx context.Context, branchID *uuid.UUID, activeOnly bool) ([]domain.Supplier, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	clause, args, err := pgscope.Clause(ctx, supplierScope, []any{branchID})
+	clause, args, err := pgscope.Clause(ctx, parentScope, []any{branchID})
 	if err != nil {
 		return nil, err
 	}
-	query := `
-		SELECT id, branch_id, code, name_en, name_ar, contact_name, contact_phone, contact_email,
-			terms, is_active, created_at, updated_at
-		FROM suppliers WHERE ($1::uuid IS NULL OR branch_id=$1)` + clause
+	query := `SELECT ` + supplierColumns + ` FROM suppliers s WHERE ($1::uuid IS NULL OR s.branch_id=$1)` + clause
 	if activeOnly {
-		query += ` AND is_active=TRUE`
+		query += ` AND s.is_active=TRUE`
 	}
-	query += ` ORDER BY code`
-	rows, err := q.Query(ctx, query, args...)
+	rows, err := q.Query(ctx, query+` ORDER BY s.code`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []domain.Supplier
 	for rows.Next() {
-		var s domain.Supplier
-		if err := rows.Scan(
-			&s.ID, &s.BranchID, &s.Code, &s.NameEn, &s.NameAr, &s.ContactName, &s.ContactPhone, &s.ContactEmail,
-			&s.Terms, &s.IsActive, &s.CreatedAt, &s.UpdatedAt,
-		); err != nil {
+		s, err := scanSupplier(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, s)
+		out = append(out, *s)
 	}
 	return out, rows.Err()
 }

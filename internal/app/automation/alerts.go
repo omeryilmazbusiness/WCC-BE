@@ -25,6 +25,8 @@ import (
 const (
 	ledgerTargetBehind = "alert.target_behind"
 	ledgerPaymentDue   = "alert.payment_due"
+	ledgerSupplierLow  = "alert.supplier_low_balance"
+	ledgerSupplierEnd  = "alert.supplier_contract"
 	ledgerPaymentLate  = "alert.payment_overdue"
 	ledgerLeadIdle     = "alert.lead_idle"
 	ledgerPassport     = "alert.passport_expiry"
@@ -152,6 +154,60 @@ func (a *Alerts) SupplierConfirmed(ctx context.Context, link *supplierdomain.Lin
 	}
 	_, err := a.tasks.CloseByRule(ctx, taskdomain.RuleSupplierConfirm, apptask.RelatedSupplierLink, link.ID, "confirmed")
 	return err
+}
+
+// SupplierLowBalance implements supplier.FundsAlerts; at most once a day per
+// supplier, critical once the account is exhausted (closed to search).
+func (a *Alerts) SupplierLowBalance(ctx context.Context, sup *supplierdomain.Supplier) error {
+	if sup == nil {
+		return nil
+	}
+	key := sup.ID.String()
+	if sup.Finance.Exhausted() {
+		key += ":exhausted"
+	}
+	return a.once(ctx, ledgerSupplierLow, key, a.today(), func(ctx context.Context) error {
+		avail, _ := sup.Finance.Available()
+		id := sup.ID
+		in := appnotification.EmitInput{
+			Kind: notificationdomain.KindSupplierLowBalance, Title: "Supplier balance low: " + supplierLabel(sup),
+			Body:       fmt.Sprintf("%s available, threshold %s", shared.FormatMinor(avail, sup.Finance.Currency), shared.FormatMinor(sup.Finance.LowBalanceThreshold, sup.Finance.Currency)),
+			EntityType: "supplier", EntityID: &id, HrefHint: "/suppliers/" + id.String() + "?tab=finance",
+		}
+		if sup.Finance.Exhausted() {
+			in.Title = "Supplier closed to search: " + supplierLabel(sup)
+			in.Body = "Deposit or credit line exhausted; top up or settle to reopen"
+			in.Severity = notificationdomain.SeverityCritical
+		}
+		_, err := a.notify.EmitToRoles(ctx, sup.BranchID, financeRoles, in)
+		return err
+	})
+}
+
+// SupplierContractExpiring implements supplier.FundsAlerts.
+func (a *Alerts) SupplierContractExpiring(ctx context.Context, sup *supplierdomain.Supplier, daysLeft int) error {
+	if sup == nil || sup.ContractEnd == nil {
+		return nil
+	}
+	return a.once(ctx, ledgerSupplierEnd, sup.ID.String(), a.today(), func(ctx context.Context) error {
+		id := sup.ID
+		_, err := a.notify.EmitToRoles(ctx, sup.BranchID, operationsRoles, appnotification.EmitInput{
+			Kind: notificationdomain.KindSupplierContract, Title: "Supplier contract ending: " + supplierLabel(sup),
+			Body:       fmt.Sprintf("Ends on %s (%d days left)", sup.ContractEnd.UTC().Format(time.DateOnly), daysLeft),
+			EntityType: "supplier", EntityID: &id, HrefHint: "/suppliers/" + id.String() + "?tab=scope",
+		})
+		return err
+	})
+}
+
+func supplierLabel(sup *supplierdomain.Supplier) string {
+	if sup.NameEn != "" {
+		return sup.NameEn
+	}
+	if sup.NameAr != "" {
+		return sup.NameAr
+	}
+	return sup.Code
 }
 
 // VisaAwaitingDecision implements visa.FollowUps.

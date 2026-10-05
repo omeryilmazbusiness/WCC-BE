@@ -82,6 +82,7 @@ func TestMatchRuleMatrixComplete(t *testing.T) {
 		KindMessageSLA, KindLeadNoFollowUp, KindTaskOverdue, KindTaskEscalated,
 		KindPaymentOverdue, KindDocumentMissing, KindDocumentExpiring,
 		KindTargetBehind, KindIntegrationDown, KindBookingConfirmed, KindSupplierUnconfirmed,
+		KindSupplierLowBalance, KindSupplierContract,
 	}
 	for _, k := range kinds {
 		if MatchRule(k) == nil {
