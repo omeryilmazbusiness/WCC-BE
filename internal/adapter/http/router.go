@@ -248,6 +248,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 
 			r.Route("/bookings", func(r chi.Router) {
 				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/", h.Booking.List)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/stats", h.Booking.Stats)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/", h.Booking.Create)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}", h.Booking.Get)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Patch("/{id}", h.Booking.Update)
@@ -265,6 +266,19 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Put("/{id}/line-items", h.Booking.SetLineItems)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/checklist", h.Booking.ListChecklist)
 				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Patch("/{id}/checklist/{itemId}", h.Booking.UpdateChecklist)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Patch("/{id}/profile", h.Booking.UpdateProfile)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/hold/extend", h.Booking.ExtendHold)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/cancellation-quote", h.Booking.CancellationQuote)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/notes", h.Booking.ListNotes)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/notes", h.Booking.AddNote)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Delete("/{id}/notes/{noteId}", h.Booking.DeleteNote)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/changes", h.Booking.ListChanges)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/changes", h.Booking.RequestChange)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/changes/{changeId}/resolve", h.Booking.ResolveChange)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsRead)).Get("/{id}/activity", h.Booking.Activity)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite)).Post("/{id}/shares", h.Booking.RecordShare)
+				r.With(middleware.RequirePermission(platformauth.PermBookingsWrite), middleware.RequirePermission(platformauth.PermPaymentsWrite)).
+					Post("/{id}/payment-link", h.Booking.CreatePaymentLink)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/{id}/payments", h.Payment.ListByBooking)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/{id}/financial-summary", h.Payment.FinancialSummary)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/{id}/payment-schedules", h.Payment.ListSchedules)

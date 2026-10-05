@@ -269,6 +269,8 @@ func (m *modules) build() error {
 	m.documents.SetExpiryAlerts(alerts)
 	m.documents.SetRunLedger(ledger)
 	m.bookings.SetDocReadiness(m.documents)
+	m.bookings.SetCollabStore(bookingRepo)
+	m.bookings.SetPaymentLinkTemplate(cfg.Payments.LinkURLTemplate)
 	m.lifecycle = appbooking.NewLifecycle(m.bookings, taskSeeder)
 
 	m.visas = appvisa.NewService(pgvisa.NewRepository(pool), txm)

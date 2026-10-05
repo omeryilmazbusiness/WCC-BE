@@ -23,6 +23,14 @@ type Config struct {
 	Log      LogConfig
 	FX       FXConfig
 	Flights  FlightsConfig
+	Payments PaymentsConfig
+}
+
+// PaymentsConfig configures customer payment links. LinkURLTemplate is the
+// hosted (3-D Secure) checkout URL of the payment provider with {ref},
+// {amount}, {currency} and {booking_id} placeholders; empty disables links.
+type PaymentsConfig struct {
+	LinkURLTemplate string
 }
 
 // FlightsConfig configures the flight finder (Travelpayouts Data API). An
@@ -247,6 +255,9 @@ func Load() (Config, error) {
 			SecretKey: getEnv("S3_SECRET_KEY", "minioadmin"),
 			UseSSL:    getBool("S3_USE_SSL", false),
 			PublicURL: getEnv("S3_PUBLIC_URL", "http://localhost:9000"),
+		},
+		Payments: PaymentsConfig{
+			LinkURLTemplate: getEnv("PAYMENT_LINK_URL_TEMPLATE", ""),
 		},
 		Log: LogConfig{
 			Level:  getEnv("LOG_LEVEL", "info"),

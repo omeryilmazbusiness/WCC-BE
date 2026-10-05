@@ -60,6 +60,24 @@ func (p *Passports) Open(table string, id uuid.UUID, enc, legacy string) (string
 	return p.cipher.Decrypt(enc, aad(table, id))
 }
 
+// SealNationalID encrypts a national identity number (e.g. TCKN). It is
+// write-only: reads expose the clear last four characters, never the
+// plaintext, so there is no Open counterpart.
+func (p *Passports) SealNationalID(table string, id uuid.UUID, plain string) (enc, last4 string, err error) {
+	n := shared.NormalizePassport(plain)
+	if n == "" {
+		return "", "", nil
+	}
+	enc, err = p.cipher.Encrypt(n, table+".national_id:"+id.String())
+	if err != nil {
+		return "", "", err
+	}
+	if len(n) > 4 {
+		n = n[len(n)-4:]
+	}
+	return enc, n, nil
+}
+
 // Hash is the blind index used for exact passport lookups; "" never matches.
 func (p *Passports) Hash(plain string) string {
 	n := shared.NormalizePassport(plain)

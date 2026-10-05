@@ -36,6 +36,14 @@ func bookingSnapshot(b *domain.Booking) map[string]any {
 		"discount_amt": b.DiscountAmt, "tax_amt": b.TaxAmt, "fee_amt": b.FeeAmt, "cost_amt": b.CostAmt, "collected_amt": b.CollectedAmt,
 		"balance_amt": b.BalanceAmt, "currency": b.Currency, "notes": b.Notes, "owner_id": b.OwnerID,
 		"departure_id": b.DepartureID, "customer_id": b.CustomerID,
+		"pnr": b.PNR, "service_type": b.ServiceType, "supplier_source": b.SupplierSource, "channel": b.Channel,
+	}
+}
+
+func profileSnapshot(p domain.Profile) map[string]any {
+	return map[string]any{
+		"pnr": p.PNR, "service_type": p.ServiceType, "supplier_source": p.SupplierSource,
+		"channel": p.Channel, "summary": p.Summary, "company_name": p.CompanyName,
 	}
 }
 
@@ -46,6 +54,8 @@ func participantSnapshot(p *domain.Participant) map[string]any {
 	}
 	m := map[string]any{
 		"full_name": p.FullName, "nationality": p.Nationality, "passport_on_file": !p.PassportMissing(),
+		"gender": p.Gender, "health_ok": p.HealthOK,
+		"national_id_on_file": p.NationalID != "" || p.NationalIDLast4 != "",
 	}
 	if p.DateOfBirth != nil {
 		m["date_of_birth"] = p.DateOfBirth.Format("2006-01-02")

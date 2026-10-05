@@ -31,6 +31,23 @@ type createRequest struct {
 	DiscountAmt int64      `json:"discount_amt"`
 	Currency    string     `json:"currency"`
 	Notes       string     `json:"notes"`
+	profileRequest
+}
+
+type profileRequest struct {
+	PNR            string `json:"pnr"`
+	ServiceType    string `json:"service_type"`
+	SupplierSource string `json:"supplier_source"`
+	Channel        string `json:"channel"`
+	Summary        string `json:"summary"`
+	CompanyName    string `json:"company_name"`
+}
+
+func (p profileRequest) profile() domain.Profile {
+	return domain.Profile{
+		PNR: p.PNR, ServiceType: p.ServiceType, SupplierSource: p.SupplierSource,
+		Channel: p.Channel, Summary: p.Summary, CompanyName: p.CompanyName,
+	}
 }
 
 type updateRequest struct {
@@ -53,6 +70,9 @@ type participantRequest struct {
 	PassportNo  *string `json:"passport_no"`
 	Nationality string  `json:"nationality"`
 	DateOfBirth *string `json:"date_of_birth"`
+	Gender      string  `json:"gender"`
+	NationalID  *string `json:"national_id"`
+	HealthOK    bool    `json:"health_ok"`
 }
 
 func newPassport(p *string) string {
@@ -88,6 +108,17 @@ func mapBooking(b *domain.Booking, fa fieldAccess) map[string]any {
 		holdExpiresAt = b.HoldExpiresAt.UTC().Format(time.RFC3339)
 	}
 	return map[string]any{
+		"ref_code":            domain.RefCode(b.RefNo),
+		"pnr":                 b.PNR,
+		"service_type":        b.ServiceType,
+		"supplier_source":     b.SupplierSource,
+		"channel":             b.Channel,
+		"summary":             b.Summary,
+		"company_name":        b.CompanyName,
+		"ticket_status":       b.TicketStatus(),
+		"payment_status":      b.PaymentStatus(),
+		"reissue_count":       b.ReissueCount,
+		"info":                mapInfo(b.Info),
 		"id":                  b.ID,
 		"branch_id":           b.BranchID,
 		"customer_id":         b.CustomerID,
@@ -116,6 +147,37 @@ func mapBooking(b *domain.Booking, fa fieldAccess) map[string]any {
 	}
 }
 
+func day(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return t.Format("2006-01-02")
+}
+
+func mapInfo(i domain.Info) map[string]any {
+	return map[string]any{
+		"customer_name":      i.CustomerName,
+		"customer_name_ar":   i.CustomerNameAr,
+		"owner_name":         i.OwnerName,
+		"package_id":         i.PackageID,
+		"package_code":       i.PackageCode,
+		"package_name":       i.PackageName,
+		"package_name_ar":    i.PackageNameAr,
+		"package_kind":       i.PackageKind,
+		"departure_code":     i.DepartureCode,
+		"depart_date":        day(i.DepartDate),
+		"return_date":        day(i.ReturnDate),
+		"makkah_hotel":       i.MakkahHotel,
+		"madinah_hotel":      i.MadinahHotel,
+		"flight_routing":     i.FlightRouting,
+		"participants_count": i.ParticipantsCount,
+		"refunded_amt":       i.RefundedAmt,
+		"overdue_schedule":   i.OverdueSchedule,
+		"visa_pending":       i.VisaPending,
+		"open_changes":       i.OpenChanges,
+	}
+}
+
 // mapParticipant always masks the passport; the full number is only
 // disclosed through the audited reveal endpoint (T-261).
 func mapParticipant(p *domain.Participant) map[string]any {
@@ -127,14 +189,18 @@ func mapParticipant(p *domain.Participant) map[string]any {
 		dob = p.DateOfBirth.Format("2006-01-02")
 	}
 	return map[string]any{
-		"id":             p.ID,
-		"booking_id":     p.BookingID,
-		"full_name":      p.FullName,
-		"passport_no":    shared.MaskedPassport(p.PassportNo),
-		"passport_last4": shared.PassportLast4(p.PassportNo),
-		"nationality":    p.Nationality,
-		"date_of_birth":  dob,
-		"created_at":     p.CreatedAt.UTC().Format(time.RFC3339Nano),
+		"id":                p.ID,
+		"booking_id":        p.BookingID,
+		"full_name":         p.FullName,
+		"passport_no":       shared.MaskedPassport(p.PassportNo),
+		"passport_last4":    shared.PassportLast4(p.PassportNo),
+		"nationality":       p.Nationality,
+		"date_of_birth":     dob,
+		"gender":            p.Gender,
+		"national_id":       shared.MaskPassportLast4(p.NationalIDLast4),
+		"national_id_last4": p.NationalIDLast4,
+		"health_ok":         p.HealthOK,
+		"created_at":        p.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }
 
@@ -200,7 +266,7 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		CustomerID: req.CustomerID, DepartureID: req.DepartureID,
 		LeadID: req.LeadID, PaxCount: req.PaxCount, TotalAmount: req.TotalAmount,
 		DiscountAmt: req.DiscountAmt, Currency: req.Currency, Notes: req.Notes,
-		CanDiscount: fa.discount,
+		CanDiscount: fa.discount, Profile: req.profile(),
 	})
 	if err != nil {
 		response.Error(w, err)
@@ -209,61 +275,88 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusCreated, mapBooking(b, fa))
 }
 
-func (h Handler) List(w http.ResponseWriter, r *http.Request) {
-	branchID, err := request.OptionalUUID(r, "branch_id")
-	if err != nil {
-		response.Error(w, err)
-		return
-	}
+// parseListInput reads the list / stats query. Dates are YYYY-MM-DD
+// calendar days; "to" is inclusive and converted to an exclusive bound.
+// day_end (RFC 3339) is the end of the caller's local day.
+func parseListInput(r *http.Request) (appsvc.ListInput, error) {
 	q := r.URL.Query()
-	in := appsvc.ListInput{BranchID: branchID, Status: domain.Status(q.Get("status")), Query: q.Get("q")}
-	if v := q.Get("customer_id"); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			response.Error(w, shared.NewValidation("invalid customer_id"))
-			return
-		}
-		in.CustomerID = &id
+	in := appsvc.ListInput{
+		Status: domain.Status(q.Get("status")), Query: q.Get("q"),
+		ServiceType: q.Get("service_type"), Channel: q.Get("channel"),
+		Segment: domain.Segment(q.Get("segment")), DateField: domain.DateField(q.Get("date_field")),
+		Sort: q.Get("sort"),
 	}
-	if v := q.Get("departure_id"); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			response.Error(w, shared.NewValidation("invalid departure_id"))
-			return
-		}
-		in.DepartureID = &id
+	var err error
+	ids := []struct {
+		name string
+		dst  **uuid.UUID
+	}{
+		{"branch_id", &in.BranchID}, {"customer_id", &in.CustomerID}, {"departure_id", &in.DepartureID},
+		{"package_id", &in.PackageID}, {"owner_id", &in.OwnerID}, {"lead_id", &in.LeadID},
 	}
-	if v := q.Get("package_id"); v != "" {
-		id, err := uuid.Parse(v)
-		if err != nil {
-			response.Error(w, shared.NewValidation("invalid package_id"))
-			return
+	for _, p := range ids {
+		if *p.dst, err = request.OptionalUUID(r, p.name); err != nil {
+			return in, err
 		}
-		in.PackageID = &id
 	}
-	if v := q.Get("owner_id"); v != "" {
-		id, err := uuid.Parse(v)
+	if v := q.Get("from"); v != "" {
+		t, err := time.Parse("2006-01-02", v)
 		if err != nil {
-			response.Error(w, shared.NewValidation("invalid owner_id"))
-			return
+			return in, shared.NewValidation("from must be YYYY-MM-DD")
 		}
-		in.OwnerID = &id
+		in.From = &t
 	}
-	if v := q.Get("lead_id"); v != "" {
-		id, err := uuid.Parse(v)
+	if v := q.Get("to"); v != "" {
+		t, err := time.Parse("2006-01-02", v)
 		if err != nil {
-			response.Error(w, shared.NewValidation("invalid lead_id"))
-			return
+			return in, shared.NewValidation("to must be YYYY-MM-DD")
 		}
-		in.LeadID = &id
+		t = t.AddDate(0, 0, 1)
+		in.To = &t
+	}
+	if v := q.Get("day_end"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return in, shared.NewValidation("day_end must be RFC3339")
+		}
+		in.DayEnd = t.UTC()
 	}
 	if v := q.Get("limit"); v != "" {
 		n, _ := strconv.Atoi(v)
+		if n > 200 {
+			n = 200
+		}
 		in.Limit = n
 	}
 	if v := q.Get("offset"); v != "" {
 		n, _ := strconv.Atoi(v)
+		if n < 0 {
+			n = 0
+		}
 		in.Offset = n
+	}
+	return in, nil
+}
+
+func (h Handler) Stats(w http.ResponseWriter, r *http.Request) {
+	in, err := parseListInput(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	st, err := h.Svc.Stats(r.Context(), in)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, st)
+}
+
+func (h Handler) List(w http.ResponseWriter, r *http.Request) {
+	in, err := parseListInput(r)
+	if err != nil {
+		response.Error(w, err)
+		return
 	}
 	items, total, err := h.Svc.List(r.Context(), in)
 	if err != nil {
@@ -434,8 +527,13 @@ func (h Handler) AddParticipant(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid date_of_birth"))
 		return
 	}
+	nid := ""
+	if req.NationalID != nil {
+		nid = *req.NationalID
+	}
 	p, err := h.Svc.AddParticipant(r.Context(), id, appsvc.AddParticipantInput{
 		FullName: req.FullName, PassportNo: newPassport(req.PassportNo), Nationality: req.Nationality, DateOfBirth: dob,
+		Gender: req.Gender, NationalID: nid, HealthOK: req.HealthOK,
 	})
 	if err != nil {
 		response.Error(w, err)
@@ -467,6 +565,7 @@ func (h Handler) UpdateParticipant(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := h.Svc.UpdateParticipant(r.Context(), id, pid, appsvc.UpdateParticipantInput{
 		FullName: req.FullName, PassportNo: req.PassportNo, Nationality: req.Nationality, DateOfBirth: dob,
+		Gender: req.Gender, NationalID: req.NationalID, HealthOK: req.HealthOK,
 	})
 	if err != nil {
 		response.Error(w, err)

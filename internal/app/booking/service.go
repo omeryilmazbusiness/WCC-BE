@@ -29,6 +29,8 @@ type CreateInput struct {
 	OwnerID     uuid.UUID
 	// CanDiscount is set for callers holding bookings.discount.
 	CanDiscount bool
+	// Profile is optional; blanks take the defaults (package, agent).
+	Profile domain.Profile
 }
 
 type UpdateInput struct {
@@ -46,6 +48,9 @@ type AddParticipantInput struct {
 	PassportNo  string
 	Nationality string
 	DateOfBirth *time.Time
+	Gender      string
+	NationalID  string
+	HealthOK    bool
 }
 
 type UpdateParticipantInput struct {
@@ -54,6 +59,24 @@ type UpdateParticipantInput struct {
 	PassportNo  *string
 	Nationality string
 	DateOfBirth *time.Time
+	Gender      string
+	// NationalID nil or masked keeps the stored number.
+	NationalID *string
+	HealthOK   bool
+}
+
+// participantExtras validates the gender / national id pair shared by
+// add and update; a nil id means keep.
+func participantExtras(gender string, nationalID *string) (string, string, error) {
+	gender = strings.TrimSpace(gender)
+	if !domain.ValidGender(gender) {
+		return "", "", shared.NewValidation("gender must be male, female or blank")
+	}
+	nid, _ := shared.PassportUpdate(nationalID)
+	if !domain.ValidNationalID(nid) {
+		return "", "", shared.NewValidation("national_id must be 5-20 letters or digits")
+	}
+	return gender, nid, nil
 }
 
 type LineItemInput struct {
@@ -78,8 +101,46 @@ type ListInput struct {
 	LeadID      *uuid.UUID
 	Status      domain.Status
 	Query       string
-	Limit       int
-	Offset      int
+	ServiceType string
+	Channel     string
+	Segment     domain.Segment
+	DateField   domain.DateField
+	// From is inclusive and To exclusive.
+	From   *time.Time
+	To     *time.Time
+	DayEnd time.Time
+	Sort   string
+	Limit  int
+	Offset int
+}
+
+func (in ListInput) validate() error {
+	switch {
+	case in.ServiceType != "" && !oneOfStr(in.ServiceType, domain.ServiceTypes()):
+		return shared.NewValidation("invalid service_type")
+	case in.Channel != "" && !oneOfStr(in.Channel, domain.Channels()):
+		return shared.NewValidation("invalid channel")
+	case !in.Segment.Valid():
+		return shared.NewValidation("invalid segment")
+	case in.DateField != "" && !in.DateField.Valid():
+		return shared.NewValidation("invalid date_field")
+	case !domain.ValidSort(in.Sort):
+		return shared.NewValidation("invalid sort")
+	case in.Status != "" && !in.Status.Valid():
+		return shared.NewValidation("invalid status")
+	case in.From != nil && in.To != nil && !in.To.After(*in.From):
+		return shared.NewValidation("date range end must be after its start")
+	}
+	return nil
+}
+
+func oneOfStr(v string, set []string) bool {
+	for _, s := range set {
+		if s == v {
+			return true
+		}
+	}
+	return false
 }
 
 type Service struct {
@@ -90,6 +151,8 @@ type Service struct {
 	bus        *events.Bus
 	audit      audit.Recorder
 	docs       DocReadiness
+	collab     domain.CollabStore
+	payLink    string
 	now        func() time.Time
 	loc        *time.Location
 }
@@ -153,6 +216,10 @@ func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Book
 	if in.DiscountAmt < 0 {
 		return nil, shared.NewValidation("discount_amt must be >= 0")
 	}
+	profile, err := in.Profile.Normalize()
+	if err != nil {
+		return nil, err
+	}
 	scope, err := access.Require(ctx)
 	if err != nil {
 		return nil, err
@@ -182,6 +249,12 @@ func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Book
 		StatusChangedAt: now,
 		CreatedAt:       now,
 		UpdatedAt:       now,
+		PNR:             profile.PNR,
+		ServiceType:     profile.ServiceType,
+		SupplierSource:  profile.SupplierSource,
+		Channel:         profile.Channel,
+		Summary:         profile.Summary,
+		CompanyName:     profile.CompanyName,
 	}
 	b.RecomputeBalance()
 
@@ -199,6 +272,9 @@ func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Book
 	}
 
 	s.bus.Publish(ctx, events.Event{Name: events.BookingDrafted, Payload: b})
+	if full, err := s.repo.FindByID(ctx, b.ID); err == nil {
+		return full, nil
+	}
 	return b, nil
 }
 
@@ -213,19 +289,35 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Booking, error
 // List pins the branch filter to the caller's scope; the repository also
 // restricts owners, so in.OwnerID can only narrow visibility.
 func (s *Service) List(ctx context.Context, in ListInput) ([]domain.Booking, int, error) {
-	scope, err := access.Require(ctx)
+	f, err := s.listFilter(ctx, in)
 	if err != nil {
 		return nil, 0, err
+	}
+	return s.repo.List(ctx, f)
+}
+
+func (s *Service) listFilter(ctx context.Context, in ListInput) (domain.ListFilter, error) {
+	if err := in.validate(); err != nil {
+		return domain.ListFilter{}, err
+	}
+	scope, err := access.Require(ctx)
+	if err != nil {
+		return domain.ListFilter{}, err
 	}
 	branchID, err := scope.ResolveBranch(in.BranchID)
 	if err != nil {
-		return nil, 0, err
+		return domain.ListFilter{}, err
 	}
-	f := domain.ListFilter{
+	dateField := in.DateField
+	if dateField == "" {
+		dateField = domain.DateCreated
+	}
+	return domain.ListFilter{
 		BranchID: branchID, CustomerID: in.CustomerID, DepartureID: in.DepartureID, PackageID: in.PackageID, OwnerID: in.OwnerID,
-		LeadID: in.LeadID, Status: in.Status, Query: in.Query, Limit: in.Limit, Offset: in.Offset,
-	}
-	return s.repo.List(ctx, f)
+		LeadID: in.LeadID, Status: in.Status, Query: strings.TrimSpace(in.Query), ServiceType: in.ServiceType,
+		Channel: in.Channel, Segment: in.Segment, DateField: dateField, From: in.From, To: in.To,
+		Now: s.now(), DayEnd: in.DayEnd, Sort: in.Sort, Limit: in.Limit, Offset: in.Offset,
+	}, nil
 }
 
 func (s *Service) Update(ctx context.Context, id uuid.UUID, in UpdateInput) (*domain.Booking, error) {
@@ -274,9 +366,13 @@ func (s *Service) AddParticipant(ctx context.Context, bookingID uuid.UUID, in Ad
 	if name == "" {
 		return nil, shared.NewValidation("full_name is required")
 	}
+	gender, nid, err := participantExtras(in.Gender, &in.NationalID)
+	if err != nil {
+		return nil, err
+	}
 	var out *domain.Participant
 	var evs []events.Event
-	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		b, err := s.repo.FindByID(ctx, bookingID)
 		if err != nil {
 			return shared.NewNotFound("booking")
@@ -298,6 +394,9 @@ func (s *Service) AddParticipant(ctx context.Context, bookingID uuid.UUID, in Ad
 			PassportNo:  strings.TrimSpace(in.PassportNo),
 			Nationality: strings.TrimSpace(in.Nationality),
 			DateOfBirth: in.DateOfBirth,
+			Gender:      gender,
+			NationalID:  nid,
+			HealthOK:    in.HealthOK,
 			CreatedAt:   s.now(),
 		}
 		if err := s.repo.AddParticipant(ctx, p); err != nil {
@@ -321,9 +420,13 @@ func (s *Service) UpdateParticipant(ctx context.Context, bookingID, participantI
 	if name == "" {
 		return nil, shared.NewValidation("full_name is required")
 	}
+	gender, nid, err := participantExtras(in.Gender, in.NationalID)
+	if err != nil {
+		return nil, err
+	}
 	var out *domain.Participant
 	var evs []events.Event
-	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		b, err := s.repo.FindByID(ctx, bookingID)
 		if err != nil {
 			return shared.NewNotFound("booking")
@@ -352,6 +455,9 @@ func (s *Service) UpdateParticipant(ctx context.Context, bookingID, participantI
 		}
 		found.Nationality = strings.TrimSpace(in.Nationality)
 		found.DateOfBirth = in.DateOfBirth
+		found.Gender = gender
+		found.NationalID = nid
+		found.HealthOK = in.HealthOK
 		if err := s.repo.UpdateParticipant(ctx, found); err != nil {
 			return err
 		}

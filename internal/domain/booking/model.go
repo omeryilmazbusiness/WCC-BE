@@ -65,6 +65,53 @@ type Booking struct {
 	ReadyForced bool
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+
+	// RefNo is the database-assigned sequence behind RefCode.
+	RefNo          int64
+	PNR            string
+	ServiceType    string
+	SupplierSource string
+	Channel        string
+	Summary        string
+	CompanyName    string
+	// ReissueCount counts completed change requests.
+	ReissueCount int
+
+	// Info is read-only context joined in by the repository.
+	Info Info
+}
+
+// Info is display context resolved from related records at read time.
+type Info struct {
+	CustomerName      string
+	CustomerNameAr    string
+	OwnerName         string
+	PackageID         *uuid.UUID
+	PackageCode       string
+	PackageName       string
+	PackageNameAr     string
+	PackageKind       string
+	DepartureCode     string
+	DepartDate        *time.Time
+	ReturnDate        *time.Time
+	MakkahHotel       string
+	MadinahHotel      string
+	FlightRouting     string
+	ParticipantsCount int
+	RefundedAmt       int64
+	OverdueSchedule   bool
+	VisaPending       int
+	OpenChanges       int
+}
+
+// TicketStatus is the derived fulfilment status.
+func (b *Booking) TicketStatus() string {
+	return TicketStatus(b.Status, b.ReissueCount, b.Info.RefundedAmt)
+}
+
+// PaymentStatus is the derived collection status.
+func (b *Booking) PaymentStatus() string {
+	return PaymentStatus(b.TotalAmount, b.CollectedAmt, b.BalanceAmt, b.Info.OverdueSchedule)
 }
 
 // Subtotal is the item amount before discount, tax and fees.
@@ -84,7 +131,42 @@ type Participant struct {
 	PassportNo  string
 	Nationality string
 	DateOfBirth *time.Time
-	CreatedAt   time.Time
+	Gender      string
+	// NationalID (e.g. TCKN) is write-only: set it to store a new number,
+	// leave it blank to keep the stored one. Reads fill NationalIDLast4 only.
+	NationalID      string
+	NationalIDLast4 string
+	// HealthOK records that the vaccine / health form was verified.
+	HealthOK  bool
+	CreatedAt time.Time
+}
+
+const (
+	GenderMale   = "male"
+	GenderFemale = "female"
+)
+
+// ValidGender accepts male, female or blank (not recorded).
+func ValidGender(g string) bool {
+	return g == "" || g == GenderMale || g == GenderFemale
+}
+
+const MaxNationalIDLen = 20
+
+// ValidNationalID accepts blank (keep) or 5–20 letters and digits.
+func ValidNationalID(id string) bool {
+	if id == "" {
+		return true
+	}
+	if len(id) < 5 || len(id) > MaxNationalIDLen {
+		return false
+	}
+	for _, r := range id {
+		if !(r >= '0' && r <= '9' || r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z') {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *Participant) PassportMissing() bool {
@@ -129,10 +211,82 @@ type ListFilter struct {
 	OwnerID     *uuid.UUID
 	LeadID      *uuid.UUID
 	Status      Status
+	// Query matches PNR, booking reference, customer name/phone/email,
+	// passenger names and (exactly) passport numbers.
 	Query       string
-	Limit       int
-	Offset      int
+	ServiceType string
+	Channel     string
+	Segment     Segment
+	// DateField selects which date From/To bound: created, depart or return.
+	DateField DateField
+	From      *time.Time
+	To        *time.Time
+	// Now and DayEnd anchor time-relative segments (option_today).
+	Now    time.Time
+	DayEnd time.Time
+	Sort   string
+	Limit  int
+	Offset int
 }
+
+// Segment is a quick operations filter.
+type Segment string
+
+const (
+	SegmentAll         Segment = ""
+	SegmentOptionToday Segment = "option_today"
+	SegmentPaymentDue  Segment = "payment_due"
+	SegmentVisaPending Segment = "visa_pending"
+	SegmentOverdue     Segment = "overdue"
+	SegmentIssued      Segment = "issued"
+	SegmentCancelled   Segment = "cancelled"
+)
+
+func (s Segment) Valid() bool {
+	switch s {
+	case SegmentAll, SegmentOptionToday, SegmentPaymentDue, SegmentVisaPending, SegmentOverdue, SegmentIssued, SegmentCancelled:
+		return true
+	}
+	return false
+}
+
+type DateField string
+
+const (
+	DateCreated DateField = "created"
+	DateDepart  DateField = "depart"
+	DateReturn  DateField = "return"
+)
+
+func (d DateField) Valid() bool {
+	return d == DateCreated || d == DateDepart || d == DateReturn
+}
+
+const (
+	SortRecent = "recent"
+	SortTTL    = "ttl"
+	SortDepart = "depart"
+)
+
+func ValidSort(s string) bool {
+	return s == "" || s == SortRecent || s == SortTTL || s == SortDepart
+}
+
+// Stats are segment counts for the operations header.
+type Stats struct {
+	Active       int `json:"active"`
+	OptionToday  int `json:"option_today"`
+	OptionUrgent int `json:"option_urgent"`
+	PaymentDue   int `json:"payment_due"`
+	Overdue      int `json:"overdue"`
+	VisaPending  int `json:"visa_pending"`
+	Issued       int `json:"issued"`
+	Cancelled    int `json:"cancelled"`
+	Total        int `json:"total"`
+}
+
+// UrgentHoldWindow marks options expiring this soon as urgent.
+const UrgentHoldWindow = 2 * time.Hour
 
 // Readiness reports the travel-readiness gate for the ready status and
 // whether a manual confirm would currently pass its guards.
