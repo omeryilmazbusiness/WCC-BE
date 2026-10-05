@@ -7,6 +7,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/app/automation"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
+	financedomain "github.com/wodi-crm/wodi-crm-be/internal/domain/finance"
 	fxdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
 	paymentdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -31,6 +32,7 @@ func defaultSchedule(cfg config.Config) []worker.ScheduleEntry {
 		{Spec: "0 * * * *", Job: automation.JobPaymentDue},
 		{Spec: "35 * * * *", Job: automation.JobPaymentOverdue},
 		{Spec: "10 * * * *", Job: paymentdomain.JobSchedulesOverdue},
+		{Spec: "15 * * * *", Job: financedomain.JobAgenciesSweep},
 		{Spec: "20 * * * *", Job: automation.JobTargetRecompute},
 		{Spec: "25 * * * *", Job: automation.JobIdleLeads},
 		{Spec: "30 * * * *", Job: shared.JobReportGenerate, Queue: "low"},

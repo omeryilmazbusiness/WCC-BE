@@ -41,7 +41,10 @@ func (m *memRepo) Create(_ context.Context, s *domain.Supplier) error {
 	m.suppliers[s.ID] = *s
 	return nil
 }
-func (m *memRepo) Update(_ context.Context, s *domain.Supplier) error { m.suppliers[s.ID] = *s; return nil }
+func (m *memRepo) Update(_ context.Context, s *domain.Supplier) error {
+	m.suppliers[s.ID] = *s
+	return nil
+}
 func (m *memRepo) FindByID(_ context.Context, id uuid.UUID) (*domain.Supplier, error) {
 	s, ok := m.suppliers[id]
 	if !ok {
@@ -63,7 +66,9 @@ func (m *memRepo) List(_ context.Context, _ *uuid.UUID, _ bool) ([]domain.Suppli
 	}
 	return out, nil
 }
-func (m *memRepo) LoadCredentials(_ context.Context, id uuid.UUID) (string, error) { return m.creds[id], nil }
+func (m *memRepo) LoadCredentials(_ context.Context, id uuid.UUID) (string, error) {
+	return m.creds[id], nil
+}
 func (m *memRepo) StoreCredentials(_ context.Context, id uuid.UUID, sealed string) error {
 	m.creds[id] = sealed
 	return nil
@@ -87,7 +92,10 @@ func (m *memRepo) ListLedger(context.Context, uuid.UUID, int) ([]domain.LedgerEn
 func (m *memRepo) VolumeSince(context.Context, uuid.UUID, time.Time) (domain.Volume, error) {
 	return domain.Volume{}, nil
 }
-func (m *memRepo) AddUsage(_ context.Context, u *domain.Usage) error { m.usage = append(m.usage, *u); return nil }
+func (m *memRepo) AddUsage(_ context.Context, u *domain.Usage) error {
+	m.usage = append(m.usage, *u)
+	return nil
+}
 func (m *memRepo) MetricsSince(context.Context, uuid.UUID, time.Time) (domain.Metrics, error) {
 	var out domain.Metrics
 	for _, u := range m.usage {
@@ -96,8 +104,14 @@ func (m *memRepo) MetricsSince(context.Context, uuid.UUID, time.Time) (domain.Me
 	}
 	return out, nil
 }
-func (m *memRepo) CreateDispute(_ context.Context, d *domain.Dispute) error { m.disputes[d.ID] = *d; return nil }
-func (m *memRepo) UpdateDispute(_ context.Context, d *domain.Dispute) error { m.disputes[d.ID] = *d; return nil }
+func (m *memRepo) CreateDispute(_ context.Context, d *domain.Dispute) error {
+	m.disputes[d.ID] = *d
+	return nil
+}
+func (m *memRepo) UpdateDispute(_ context.Context, d *domain.Dispute) error {
+	m.disputes[d.ID] = *d
+	return nil
+}
 func (m *memRepo) FindDispute(_ context.Context, id uuid.UUID) (*domain.Dispute, error) {
 	d, ok := m.disputes[id]
 	if !ok {

@@ -26,6 +26,7 @@ import (
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
+	financehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/finance"
 	flighthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/flight"
 	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
@@ -121,6 +122,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Payment:      paymenthttp.Handler{Svc: m.payments, Promises: m.finance.Promises},
 		FX:           fxhttp.Handler{Svc: m.finance.FX},
 		FXLive:       liveHandler(m.finance.Live),
+		Finance:      financehttp.Handler{Hub: m.financeHub},
 		Target:       targethttp.Handler{Svc: m.targets},
 		Task:         taskhttp.Handler{Svc: m.tasks},
 		Dashboard:    dashboardhttp.Handler{Svc: m.dashboard},

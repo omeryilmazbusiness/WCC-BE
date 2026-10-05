@@ -20,6 +20,7 @@ import (
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
 	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
+	financehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/finance"
 	flighthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/flight"
 	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
@@ -88,6 +89,53 @@ type Handlers struct {
 	FX           fxhttp.Handler
 	FXLive       fxhttp.LiveHandler
 	Stream       streamhttp.Handler
+	Finance      financehttp.Handler
+}
+
+// financeRoutes mounts the finance hub under /v1/finance. Reads need
+// payments.read, money movements payments.write, and policy changes
+// (rates, agency status) payments.approve.
+func financeRoutes(r chi.Router, h financehttp.Handler) {
+	read := middleware.RequirePermission(platformauth.PermPaymentsRead)
+	write := middleware.RequirePermission(platformauth.PermPaymentsWrite)
+	approve := middleware.RequirePermission(platformauth.PermPaymentsApprove)
+
+	r.With(read).Get("/overview", h.Overview)
+
+	r.With(read).Get("/treasury/accounts", h.Accounts)
+	r.With(approve).Post("/treasury/accounts", h.CreateAccount)
+	r.With(approve).Put("/treasury/accounts/{id}", h.UpdateAccount)
+	r.With(write).Post("/treasury/accounts/{id}/movements", h.PostMovement)
+	r.With(write).Post("/treasury/accounts/{id}/feed", h.ImportFeed)
+	r.With(write).Post("/treasury/transfers", h.Transfer)
+	r.With(read).Get("/treasury/movements", h.Movements)
+	r.With(write).Post("/treasury/movements/{id}/match", h.MatchMovement)
+	r.With(write).Post("/treasury/movements/{id}/ignore", h.IgnoreMovement)
+	r.With(read).Get("/treasury/pos-stats", h.POSStats)
+
+	r.With(read).Get("/receivables", h.Receivables)
+	r.With(read).Get("/agencies", h.Agencies)
+	r.With(approve).Post("/agencies", h.CreateAgency)
+	r.With(approve).Put("/agencies/{id}", h.UpdateAgency)
+	r.With(approve).Put("/agencies/{id}/status", h.SetAgencyStatus)
+	r.With(write).Put("/agencies/{id}/bookings/{bookingId}", h.AssignBooking)
+	r.With(write).Delete("/agency-bookings/{bookingId}", h.UnassignBooking)
+
+	r.With(read).Get("/payables", h.Payables)
+	r.With(approve).Post("/payables/invoices/{id}/pay", h.PayInvoice)
+	r.With(approve).Post("/payables/suppliers/{id}/top-up", h.TopUpDeposit)
+
+	r.With(read).Get("/profitability", h.Profitability)
+	r.With(write).Put("/budgets/{id}", h.SetBudget)
+	r.With(read).Get("/settings", h.Settings)
+	r.With(approve).Put("/settings/rates", h.SetRates)
+
+	r.With(read).Get("/bsp", h.Statements)
+	r.With(write).Post("/bsp", h.ImportStatement)
+	r.With(read).Get("/bsp/{id}", h.Statement)
+	r.With(read).Post("/refunds/quote", h.QuoteRefund)
+	r.With(read).Get("/letters", h.Letters)
+	r.With(write).Post("/letters", h.CreateLetter)
 }
 
 // StreamPath is the realtime feed; it is exempt from the request timeout.
@@ -155,6 +203,11 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 		r.Route("/public/companies/{slug}", func(r chi.Router) {
 			r.Get("/", h.Branding.Public)
 			r.Get("/logo", h.Branding.PublicLogo)
+		})
+		// Balance confirmation letters: the unguessable token is the credential.
+		r.Route("/public/reconciliation/{token}", func(r chi.Router) {
+			r.Get("/", h.Finance.PublicLetter)
+			r.Post("/", h.Finance.RespondLetter)
 		})
 
 		r.Group(func(r chi.Router) {
@@ -331,6 +384,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsRead)).Get("/export", h.Payment.Export)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/reminders/process", h.Payment.ProcessReminders)
 				r.With(middleware.RequirePermission(platformauth.PermPaymentsApprove)).Put("/reporting-currency", h.Payment.SetReportingCurrency)
+				financeRoutes(r, h.Finance)
 			})
 
 			r.Route("/targets", func(r chi.Router) {

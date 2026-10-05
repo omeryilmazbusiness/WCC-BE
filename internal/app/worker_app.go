@@ -11,6 +11,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/app/dataprotection"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
+	financedomain "github.com/wodi-crm/wodi-crm-be/internal/domain/finance"
 	fxdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/fx"
 	paymentdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/payment"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -69,6 +70,7 @@ func newWorker(m *modules) (*Worker, error) {
 	register(fxdomain.JobLiveSync, fin.SyncLive)
 	register(paymentdomain.JobPromisesCheck, fin.CheckPromises)
 	register(paymentdomain.JobSchedulesOverdue, fin.MarkSchedulesOverdue)
+	register(financedomain.JobAgenciesSweep, fin.SweepAgencies)
 	register(bookingdomain.JobHoldExpiry, m.lifecycle.HandleHoldExpiry)
 	register(bookingdomain.JobTravelledSweep, m.lifecycle.HandleTravelledSweep)
 	register(bookingdomain.JobRecomputeSweep, m.lifecycle.HandleRecomputeSweep)

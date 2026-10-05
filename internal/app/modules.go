@@ -65,6 +65,7 @@ import (
 	appdocument "github.com/wodi-crm/wodi-crm-be/internal/app/document"
 	appextint "github.com/wodi-crm/wodi-crm-be/internal/app/extint"
 	appfilesync "github.com/wodi-crm/wodi-crm-be/internal/app/filesync"
+	appfinance "github.com/wodi-crm/wodi-crm-be/internal/app/finance"
 	appflight "github.com/wodi-crm/wodi-crm-be/internal/app/flight"
 	apphotel "github.com/wodi-crm/wodi-crm-be/internal/app/hotel"
 	appimportexport "github.com/wodi-crm/wodi-crm-be/internal/app/importexport"
@@ -126,6 +127,7 @@ type modules struct {
 	lifecycle    *appbooking.Lifecycle
 	payments     *apppayment.Service
 	finance      financeModule
+	financeHub   appfinance.Hub
 	tasks        *apptask.Service
 	targets      *apprevenuetarget.Service
 	packages     *apppkg.Service
@@ -292,6 +294,7 @@ func (m *modules) build() error {
 	})
 	m.dashboard.SetRevenueSources(dashAgg, paymentRepo, m.finance.FX.Converter())
 	m.targets.SetMoneySources(paymentRepo, m.finance.FX.Converter())
+	m.financeHub = newFinanceHub(m)
 
 	reportRepo := pgreport.NewRepository(pool)
 	m.reports = appreport.NewService(reportRepo)

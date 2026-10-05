@@ -13,8 +13,10 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/fxprovider"
 	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
 	pgbooking "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/booking"
+	pgfinance "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/finance"
 	pgfx "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/fx"
 	pgpayment "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/payment"
+	appfinance "github.com/wodi-crm/wodi-crm-be/internal/app/finance"
 	appfx "github.com/wodi-crm/wodi-crm-be/internal/app/fx"
 	appnotification "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
 	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
@@ -79,6 +81,21 @@ func newFinanceModule(d financeDeps) financeModule {
 		Converter: fxSvc.Converter(), Bookings: d.Repo, Promises: promises, Clock: clock, Log: d.Log,
 	})
 	return financeModule{FX: fxSvc, Promises: promises, Live: live}
+}
+
+// newFinanceHub builds the finance hub services over one Postgres adapter.
+func newFinanceHub(m *modules) appfinance.Hub {
+	repo := pgfinance.NewRepository(m.pool)
+	base := appfinance.Base{Audit: m.audit, Log: m.log, Location: businessLocation(m.cfg)}
+	treasury := appfinance.NewTreasuryService(base, repo, repo, m.payments, m.txm)
+	return appfinance.Hub{
+		Overview:    appfinance.NewOverviewService(base, repo, repo, m.finance.FX.Converter()),
+		Treasury:    treasury,
+		Receivables: appfinance.NewReceivablesService(base, repo, repo, repo, m.txm),
+		Payables:    appfinance.NewPayablesService(base, repo, m.suppliers, m.suppliers, treasury, repo, m.txm),
+		Profit:      appfinance.NewProfitService(base, repo, repo, repo, m.txm),
+		Recon:       appfinance.NewReconService(base, repo, repo, repo, repo, m.suppliers, m.txm),
+	}
 }
 
 const liveDisclaimer = "Indicative rates in new Syrian pounds (1 new SYP = 100 old SYP since 2026-01-01) from " +
@@ -147,11 +164,24 @@ type FinanceJobs struct {
 	live     *appfx.LiveService
 	payments *apppayment.Service
 	promises *apppayment.Promises
+	agencies *appfinance.ReceivablesService
 	log      *slog.Logger
 }
 
 func newFinanceJobs(m *modules) *FinanceJobs {
-	return &FinanceJobs{fx: m.finance.FX, live: m.finance.Live, payments: m.payments, promises: m.finance.Promises, log: m.log}
+	return &FinanceJobs{
+		fx: m.finance.FX, live: m.finance.Live, payments: m.payments, promises: m.finance.Promises,
+		agencies: m.financeHub.Receivables, log: m.log,
+	}
+}
+
+// SweepAgencies handles finance.agencies_sweep.
+func (j *FinanceJobs) SweepAgencies(ctx context.Context, _ []byte) error {
+	n, err := j.agencies.SweepOverdue(ctx)
+	if n > 0 {
+		j.log.InfoContext(ctx, "agencies suspended for overdue debt", "count", n)
+	}
+	return err
 }
 
 // SyncLive handles fx.live_sync (no-op when the live board is disabled).
