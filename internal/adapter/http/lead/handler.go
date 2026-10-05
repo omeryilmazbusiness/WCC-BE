@@ -153,6 +153,9 @@ func listFilter(r *http.Request) (domain.ListFilter, error) {
 	if f.CustomerID, err = request.OptionalUUID(r, "customer_id"); err != nil {
 		return f, err
 	}
+	if f.PackageID, err = request.OptionalUUID(r, "package_id"); err != nil {
+		return f, err
+	}
 	if st := request.FilterString(r, "stage"); st != "" {
 		f.Stage = domain.Stage(st)
 		if !domain.ValidStage(f.Stage) {

@@ -125,6 +125,7 @@ type ListFilter struct {
 	BranchID    *uuid.UUID
 	CustomerID  *uuid.UUID
 	DepartureID *uuid.UUID
+	PackageID   *uuid.UUID
 	OwnerID     *uuid.UUID
 	LeadID      *uuid.UUID
 	Status      Status

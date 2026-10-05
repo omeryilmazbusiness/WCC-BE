@@ -253,6 +253,10 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Bo
 	if f.DepartureID != nil {
 		add("departure_id", *f.DepartureID)
 	}
+	if f.PackageID != nil {
+		args = append(args, *f.PackageID)
+		where = append(where, fmt.Sprintf("departure_id IN (SELECT id FROM departures WHERE package_id=$%d)", len(args)))
+	}
 	if f.OwnerID != nil {
 		add("owner_id", *f.OwnerID)
 	}

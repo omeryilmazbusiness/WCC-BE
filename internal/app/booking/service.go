@@ -73,6 +73,7 @@ type ListInput struct {
 	BranchID    *uuid.UUID
 	CustomerID  *uuid.UUID
 	DepartureID *uuid.UUID
+	PackageID   *uuid.UUID
 	OwnerID     *uuid.UUID
 	LeadID      *uuid.UUID
 	Status      domain.Status
@@ -221,7 +222,7 @@ func (s *Service) List(ctx context.Context, in ListInput) ([]domain.Booking, int
 		return nil, 0, err
 	}
 	f := domain.ListFilter{
-		BranchID: branchID, CustomerID: in.CustomerID, DepartureID: in.DepartureID, OwnerID: in.OwnerID,
+		BranchID: branchID, CustomerID: in.CustomerID, DepartureID: in.DepartureID, PackageID: in.PackageID, OwnerID: in.OwnerID,
 		LeadID: in.LeadID, Status: in.Status, Query: in.Query, Limit: in.Limit, Offset: in.Offset,
 	}
 	return s.repo.List(ctx, f)

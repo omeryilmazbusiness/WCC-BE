@@ -97,6 +97,9 @@ func mapInterest(t domain.TripInterest) map[string]any {
 		"budget_amount":    t.BudgetAmount,
 		"budget_currency":  t.BudgetCurrency,
 		"package_id":       t.PackageID,
+		"package_code":     t.PackageCode,
+		"package_name":     t.PackageName,
+		"package_name_ar":  t.PackageNameAr,
 		"package_interest": t.PackageInterest,
 	}
 }

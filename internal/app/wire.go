@@ -468,6 +468,41 @@ func (b leadPackageBridge) PackageInBranch(ctx context.Context, packageID, branc
 	return p.BranchID == branchID, nil
 }
 
+// taskPackageBridge keeps task package links inside the task's branch and
+// departures inside their package.
+type taskPackageBridge struct{ repo *pkgpg.Repository }
+
+func (b taskPackageBridge) ResolvePackageLink(ctx context.Context, branchID uuid.UUID, link taskdomain.PackageLink) (taskdomain.PackageLink, error) {
+	invalid := func(field, msg string) error {
+		err := shared.NewValidation("invalid package link")
+		err.Details = map[string]any{field: msg}
+		return err
+	}
+	if link.DepartureID != nil {
+		d, err := b.repo.FindDeparture(ctx, *link.DepartureID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return link, invalid("departure_id", "not found")
+		}
+		if err != nil {
+			return link, err
+		}
+		if link.PackageID == nil {
+			pid := d.PackageID
+			link.PackageID = &pid
+		} else if *link.PackageID != d.PackageID {
+			return link, invalid("departure_id", "not a departure of this package")
+		}
+	}
+	p, err := b.repo.FindPackage(ctx, *link.PackageID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && p.BranchID != branchID) {
+		return link, invalid("package_id", "not a package of this branch")
+	}
+	if err != nil {
+		return link, err
+	}
+	return link, nil
+}
+
 type aiLeadBridge struct {
 	repo  *pglead.Repository
 	tasks *pgtask.Repository

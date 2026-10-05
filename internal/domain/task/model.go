@@ -39,18 +39,20 @@ const (
 const JobEscalateOverdue shared.JobName = "task.escalate_overdue"
 
 type Task struct {
-	ID             uuid.UUID
-	BranchID       uuid.UUID
-	Title          string
-	Description    string
-	Kind           Kind
-	Status         Status
-	Priority       Priority
-	Outcome        string
-	AssigneeID     uuid.UUID
-	AssigneeName   string // join enrichment (not persisted)
-	RelatedType    string
-	RelatedID      uuid.UUID
+	ID           uuid.UUID
+	BranchID     uuid.UUID
+	Title        string
+	Description  string
+	Kind         Kind
+	Status       Status
+	Priority     Priority
+	Outcome      string
+	AssigneeID   uuid.UUID
+	AssigneeName string // join enrichment (not persisted)
+	RelatedType  string
+	RelatedID    uuid.UUID
+	// Package optionally ties the task to a catalogue package and departure.
+	Package        PackageLink
 	DueAt          *time.Time
 	EscalatedAt    *time.Time
 	IdempotencyKey string
@@ -71,6 +73,8 @@ type ListFilter struct {
 	Kind          Kind
 	RelatedType   string
 	RelatedID     *uuid.UUID
+	PackageID     *uuid.UUID
+	DepartureID   *uuid.UUID
 	OverdueOnly   bool
 	EscalatedOnly bool
 	Query         string

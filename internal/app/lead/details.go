@@ -76,6 +76,9 @@ func (s *Service) UpdateDetails(ctx context.Context, in UpdateDetailsInput) (*do
 			return err
 		}
 		out = l
+		if fresh, err := s.repo.FindByID(ctx, l.ID); err == nil {
+			out = fresh
+		}
 		return s.recordAudit(ctx, in.ActorID, "lead.updated", l.ID, &l.BranchID, before, l, in.IP, in.UserAgent)
 	})
 	return out, err

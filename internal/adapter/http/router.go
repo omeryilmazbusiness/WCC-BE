@@ -284,6 +284,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/complete", h.Task.Complete)
 				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/cancel", h.Task.Cancel)
 				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/assign", h.Task.Assign)
+				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Put("/{id}/package", h.Task.LinkPackage)
 			})
 
 			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payments", h.Payment.Record)

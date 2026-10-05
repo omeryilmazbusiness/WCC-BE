@@ -26,6 +26,8 @@ type CreateInput struct {
 	AssigneeID  uuid.UUID
 	RelatedType string
 	RelatedID   uuid.UUID
+	PackageID   *uuid.UUID
+	DepartureID *uuid.UUID
 	DueAt       *time.Time
 }
 
@@ -53,6 +55,8 @@ type ListInput struct {
 	Kind          domain.Kind
 	RelatedType   string
 	RelatedID     *uuid.UUID
+	PackageID     *uuid.UUID
+	DepartureID   *uuid.UUID
 	OverdueOnly   bool
 	EscalatedOnly bool
 	Query         string
@@ -61,13 +65,14 @@ type ListInput struct {
 }
 
 type Service struct {
-	repo   domain.Repository
-	tx     tx.Runner
-	bus    *events.Bus
-	conv   ConversationReader
-	outbox events.Outbox
-	grace  GracePolicy
-	now    func() time.Time
+	repo     domain.Repository
+	tx       tx.Runner
+	bus      *events.Bus
+	conv     ConversationReader
+	outbox   events.Outbox
+	grace    GracePolicy
+	packages PackageLinker
+	now      func() time.Time
 }
 
 // GracePolicy decides how long an overdue task of a rule may stay open in a
@@ -138,11 +143,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, err
 	if assigneeID == uuid.Nil {
 		return nil, shared.NewValidation("assignee_id is required")
 	}
+	link, err := s.resolveLink(ctx, branchID, domain.NormalizeLink(in.PackageID, in.DepartureID))
+	if err != nil {
+		return nil, err
+	}
 	now := s.now()
 	t := &domain.Task{
 		ID: uuid.New(), BranchID: branchID, Title: title, Description: description, Kind: in.Kind, Priority: prio,
 		Status: domain.StatusOpen, AssigneeID: assigneeID, RelatedType: relatedType,
-		RelatedID: in.RelatedID, DueAt: in.DueAt, CreatedAt: now, UpdatedAt: now,
+		RelatedID: in.RelatedID, Package: link, DueAt: in.DueAt, CreatedAt: now, UpdatedAt: now,
 	}
 	if scope.UserID != uuid.Nil {
 		creator := scope.UserID
@@ -154,6 +163,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, err
 		return nil, err
 	}
 	s.bus.Publish(ctx, events.Event{Name: events.TaskCreated, Payload: t})
+	if !link.Empty() {
+		if enriched, err := s.repo.FindByID(ctx, t.ID); err == nil {
+			return enriched, nil
+		}
+	}
 	return t, nil
 }
 
@@ -179,6 +193,7 @@ func (s *Service) List(ctx context.Context, in ListInput) ([]domain.Task, int, e
 	f := domain.ListFilter{
 		BranchID: branchID, AssigneeID: in.AssigneeID, Status: in.Status, Kind: in.Kind,
 		RelatedType: in.RelatedType, RelatedID: in.RelatedID,
+		PackageID: in.PackageID, DepartureID: in.DepartureID,
 		OverdueOnly: in.OverdueOnly, EscalatedOnly: in.EscalatedOnly,
 		Query: in.Query, Limit: in.Limit, Offset: in.Offset,
 	}

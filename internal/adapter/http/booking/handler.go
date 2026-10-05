@@ -233,6 +233,14 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		in.DepartureID = &id
 	}
+	if v := q.Get("package_id"); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			response.Error(w, shared.NewValidation("invalid package_id"))
+			return
+		}
+		in.PackageID = &id
+	}
 	if v := q.Get("owner_id"); v != "" {
 		id, err := uuid.Parse(v)
 		if err != nil {

@@ -92,6 +92,7 @@ type ListFilter struct {
 	BranchID   *uuid.UUID
 	OwnerID    *uuid.UUID
 	CustomerID *uuid.UUID
+	PackageID  *uuid.UUID
 	Stage      Stage
 	Source     string
 	Priority   Priority

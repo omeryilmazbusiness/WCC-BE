@@ -64,6 +64,10 @@ type TripInterest struct {
 	BudgetCurrency  string
 	PackageID       *uuid.UUID
 	PackageInterest string // free text when no catalogue package matches
+	// PackageCode and the names describe PackageID; read-side enrichment only.
+	PackageCode   string
+	PackageName   string
+	PackageNameAr string
 }
 
 // HasService reports whether the customer asked for service s.

@@ -30,7 +30,14 @@ type createRequest struct {
 	AssigneeID  *uuid.UUID `json:"assignee_id"`
 	RelatedType string     `json:"related_type"`
 	RelatedID   uuid.UUID  `json:"related_id"`
+	PackageID   *uuid.UUID `json:"package_id"`
+	DepartureID *uuid.UUID `json:"departure_id"`
 	DueAt       *string    `json:"due_at"`
+}
+
+type packageLinkRequest struct {
+	PackageID   *uuid.UUID `json:"package_id"`
+	DepartureID *uuid.UUID `json:"departure_id"`
 }
 
 type statusRequest struct {
@@ -84,6 +91,27 @@ func mapTask(t *domain.Task) map[string]any {
 		"updated_at":      t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		"completed_at":    completed,
 		"overdue":         t.IsOverdue(time.Now().UTC()),
+		"package":         mapPackageLink(t.Package),
+	}
+}
+
+// mapPackageLink renders the task's package link, or null when it has none.
+func mapPackageLink(l domain.PackageLink) any {
+	if l.PackageID == nil {
+		return nil
+	}
+	var depart any
+	if l.DepartDate != nil {
+		depart = l.DepartDate.Format("2006-01-02")
+	}
+	return map[string]any{
+		"package_id":      l.PackageID,
+		"package_code":    l.PackageCode,
+		"package_name":    l.PackageName,
+		"package_name_ar": l.PackageNameAr,
+		"departure_id":    l.DepartureID,
+		"departure_code":  l.DepartureCode,
+		"depart_date":     depart,
 	}
 }
 
@@ -146,6 +174,14 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		in.AssigneeID = &id
 	}
+	if in.PackageID, err = request.OptionalUUID(r, "package_id"); err != nil {
+		response.Error(w, err)
+		return
+	}
+	if in.DepartureID, err = request.OptionalUUID(r, "departure_id"); err != nil {
+		response.Error(w, err)
+		return
+	}
 	if v := q.Get("limit"); v != "" {
 		n, _ := strconv.Atoi(v)
 		in.Limit = n
@@ -201,13 +237,34 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 	t, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
 		Title: req.Title, Description: req.Description, Kind: domain.Kind(req.Kind),
 		Priority: domain.Priority(req.Priority), AssigneeID: assignee,
-		RelatedType: req.RelatedType, RelatedID: req.RelatedID, DueAt: due,
+		RelatedType: req.RelatedType, RelatedID: req.RelatedID,
+		PackageID: req.PackageID, DepartureID: req.DepartureID, DueAt: due,
 	})
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
 	response.JSON(w, http.StatusCreated, mapTask(t))
+}
+
+// LinkPackage sets or clears the task's package and departure link.
+func (h Handler) LinkPackage(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	var req packageLinkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	t, err := h.Svc.LinkPackage(r.Context(), id, appsvc.LinkPackageInput{PackageID: req.PackageID, DepartureID: req.DepartureID})
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, mapTask(t))
 }
 
 func (h Handler) Get(w http.ResponseWriter, r *http.Request) {

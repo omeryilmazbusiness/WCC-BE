@@ -37,7 +37,10 @@ const leadCols = `l.id, l.branch_id, l.customer_id, l.full_name, l.phone, l.sour
 	l.travel_date, l.travel_window, l.pax_count, l.budget_amount, l.budget_currency, l.package_id, l.package_interest,
 	l.email, l.segment, l.company_name, l.tax_number, l.tax_office, l.priority, l.intent, l.next_follow_up_at,
 	l.services, l.origin, l.destination, l.return_date, l.flex_days, l.adults, l.child_ages, l.infants,
-	l.cabin_class, l.board_type, l.preferences`
+	l.cabin_class, l.board_type, l.preferences,
+	COALESCE((SELECT pk.code FROM packages pk WHERE pk.id = l.package_id), ''),
+	COALESCE((SELECT pk.name_en FROM packages pk WHERE pk.id = l.package_id), ''),
+	COALESCE((SELECT pk.name_ar FROM packages pk WHERE pk.id = l.package_id), '')`
 
 func scanLead(row pgx.Row) (*domain.Lead, error) {
 	var l domain.Lead
@@ -52,6 +55,7 @@ func scanLead(row pgx.Row) (*domain.Lead, error) {
 		&p.Email, &segment, &p.CompanyName, &p.TaxNumber, &p.TaxOffice, &priority, &intent, &p.NextFollowUpAt,
 		&t.Services, &t.Origin, &t.Destination, &t.ReturnDate, &t.FlexDays, &t.Adults, &t.ChildAges, &t.Infants,
 		&t.CabinClass, &t.BoardType, &t.Preferences,
+		&t.PackageCode, &t.PackageName, &t.PackageNameAr,
 	)
 	if err != nil {
 		return nil, err
@@ -177,6 +181,9 @@ func filter(ctx context.Context, f domain.ListFilter) ([]string, []any, error) {
 	}
 	if f.CustomerID != nil {
 		add("l.customer_id=$%d", *f.CustomerID)
+	}
+	if f.PackageID != nil {
+		add("l.package_id=$%d", *f.PackageID)
 	}
 	if f.Stage != "" {
 		add("l.stage=$%d", string(f.Stage))
