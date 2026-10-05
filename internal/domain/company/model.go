@@ -40,7 +40,7 @@ var reservedSlugs = map[string]struct{}{
 	"api": {}, "app": {}, "admin": {}, "auth": {}, "login": {}, "logout": {}, "setup": {},
 	"manager": {}, "workspace": {}, "pipeline": {}, "inbox": {}, "tasks": {}, "notifications": {},
 	"customers": {}, "packages": {}, "bookings": {}, "finance": {}, "targets": {}, "reports": {},
-	"suppliers": {}, "rooming": {}, "integrations": {}, "security": {}, "settings": {},
+	"suppliers": {}, "rooming": {}, "hotels": {}, "integrations": {}, "security": {}, "settings": {},
 	"import-export": {}, "missing-docs": {}, "flights": {}, "static": {}, "public": {}, "assets": {},
 	"en": {}, "ar": {}, "www": {}, "help": {}, "support": {}, "status": {}, "platform": {},
 }

@@ -23,6 +23,7 @@ import (
 	flighthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/flight"
 	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
+	hotelhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/hotel"
 	importhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/importexport"
 	inboxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/inbox"
 	leadhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/lead"
@@ -78,6 +79,7 @@ type Handlers struct {
 	Webhook      webhookhttp.Handler
 	AdminConfig  adminconfighttp.Handler
 	Rooming      roominghttp.Handler
+	Hotel        hotelhttp.Handler
 	Search       searchhttp.Handler
 	Flight       flighthttp.Handler
 	Setup        setuphttp.Handler
@@ -420,6 +422,25 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersRead)).Get("/{id}/issues", h.Supplier.ListIssues)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/{id}/issues", h.Supplier.AddIssue)
 				r.With(middleware.RequirePermission(platformauth.PermSuppliersWrite)).Post("/links/{linkId}/confirm", h.Supplier.ConfirmLink)
+			})
+
+			r.Route("/hotels", func(r chi.Router) {
+				read := middleware.RequirePermission(platformauth.PermHotelsRead)
+				write := middleware.RequirePermission(platformauth.PermHotelsWrite)
+				r.With(read).Get("/", h.Hotel.List)
+				r.With(write).Post("/", h.Hotel.Create)
+				r.With(read).Get("/{id}", h.Hotel.Get)
+				r.With(write).Put("/{id}", h.Hotel.Update)
+				r.With(read).Post("/{id}/quote", h.Hotel.Quote)
+				r.With(write).Post("/{id}/seasons", h.Hotel.CreateSeason)
+				r.With(write).Put("/{id}/seasons/{seasonId}", h.Hotel.UpdateSeason)
+				r.With(write).Delete("/{id}/seasons/{seasonId}", h.Hotel.DeleteSeason)
+				r.With(write).Post("/{id}/allotments", h.Hotel.CreateAllotment)
+				r.With(write).Put("/{id}/allotments/{allotmentId}", h.Hotel.UpdateAllotment)
+				r.With(write).Post("/{id}/allotments/{allotmentId}/adjust", h.Hotel.AdjustAllotment)
+				r.With(write).Delete("/{id}/allotments/{allotmentId}", h.Hotel.DeleteAllotment)
+				r.With(write).Post("/{id}/stop-sales", h.Hotel.CreateStopSale)
+				r.With(write).Delete("/{id}/stop-sales/{stopSaleId}", h.Hotel.DeleteStopSale)
 			})
 
 			r.Route("/packages", func(r chi.Router) {

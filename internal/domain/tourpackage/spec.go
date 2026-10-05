@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
@@ -69,6 +71,8 @@ type Nights struct {
 
 // Hotel is one city's stay. Distance is to the Haram (Makkah) or Masjid an-Nabawi (Madinah).
 type Hotel struct {
+	// HotelID links the stay to a contracted hotel; blank for free text.
+	HotelID        string `json:"hotel_id,omitempty"`
 	Name           string `json:"name"`
 	Stars          int    `json:"stars"`
 	DistanceM      int    `json:"distance_m"`
@@ -284,6 +288,12 @@ func NormalizeSpec(s *Spec, h Header) error {
 }
 
 func normalizeHotel(hotel *Hotel, city string, nights int) error {
+	hotel.HotelID = strings.TrimSpace(hotel.HotelID)
+	if hotel.HotelID != "" {
+		if _, err := uuid.Parse(hotel.HotelID); err != nil {
+			return shared.NewValidation(city + ".hotel_id must be a UUID")
+		}
+	}
 	hotel.Name = clip(hotel.Name, 160)
 	hotel.Zone = clip(hotel.Zone, 80)
 	hotel.Access = strings.ToLower(strings.TrimSpace(hotel.Access))

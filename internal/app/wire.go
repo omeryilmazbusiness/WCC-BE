@@ -29,6 +29,7 @@ import (
 	flighthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/flight"
 	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/health"
+	hotelhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/hotel"
 	importhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/importexport"
 	inboxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/inbox"
 	leadhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/lead"
@@ -139,6 +140,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		ExtInt:       extinthttp.Handler{Svc: m.extInt},
 		AdminConfig:  adminconfighttp.Handler{Svc: m.adminConfig},
 		Rooming:      roominghttp.Handler{Svc: m.rooming},
+		Hotel:        hotelhttp.Handler{Svc: m.hotels},
 		Search:       searchhttp.Handler{Svc: m.search},
 		Flight:       flighthttp.Handler{Svc: m.flights},
 		Setup:        setuphttp.Handler{Svc: m.tenancy.setup},

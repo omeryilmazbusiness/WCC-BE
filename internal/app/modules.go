@@ -28,6 +28,7 @@ import (
 	pgdocument "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/document"
 	pgextint "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/extint"
 	pgfilesync "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/filesync"
+	pghotel "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/hotel"
 	pgidentity "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/identity"
 	pgimportexport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/importexport"
 	pginbox "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/inbox"
@@ -64,6 +65,7 @@ import (
 	appextint "github.com/wodi-crm/wodi-crm-be/internal/app/extint"
 	appfilesync "github.com/wodi-crm/wodi-crm-be/internal/app/filesync"
 	appflight "github.com/wodi-crm/wodi-crm-be/internal/app/flight"
+	apphotel "github.com/wodi-crm/wodi-crm-be/internal/app/hotel"
 	appimportexport "github.com/wodi-crm/wodi-crm-be/internal/app/importexport"
 	appinbox "github.com/wodi-crm/wodi-crm-be/internal/app/inbox"
 	applead "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
@@ -141,6 +143,7 @@ type modules struct {
 	inboxAccts   *appinbox.WebhookAccounts
 	adminConfig  *appadminconfig.Service
 	rooming      *approoming.Service
+	hotels       *apphotel.Service
 	search       *appsearch.Service
 	flights      *appflight.Service
 	tenancy      tenancyModule
@@ -334,6 +337,9 @@ func (m *modules) build() error {
 	m.tasks.SetGracePolicy(automation.TaskGrace{Rules: m.adminConfig})
 
 	m.rooming = approoming.NewService(pgrooming.NewRepository(pool, passports))
+	m.hotels = apphotel.NewService(pghotel.NewRepository(pool), txm)
+	m.hotels.SetAuditor(m.audit)
+	m.hotels.SetTimeZone(loc)
 	m.search = appsearch.NewService(pgsearch.NewRepository(pool, passports))
 	m.flights = newFlightService(cfg.Flights, log)
 	m.tenancy = newTenancyModule(pool, m.users, m.ai, m.inbox, txm, m.audit)
