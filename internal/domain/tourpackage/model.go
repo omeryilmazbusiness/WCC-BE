@@ -19,8 +19,36 @@ type Package struct {
 	NameAR      string
 	Description string
 	IsActive    bool
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	Header
+	SalesOpen bool
+	Spec      Spec
+	CreatedAt time.Time
+	UpdatedAt time.Time
+
+	// Read-only aggregates filled by list/find queries.
+	Stats PackageStats
+}
+
+// PackageStats summarises departures and pricing for list cards.
+type PackageStats struct {
+	Departures     int
+	Reserved       int
+	DepartureSeats int
+	NextDepartDate *time.Time
+	FromPrice      int64
+	FromCurrency   string
+}
+
+// Remaining is the seats still sellable: package quota when set, otherwise departure seats.
+func (p *Package) Remaining() int {
+	total := p.CapacityTotal
+	if total == 0 {
+		total = p.Stats.DepartureSeats
+	}
+	if r := total - p.Stats.Reserved; r > 0 {
+		return r
+	}
+	return 0
 }
 
 // PricingTier is room/occupancy/age pricing (T-049).

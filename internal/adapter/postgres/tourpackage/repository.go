@@ -2,12 +2,14 @@ package tourpackage
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
@@ -59,32 +61,91 @@ func (r *Repository) ensureVisible(ctx context.Context, guard func(context.Conte
 	return err
 }
 
+const packageColumns = `p.id, p.branch_id, p.code, p.name_en, p.name_ar, p.description, p.is_active,
+	p.kind, p.category, p.duration_days, p.transport_mode, p.capacity_total, p.sales_open, p.base_currency, p.spec,
+	p.created_at, p.updated_at,
+	COALESCE(ds.departures, 0), COALESCE(ds.reserved, 0), COALESCE(ds.seats, 0), ds.next_depart,
+	COALESCE(fp.amount, 0), COALESCE(fp.currency, '')`
+
+// packageJoins aggregates active departures and the cheapest active room tier per package.
+const packageJoins = `
+	LEFT JOIN LATERAL (
+		SELECT COUNT(*) AS departures,
+		       SUM(d.capacity_sold) AS reserved,
+		       SUM(d.capacity_total) AS seats,
+		       MIN(d.depart_date) FILTER (WHERE d.depart_date >= CURRENT_DATE) AS next_depart
+		FROM departures d WHERE d.package_id = p.id AND d.is_active
+	) ds ON TRUE
+	LEFT JOIN LATERAL (
+		SELECT t.amount, t.currency FROM package_pricing_tiers t
+		WHERE t.package_id = p.id AND t.is_active AND t.kind = 'room' AND t.amount > 0
+		ORDER BY t.amount LIMIT 1
+	) fp ON TRUE`
+
+type rowScanner interface{ Scan(dest ...any) error }
+
+func scanPackage(row rowScanner) (*domain.Package, error) {
+	var p domain.Package
+	var spec []byte
+	var next *time.Time
+	err := row.Scan(&p.ID, &p.BranchID, &p.Code, &p.NameEN, &p.NameAR, &p.Description, &p.IsActive,
+		&p.Kind, &p.Category, &p.DurationDays, &p.TransportMode, &p.CapacityTotal, &p.SalesOpen, &p.BaseCurrency, &spec,
+		&p.CreatedAt, &p.UpdatedAt,
+		&p.Stats.Departures, &p.Stats.Reserved, &p.Stats.DepartureSeats, &next,
+		&p.Stats.FromPrice, &p.Stats.FromCurrency)
+	if err != nil {
+		return nil, err
+	}
+	p.Stats.NextDepartDate = next
+	if len(spec) > 0 {
+		if err := json.Unmarshal(spec, &p.Spec); err != nil {
+			return nil, fmt.Errorf("package %s spec: %w", p.ID, err)
+		}
+	}
+	return &p, nil
+}
+
 func (r *Repository) CreatePackage(ctx context.Context, p *domain.Package) error {
 	if err := pgscope.EnsureBranch(ctx, p.BranchID); err != nil {
 		return err
 	}
+	spec, err := json.Marshal(p.Spec)
+	if err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
-	_, err := q.Exec(ctx, `
-		INSERT INTO packages (id, branch_id, code, name_en, name_ar, description, is_active, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		p.ID, p.BranchID, p.Code, p.NameEN, p.NameAR, p.Description, p.IsActive, p.CreatedAt, p.UpdatedAt,
+	_, err = q.Exec(ctx, `
+		INSERT INTO packages (id, branch_id, code, name_en, name_ar, description, is_active,
+			kind, category, duration_days, transport_mode, capacity_total, sales_open, base_currency, spec,
+			created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		p.ID, p.BranchID, p.Code, p.NameEN, p.NameAR, p.Description, p.IsActive,
+		p.Kind, p.Category, p.DurationDays, p.TransportMode, p.CapacityTotal, p.SalesOpen, p.BaseCurrency, spec,
+		p.CreatedAt, p.UpdatedAt,
 	)
-	return err
+	return mapUniqueCode(err)
 }
 
 func (r *Repository) UpdatePackage(ctx context.Context, p *domain.Package) error {
+	spec, err := json.Marshal(p.Spec)
+	if err != nil {
+		return err
+	}
 	q := tx.QuerierFrom(ctx, r.pool)
 	clause, args, err := pgscope.Clause(ctx, packageScope, []any{
 		p.ID, p.Code, p.NameEN, p.NameAR, p.Description, p.IsActive, p.UpdatedAt,
+		p.Kind, p.Category, p.DurationDays, p.TransportMode, p.CapacityTotal, p.SalesOpen, p.BaseCurrency, spec,
 	})
 	if err != nil {
 		return err
 	}
 	ct, err := q.Exec(ctx, `
-		UPDATE packages SET code=$2, name_en=$3, name_ar=$4, description=$5, is_active=$6, updated_at=$7
+		UPDATE packages SET code=$2, name_en=$3, name_ar=$4, description=$5, is_active=$6, updated_at=$7,
+			kind=$8, category=$9, duration_days=$10, transport_mode=$11, capacity_total=$12,
+			sales_open=$13, base_currency=$14, spec=$15
 		WHERE id=$1`+clause, args...)
 	if err != nil {
-		return err
+		return mapUniqueCode(err)
 	}
 	if ct.RowsAffected() == 0 {
 		return fmt.Errorf("%w", pgx.ErrNoRows)
@@ -94,45 +155,51 @@ func (r *Repository) UpdatePackage(ctx context.Context, p *domain.Package) error
 
 func (r *Repository) FindPackage(ctx context.Context, id uuid.UUID) (*domain.Package, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	clause, args, err := pgscope.Clause(ctx, packageScope, []any{id})
+	clause, args, err := pgscope.Clause(ctx, pgscope.Columns{Branch: "p.branch_id"}, []any{id})
 	if err != nil {
 		return nil, err
 	}
-	row := q.QueryRow(ctx, `
-		SELECT id, branch_id, code, name_en, name_ar, description, is_active, created_at, updated_at
-		FROM packages WHERE id=$1`+clause, args...)
-	var p domain.Package
-	err = row.Scan(&p.ID, &p.BranchID, &p.Code, &p.NameEN, &p.NameAR, &p.Description, &p.IsActive, &p.CreatedAt, &p.UpdatedAt)
+	p, err := scanPackage(q.QueryRow(ctx, `SELECT `+packageColumns+` FROM packages p`+packageJoins+`
+		WHERE p.id=$1`+clause, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
 	}
-	return &p, err
+	return p, err
 }
 
 func (r *Repository) ListPackages(ctx context.Context, branchID uuid.UUID, activeOnly bool) ([]domain.Package, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	clause, args, err := pgscope.Clause(ctx, packageScope, []any{branchID, activeOnly})
+	clause, args, err := pgscope.Clause(ctx, pgscope.Columns{Branch: "p.branch_id"}, []any{branchID, activeOnly})
 	if err != nil {
 		return nil, err
 	}
-	rows, err := q.Query(ctx, `
-		SELECT id, branch_id, code, name_en, name_ar, description, is_active, created_at, updated_at
-		FROM packages
-		WHERE branch_id=$1 AND ($2::bool = FALSE OR is_active = TRUE)`+clause+`
-		ORDER BY code`, args...)
+	rows, err := q.Query(ctx, `SELECT `+packageColumns+` FROM packages p`+packageJoins+`
+		WHERE p.branch_id=$1 AND ($2::bool = FALSE OR p.is_active = TRUE)`+clause+`
+		ORDER BY p.is_active DESC, ds.next_depart NULLS LAST, p.code`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []domain.Package
 	for rows.Next() {
-		var p domain.Package
-		if err := rows.Scan(&p.ID, &p.BranchID, &p.Code, &p.NameEN, &p.NameAR, &p.Description, &p.IsActive, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		p, err := scanPackage(rows)
+		if err != nil {
 			return nil, err
 		}
-		out = append(out, p)
+		out = append(out, *p)
 	}
 	return out, rows.Err()
+}
+
+// mapUniqueCode turns the (branch_id, code) unique violation into a field error.
+func mapUniqueCode(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		e := shared.NewConflict("package code already exists")
+		e.Details = map[string]any{"code": "package code already exists"}
+		return e
+	}
+	return err
 }
 
 func (r *Repository) CreateDeparture(ctx context.Context, d *domain.Departure) error {

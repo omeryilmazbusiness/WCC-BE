@@ -21,18 +21,36 @@ type Handler struct {
 }
 
 type createPackageRequest struct {
-	Code        string `json:"code"`
-	NameEN      string `json:"name_en"`
-	NameAR      string `json:"name_ar"`
-	Description string `json:"description"`
+	Code          string       `json:"code"`
+	NameEN        string       `json:"name_en"`
+	NameAR        string       `json:"name_ar"`
+	Description   string       `json:"description"`
+	Kind          string       `json:"kind"`
+	Category      string       `json:"category"`
+	DurationDays  int          `json:"duration_days"`
+	TransportMode string       `json:"transport_mode"`
+	CapacityTotal int          `json:"capacity_total"`
+	BaseCurrency  string       `json:"base_currency"`
+	SalesOpen     *bool        `json:"sales_open"`
+	Spec          *domain.Spec `json:"spec"`
+	Tiers         *[]tierBody  `json:"tiers"`
 }
 
 type updatePackageRequest struct {
-	Code        *string `json:"code"`
-	NameEN      *string `json:"name_en"`
-	NameAR      *string `json:"name_ar"`
-	Description *string `json:"description"`
-	IsActive    *bool   `json:"is_active"`
+	Code          *string      `json:"code"`
+	NameEN        *string      `json:"name_en"`
+	NameAR        *string      `json:"name_ar"`
+	Description   *string      `json:"description"`
+	IsActive      *bool        `json:"is_active"`
+	Kind          *string      `json:"kind"`
+	Category      *string      `json:"category"`
+	DurationDays  *int         `json:"duration_days"`
+	TransportMode *string      `json:"transport_mode"`
+	CapacityTotal *int         `json:"capacity_total"`
+	BaseCurrency  *string      `json:"base_currency"`
+	SalesOpen     *bool        `json:"sales_open"`
+	Spec          *domain.Spec `json:"spec"`
+	Tiers         *[]tierBody  `json:"tiers"`
 }
 
 type clonePackageRequest struct {
@@ -88,13 +106,44 @@ type closeSalesRequest struct {
 }
 
 func mapPackage(p *domain.Package) map[string]any {
+	var next any
+	if p.Stats.NextDepartDate != nil {
+		next = p.Stats.NextDepartDate.Format("2006-01-02")
+	}
 	return map[string]any{
 		"id": p.ID, "branch_id": p.BranchID, "code": p.Code,
 		"name_en": p.NameEN, "name_ar": p.NameAR, "description": p.Description,
-		"is_active":  p.IsActive,
+		"is_active": p.IsActive, "sales_open": p.SalesOpen,
+		"kind": p.Kind, "category": p.Category, "duration_days": p.DurationDays,
+		"transport_mode": p.TransportMode, "capacity_total": p.CapacityTotal,
+		"base_currency": p.BaseCurrency, "spec": p.Spec,
+		"stats": map[string]any{
+			"departures": p.Stats.Departures, "reserved": p.Stats.Reserved,
+			"departure_seats": p.Stats.DepartureSeats, "remaining": p.Remaining(),
+			"next_depart_date": next,
+			"from_price":       p.Stats.FromPrice, "from_currency": p.Stats.FromCurrency,
+			"cost_total": p.Spec.Costs.Total(), "suggested_price": p.Spec.Costs.SuggestedPrice(),
+		},
 		"created_at": p.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at": p.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
+}
+
+func tierInputs(in *[]tierBody) *[]appsvc.TierInput {
+	if in == nil {
+		return nil
+	}
+	out := make([]appsvc.TierInput, 0, len(*in))
+	for _, t := range *in {
+		active := true
+		if t.IsActive != nil {
+			active = *t.IsActive
+		}
+		out = append(out, appsvc.TierInput{
+			Code: t.Code, Label: t.Label, Kind: t.Kind, Amount: t.Amount, Currency: t.Currency, IsActive: active,
+		})
+	}
+	return &out
 }
 
 func mapDeparture(d *domain.Departure) map[string]any {
@@ -170,6 +219,11 @@ func (h Handler) CreatePackage(w http.ResponseWriter, r *http.Request) {
 	p, err := h.Svc.CreatePackage(r.Context(), appsvc.CreatePackageInput{
 		BranchID: branchID, Code: req.Code, NameEN: req.NameEN,
 		NameAR: req.NameAR, Description: req.Description,
+		Header: domain.Header{
+			Kind: req.Kind, Category: req.Category, DurationDays: req.DurationDays,
+			TransportMode: req.TransportMode, CapacityTotal: req.CapacityTotal, BaseCurrency: req.BaseCurrency,
+		},
+		SalesOpen: req.SalesOpen, Spec: req.Spec, Tiers: tierInputs(req.Tiers),
 	})
 	if err != nil {
 		response.Error(w, err)
@@ -206,6 +260,9 @@ func (h Handler) UpdatePackage(w http.ResponseWriter, r *http.Request) {
 	p, err := h.Svc.UpdatePackage(r.Context(), appsvc.UpdatePackageInput{
 		ID: id, Code: req.Code, NameEN: req.NameEN, NameAR: req.NameAR,
 		Description: req.Description, IsActive: req.IsActive,
+		Kind: req.Kind, Category: req.Category, DurationDays: req.DurationDays,
+		TransportMode: req.TransportMode, CapacityTotal: req.CapacityTotal, BaseCurrency: req.BaseCurrency,
+		SalesOpen: req.SalesOpen, Spec: req.Spec, Tiers: tierInputs(req.Tiers),
 	})
 	if err != nil {
 		response.Error(w, err)

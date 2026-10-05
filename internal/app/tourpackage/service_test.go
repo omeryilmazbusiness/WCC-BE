@@ -203,3 +203,71 @@ func TestCreateDepartureSnapshotsTiersAndLocksPrice(t *testing.T) {
 		t.Fatal("close sales")
 	}
 }
+
+func TestCreatePackageWithSpecAndPricingMatrix(t *testing.T) {
+	repo := newMemPkg()
+	svc := apppkg.NewService(repo, tx.Nop{})
+	ctx := context.Background()
+	tiers := []apppkg.TierInput{
+		{Code: "QUAD", Label: "Quad", Kind: domain.TierRoom, Amount: 950000, IsActive: true},
+		{Code: "DOUBLE", Label: "Double", Kind: domain.TierRoom, Amount: 1250000, IsActive: true},
+		{Code: "INFANT", Label: "Infant 0-2", Kind: domain.TierAge, Amount: 150000, IsActive: true},
+	}
+	spec := domain.Spec{
+		Nights:  domain.Nights{Makkah: 10, Madinah: 4},
+		Makkah:  domain.Hotel{Name: "Swissôtel", Stars: 5, Board: "bb"},
+		Visa:    domain.Visa{Type: "UMRAH_VISA"},
+		Costs:   domain.Costs{Hotel: 600000, Flight: 300000, MarkupPct: 15},
+		Kit:     []string{"ihram", "zamzam"},
+		Ziyarat: domain.Ziyarat{Madinah: []string{"quba", "uhud"}},
+	}
+	p, err := svc.CreatePackage(ctx, apppkg.CreatePackageInput{
+		BranchID: uuid.New(), Code: " umr-2026-ram-01 ", NameEN: "2026 Ramadan Luxury Umrah",
+		Header: domain.Header{Kind: "umrah", Category: "ramadan_last15", DurationDays: 14, CapacityTotal: 45},
+		Spec:   &spec, Tiers: &tiers,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Code != "UMR-2026-RAM-01" || p.BaseCurrency != "SAR" || !p.SalesOpen {
+		t.Fatalf("header defaults: %+v", p.Header)
+	}
+	if p.Spec.Costs.Currency != "SAR" || p.Spec.Ziyarat.Madinah[0] != "uhud" {
+		t.Fatalf("spec not normalised: %+v", p.Spec)
+	}
+	stored, _ := svc.ListPackageTiers(ctx, p.ID)
+	if len(stored) != 3 || stored[0].Currency != "SAR" {
+		t.Fatalf("tiers should default to package currency: %+v", stored)
+	}
+
+	if _, err := svc.CreatePackage(ctx, apppkg.CreatePackageInput{
+		BranchID: uuid.New(), Code: "X", NameEN: "Bad", Header: domain.Header{Kind: "hajj", Category: "ramadan_full"},
+	}); err == nil {
+		t.Fatal("hajj package cannot be a Ramadan category")
+	}
+
+	days := 15
+	updated, err := svc.UpdatePackage(ctx, apppkg.UpdatePackageInput{ID: p.ID, DurationDays: &days})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.DurationDays != 15 || updated.Spec.Makkah.Name != "Swissôtel" {
+		t.Fatal("partial update must keep the spec")
+	}
+	if left, _ := svc.ListPackageTiers(ctx, p.ID); len(left) != 3 {
+		t.Fatal("update without tiers must not touch pricing")
+	}
+
+	short := 10
+	if _, err := svc.UpdatePackage(ctx, apppkg.UpdatePackageInput{ID: p.ID, DurationDays: &short}); err == nil {
+		t.Fatal("14 planned nights cannot fit a 10-day programme")
+	}
+
+	clone, err := svc.ClonePackage(ctx, apppkg.ClonePackageInput{SourceID: p.ID, BranchID: p.BranchID, Code: "umr-2027-ram-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clone.Category != "ramadan_last15" || clone.Spec.Nights.Makkah != 10 || clone.Code != "UMR-2027-RAM-01" {
+		t.Fatalf("clone must copy header and spec: %+v", clone.Header)
+	}
+}

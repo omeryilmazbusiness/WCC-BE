@@ -20,15 +20,29 @@ type CreatePackageInput struct {
 	NameEN      string
 	NameAR      string
 	Description string
+	Header      domain.Header
+	SalesOpen   *bool
+	Spec        *domain.Spec
+	// Tiers, when set, become the package pricing matrix in the same transaction.
+	Tiers *[]TierInput
 }
 
 type UpdatePackageInput struct {
-	ID          uuid.UUID
-	Code        *string
-	NameEN      *string
-	NameAR      *string
-	Description *string
-	IsActive    *bool
+	ID            uuid.UUID
+	Code          *string
+	NameEN        *string
+	NameAR        *string
+	Description   *string
+	IsActive      *bool
+	Kind          *string
+	Category      *string
+	DurationDays  *int
+	TransportMode *string
+	CapacityTotal *int
+	BaseCurrency  *string
+	SalesOpen     *bool
+	Spec          *domain.Spec
+	Tiers         *[]TierInput
 }
 
 type ClonePackageInput struct {
@@ -100,23 +114,45 @@ func NewService(repo domain.Repository, txm tx.Runner) *Service {
 func (s *Service) SetBookingReader(b BookingReader) { s.bookings = b }
 
 func (s *Service) CreatePackage(ctx context.Context, in CreatePackageInput) (*domain.Package, error) {
-	code := strings.TrimSpace(in.Code)
+	code := strings.ToUpper(strings.TrimSpace(in.Code))
 	name := strings.TrimSpace(in.NameEN)
 	if code == "" || name == "" {
 		return nil, shared.NewValidation("code and name_en are required")
+	}
+	header := in.Header
+	if err := domain.NormalizeHeader(&header); err != nil {
+		return nil, err
+	}
+	spec := domain.Spec{Requirements: domain.DefaultRequirements()}
+	if in.Spec != nil {
+		spec = *in.Spec
+	}
+	if err := domain.NormalizeSpec(&spec, header); err != nil {
+		return nil, err
+	}
+	tiers, err := s.tiersFor(in.Tiers, header.BaseCurrency)
+	if err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	p := &domain.Package{
 		ID: uuid.New(), BranchID: in.BranchID, Code: code, NameEN: name,
 		NameAR: strings.TrimSpace(in.NameAR), Description: strings.TrimSpace(in.Description),
-		IsActive: true, CreatedAt: now, UpdatedAt: now,
+		IsActive: true, Header: header, SalesOpen: in.SalesOpen == nil || *in.SalesOpen, Spec: spec,
+		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		return s.repo.CreatePackage(ctx, p)
+		if err := s.repo.CreatePackage(ctx, p); err != nil {
+			return err
+		}
+		if tiers != nil {
+			return s.repo.ReplacePackageTiers(ctx, p.ID, tiers)
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
-	return p, nil
+	return s.reload(ctx, p), nil
 }
 
 func (s *Service) UpdatePackage(ctx context.Context, in UpdatePackageInput) (*domain.Package, error) {
@@ -125,7 +161,7 @@ func (s *Service) UpdatePackage(ctx context.Context, in UpdatePackageInput) (*do
 		return nil, shared.NewNotFound("package")
 	}
 	if in.Code != nil {
-		p.Code = strings.TrimSpace(*in.Code)
+		p.Code = strings.ToUpper(strings.TrimSpace(*in.Code))
 	}
 	if in.NameEN != nil {
 		p.NameEN = strings.TrimSpace(*in.NameEN)
@@ -139,16 +175,80 @@ func (s *Service) UpdatePackage(ctx context.Context, in UpdatePackageInput) (*do
 	if in.IsActive != nil {
 		p.IsActive = *in.IsActive
 	}
+	if in.SalesOpen != nil {
+		p.SalesOpen = *in.SalesOpen
+	}
+	setIf(&p.Kind, in.Kind)
+	setIf(&p.Category, in.Category)
+	setIf(&p.DurationDays, in.DurationDays)
+	setIf(&p.TransportMode, in.TransportMode)
+	setIf(&p.CapacityTotal, in.CapacityTotal)
+	setIf(&p.BaseCurrency, in.BaseCurrency)
 	if p.Code == "" || p.NameEN == "" {
 		return nil, shared.NewValidation("code and name_en are required")
 	}
+	if err := domain.NormalizeHeader(&p.Header); err != nil {
+		return nil, err
+	}
+	if in.Spec != nil {
+		p.Spec = *in.Spec
+	}
+	if err := domain.NormalizeSpec(&p.Spec, p.Header); err != nil {
+		return nil, err
+	}
+	tiers, err := s.tiersFor(in.Tiers, p.BaseCurrency)
+	if err != nil {
+		return nil, err
+	}
 	p.UpdatedAt = time.Now().UTC()
 	if err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
-		return s.repo.UpdatePackage(ctx, p)
+		if err := s.repo.UpdatePackage(ctx, p); err != nil {
+			return err
+		}
+		if tiers != nil {
+			return s.repo.ReplacePackageTiers(ctx, p.ID, tiers)
+		}
+		return nil
 	}); err != nil {
 		return nil, err
 	}
-	return p, nil
+	return s.reload(ctx, p), nil
+}
+
+// tiersFor normalises an optional pricing matrix; nil means "leave tiers untouched".
+func (s *Service) tiersFor(in *[]TierInput, currency string) ([]domain.PricingTier, error) {
+	if in == nil {
+		return nil, nil
+	}
+	inputs := make([]TierInput, len(*in))
+	for i, t := range *in {
+		if strings.TrimSpace(t.Currency) == "" {
+			t.Currency = currency
+		}
+		inputs[i] = t
+	}
+	tiers, err := normalizeTiers(inputs)
+	if err != nil {
+		return nil, err
+	}
+	if tiers == nil {
+		tiers = []domain.PricingTier{}
+	}
+	return tiers, nil
+}
+
+// reload returns the stored package with fresh aggregates, falling back to the in-memory copy.
+func (s *Service) reload(ctx context.Context, p *domain.Package) *domain.Package {
+	if fresh, err := s.repo.FindPackage(ctx, p.ID); err == nil {
+		return fresh
+	}
+	return p
+}
+
+func setIf[T any](dst *T, v *T) {
+	if v != nil {
+		*dst = *v
+	}
 }
 
 func (s *Service) ClonePackage(ctx context.Context, in ClonePackageInput) (*domain.Package, error) {
@@ -156,7 +256,7 @@ func (s *Service) ClonePackage(ctx context.Context, in ClonePackageInput) (*doma
 	if err != nil {
 		return nil, shared.NewNotFound("package")
 	}
-	code := strings.TrimSpace(in.Code)
+	code := strings.ToUpper(strings.TrimSpace(in.Code))
 	name := strings.TrimSpace(in.NameEN)
 	if code == "" {
 		code = src.Code + "-COPY"
@@ -168,7 +268,8 @@ func (s *Service) ClonePackage(ctx context.Context, in ClonePackageInput) (*doma
 	p := &domain.Package{
 		ID: uuid.New(), BranchID: in.BranchID, Code: code, NameEN: name,
 		NameAR: strings.TrimSpace(in.NameAR), Description: src.Description,
-		IsActive: true, CreatedAt: now, UpdatedAt: now,
+		IsActive: true, Header: src.Header, SalesOpen: true, Spec: src.Spec,
+		CreatedAt: now, UpdatedAt: now,
 	}
 	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		if err := s.repo.CreatePackage(ctx, p); err != nil {
@@ -180,7 +281,10 @@ func (s *Service) ClonePackage(ctx context.Context, in ClonePackageInput) (*doma
 		}
 		return s.repo.ReplacePackageTiers(ctx, p.ID, tiers)
 	})
-	return p, err
+	if err != nil {
+		return nil, err
+	}
+	return s.reload(ctx, p), nil
 }
 
 func (s *Service) ListPackages(ctx context.Context, branchID uuid.UUID, activeOnly bool) ([]domain.Package, error) {
