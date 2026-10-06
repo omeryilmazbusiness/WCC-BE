@@ -62,6 +62,7 @@ import (
 	appai "github.com/wodi-crm/wodi-crm-be/internal/app/ai"
 	appbooking "github.com/wodi-crm/wodi-crm-be/internal/app/booking"
 	appdashboard "github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
+	appdocument "github.com/wodi-crm/wodi-crm-be/internal/app/document"
 	appinbox "github.com/wodi-crm/wodi-crm-be/internal/app/inbox"
 	applead "github.com/wodi-crm/wodi-crm-be/internal/app/lead"
 	appnotification "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
@@ -71,6 +72,7 @@ import (
 	apptask "github.com/wodi-crm/wodi-crm-be/internal/app/task"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	domainai "github.com/wodi-crm/wodi-crm-be/internal/domain/ai"
+	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
 	inboxdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
@@ -211,14 +213,18 @@ func (b bookingDocsBridge) BookingSubjects(ctx context.Context, bookingID uuid.U
 	return bk.BranchID, bk.CustomerID, bk.DepartureID, ids, nil
 }
 
-func (b bookingDocsBridge) BookingsOnDeparture(ctx context.Context, departureID uuid.UUID) ([]uuid.UUID, error) {
+func (b bookingDocsBridge) BookingsOnDeparture(ctx context.Context, departureID uuid.UUID) ([]appdocument.DepartureBooking, error) {
 	items, err := b.repo.ListByDeparture(ctx, departureID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]uuid.UUID, 0, len(items))
+	out := make([]appdocument.DepartureBooking, 0, len(items))
 	for _, bk := range items {
-		out = append(out, bk.ID)
+		out = append(out, appdocument.DepartureBooking{
+			ID: bk.ID, CustomerID: bk.CustomerID, RefCode: bookingdomain.RefCode(bk.RefNo),
+			CustomerName: bk.Info.CustomerName, CustomerNameAr: bk.Info.CustomerNameAr,
+			Status: string(bk.Status), PaxCount: bk.PaxCount,
+		})
 	}
 	return out, nil
 }

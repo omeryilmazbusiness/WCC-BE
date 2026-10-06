@@ -276,10 +276,15 @@ type Checklist struct {
 }
 
 type MissingDocsRow struct {
-	BookingID     uuid.UUID  `json:"booking_id"`
-	ParticipantID *uuid.UUID `json:"participant_id,omitempty"`
-	CustomerID    uuid.UUID  `json:"customer_id"`
-	MissingKinds  []string   `json:"missing_kinds"`
+	BookingID      uuid.UUID  `json:"booking_id"`
+	ParticipantID  *uuid.UUID `json:"participant_id,omitempty"`
+	CustomerID     uuid.UUID  `json:"customer_id"`
+	MissingKinds   []string   `json:"missing_kinds"`
+	RefCode        string     `json:"ref_code,omitempty"`
+	CustomerName   string     `json:"customer_name,omitempty"`
+	CustomerNameAr string     `json:"customer_name_ar,omitempty"`
+	BookingStatus  string     `json:"booking_status,omitempty"`
+	PaxCount       int        `json:"pax_count"`
 }
 
 // SubjectRef identifies an entity that may hold related documents.

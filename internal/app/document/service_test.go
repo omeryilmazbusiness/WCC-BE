@@ -166,13 +166,56 @@ func (memStore) PresignGet(context.Context, string, time.Duration) (string, erro
 type memBookings struct {
 	branchID, customerID, departureID uuid.UUID
 	participants                      []uuid.UUID
+	onDeparture                       []appsvc.DepartureBooking
 }
 
 func (m memBookings) BookingSubjects(context.Context, uuid.UUID) (uuid.UUID, uuid.UUID, uuid.UUID, []uuid.UUID, error) {
 	return m.branchID, m.customerID, m.departureID, m.participants, nil
 }
-func (m memBookings) BookingsOnDeparture(context.Context, uuid.UUID) ([]uuid.UUID, error) {
-	return nil, nil
+func (m memBookings) BookingsOnDeparture(context.Context, uuid.UUID) ([]appsvc.DepartureBooking, error) {
+	return m.onDeparture, nil
+}
+
+func TestDepartureMissingDocsEnrichesRowsAndSkipsCancelled(t *testing.T) {
+	repo := newMemRepo()
+	svc := appsvc.NewService(repo, memStore{}, tx.Nop{})
+	branch := uuid.New()
+	policyID := uuid.New()
+	_ = repo.CreatePolicy(context.Background(), &domain.Policy{
+		ID: policyID, BranchID: branch, Name: "Default", IsActive: true, CreatedAt: time.Now().UTC(),
+		Requirements: []domain.Requirement{
+			{ID: uuid.New(), PolicyID: policyID, Kind: domain.KindPassport, Required: true, Label: "Passport"},
+			{ID: uuid.New(), PolicyID: policyID, Kind: domain.KindVisa, Required: true, Label: "Visa"},
+		},
+	})
+	customer := uuid.New()
+	active := appsvc.DepartureBooking{
+		ID: uuid.New(), CustomerID: customer, RefCode: "BK-000042",
+		CustomerName: "Ahmad Saleh", CustomerNameAr: "أحمد صالح", Status: "confirmed", PaxCount: 3,
+	}
+	cancelled := appsvc.DepartureBooking{ID: uuid.New(), CustomerID: uuid.New(), Status: "cancelled", PaxCount: 1}
+	svc.SetBookingContext(memBookings{branchID: branch, customerID: customer, onDeparture: []appsvc.DepartureBooking{active, cancelled}})
+
+	rows, err := svc.DepartureMissingDocs(context.Background(), uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows=%d, want 1 (cancelled skipped)", len(rows))
+	}
+	r := rows[0]
+	if r.BookingID != active.ID || r.RefCode != "BK-000042" || r.CustomerName != "Ahmad Saleh" ||
+		r.CustomerNameAr != "أحمد صالح" || r.BookingStatus != "confirmed" || r.PaxCount != 3 || r.CustomerID != customer {
+		t.Fatalf("row not enriched: %+v", r)
+	}
+	if len(r.MissingKinds) != 2 {
+		t.Fatalf("missing=%v", r.MissingKinds)
+	}
+
+	empty, err := svc.DepartureMissingDocs(context.Background(), uuid.Nil)
+	if err == nil || empty != nil {
+		t.Fatalf("nil departure must be rejected, got %v %v", empty, err)
+	}
 }
 
 func TestApproveFlow(t *testing.T) {

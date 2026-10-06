@@ -21,8 +21,22 @@ type ObjectStore = shared.ObjectStore
 // BookingContext supplies booking/participant subjects for checklists (ISP).
 type BookingContext interface {
 	BookingSubjects(ctx context.Context, bookingID uuid.UUID) (branchID, customerID, departureID uuid.UUID, participantIDs []uuid.UUID, err error)
-	BookingsOnDeparture(ctx context.Context, departureID uuid.UUID) ([]uuid.UUID, error)
+	BookingsOnDeparture(ctx context.Context, departureID uuid.UUID) ([]DepartureBooking, error)
 }
+
+// DepartureBooking is the display context of a booking on a departure.
+type DepartureBooking struct {
+	ID             uuid.UUID
+	CustomerID     uuid.UUID
+	RefCode        string
+	CustomerName   string
+	CustomerNameAr string
+	Status         string
+	PaxCount       int
+}
+
+// bookingCancelled is excluded from document follow-up.
+const bookingCancelled = "cancelled"
 
 type PresignUploadInput struct {
 	BranchID      uuid.UUID
@@ -559,22 +573,23 @@ func (s *Service) DepartureMissingDocs(ctx context.Context, departureID uuid.UUI
 	if departureID == uuid.Nil {
 		return nil, shared.NewValidation("departure_id is required")
 	}
-	ids, err := s.bookings.BookingsOnDeparture(ctx, departureID)
+	bookings, err := s.bookings.BookingsOnDeparture(ctx, departureID)
 	if err != nil {
 		return nil, err
 	}
-	var out []domain.MissingDocsRow
-	for _, bid := range ids {
-		cl, err := s.Checklist(ctx, bid)
-		if err != nil {
+	out := []domain.MissingDocsRow{}
+	for _, bk := range bookings {
+		if bk.Status == bookingCancelled {
 			continue
 		}
-		if len(cl.MissingRequired) == 0 {
+		cl, err := s.Checklist(ctx, bk.ID)
+		if err != nil || len(cl.MissingRequired) == 0 {
 			continue
 		}
-		_, customerID, _, _, _ := s.bookings.BookingSubjects(ctx, bid)
 		out = append(out, domain.MissingDocsRow{
-			BookingID: bid, CustomerID: customerID, MissingKinds: cl.MissingRequired,
+			BookingID: bk.ID, CustomerID: bk.CustomerID, MissingKinds: cl.MissingRequired,
+			RefCode: bk.RefCode, CustomerName: bk.CustomerName, CustomerNameAr: bk.CustomerNameAr,
+			BookingStatus: bk.Status, PaxCount: bk.PaxCount,
 		})
 	}
 	return out, nil
