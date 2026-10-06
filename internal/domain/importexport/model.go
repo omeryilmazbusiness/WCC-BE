@@ -2,6 +2,7 @@ package importexport
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,18 @@ func ValidEntityType(e EntityType) bool {
 		return false
 	}
 }
+
+// Importable reports whether rows of this entity can actually be applied.
+// Keep in sync with the processor in app/importexport and the FE
+// IMPORTABLE_ENTITY_TYPES list; other entities are export-only.
+func Importable(e EntityType) bool {
+	return e == EntityCustomers
+}
+
+// MaxUploadBytes caps an uploaded import file; the whole file is held in memory.
+const MaxUploadBytes = 10 << 20
+
+var ErrFileTooLarge = fmt.Errorf("file is too large (max %d MB)", MaxUploadBytes>>20)
 
 type ImportMode string
 

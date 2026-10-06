@@ -87,3 +87,20 @@ func TestCustomerUpsertFlow(t *testing.T) {
 		t.Fatalf("name: %s", c.FullName)
 	}
 }
+
+func TestUploadRejectsUnsupportedInput(t *testing.T) {
+	svc := appsvc.NewService(appsvc.NewMemRepo(), appsvc.NewMemCustomers(), tx.Nop{})
+	branch := uuid.New()
+	csv := []byte("Customer phone,Departure code\n+971501111111,RAM-01\n")
+	cases := map[string]appsvc.UploadInput{
+		"export-only entity": {EntityType: domain.EntityBookings, FileName: "b.csv", FileBytes: csv},
+		"header only":        {EntityType: domain.EntityCustomers, FileName: "c.csv", FileBytes: []byte("Full Name,Mobile\n")},
+		"too large":          {EntityType: domain.EntityCustomers, FileName: "c.csv", FileBytes: make([]byte, domain.MaxUploadBytes+1)},
+	}
+	for name, in := range cases {
+		in.BranchID = branch
+		if _, err := svc.Upload(context.Background(), in); err == nil {
+			t.Errorf("%s: expected validation error", name)
+		}
+	}
+}

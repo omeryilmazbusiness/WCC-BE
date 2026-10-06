@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/xuri/excelize/v2"
+
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
 const PreviewLimit = 20
@@ -116,7 +118,7 @@ func BuildCSVFromMaps(headers []string, rows []ExportRow) ([]byte, error) {
 	for _, r := range rows {
 		line := make([]string, len(headers))
 		for i, h := range headers {
-			line[i] = r[h]
+			line[i] = shared.NeutralizeCSVCell(r[h])
 		}
 		out = append(out, line)
 	}
@@ -130,8 +132,8 @@ func ErrorsCSV(errs []RowError) ([]byte, error) {
 	for _, e := range errs {
 		rows = append(rows, []string{
 			fmt.Sprintf("%d", e.RowNumber),
-			e.Field,
-			e.Message,
+			shared.NeutralizeCSVCell(e.Field),
+			shared.NeutralizeCSVCell(e.Message),
 		})
 	}
 	return BuildCSV(headers, rows)
@@ -140,7 +142,7 @@ func ErrorsCSV(errs []RowError) ([]byte, error) {
 func trimRow(row []string) []string {
 	out := make([]string, len(row))
 	for i, c := range row {
-		out[i] = strings.TrimSpace(c)
+		out[i] = shared.RestoreCSVCell(strings.TrimSpace(c))
 	}
 	return out
 }

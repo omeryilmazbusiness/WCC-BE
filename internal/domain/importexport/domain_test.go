@@ -1,6 +1,7 @@
 package importexport_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -71,5 +72,25 @@ func TestParseCSV(t *testing.T) {
 	vals := importexport.MapRow(sheet.Headers, sheet.Rows[0], m)
 	if vals["full_name"] != "Alice" || importexport.NormalizePhone(vals["phone"]) != "+971501112233" {
 		t.Fatalf("mapped: %#v", vals)
+	}
+}
+
+func TestExportCSVRoundTripsFormulaGuard(t *testing.T) {
+	raw, err := importexport.BuildCSVFromMaps(
+		[]string{"full_name", "phone"},
+		[]importexport.ExportRow{{"full_name": "=HYPERLINK(\"x\")", "phone": "+971501112233"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "'=HYPERLINK") || !strings.Contains(string(raw), "'+971501112233") {
+		t.Fatalf("export not neutralised: %q", raw)
+	}
+	sheet, err := importexport.ParseCSV(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sheet.Rows[0][0] != "=HYPERLINK(\"x\")" || sheet.Rows[0][1] != "+971501112233" {
+		t.Fatalf("re-import changed values: %#v", sheet.Rows[0])
 	}
 }

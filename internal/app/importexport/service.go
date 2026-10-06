@@ -3,6 +3,7 @@ package importexport
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -87,12 +88,21 @@ func (s *Service) Upload(ctx context.Context, in UploadInput) (*domain.ImportJob
 	if !domain.ValidMode(mode) {
 		return nil, shared.NewValidation("mode must be create|update|upsert")
 	}
+	if !domain.Importable(in.EntityType) {
+		return nil, shared.NewValidation(fmt.Sprintf("importing %s is not supported yet; only export is available", in.EntityType))
+	}
 	if len(in.FileBytes) == 0 {
 		return nil, shared.NewValidation("file is required")
+	}
+	if len(in.FileBytes) > domain.MaxUploadBytes {
+		return nil, shared.NewValidation(domain.ErrFileTooLarge.Error())
 	}
 	sheet, err := domain.ParseFile(in.FileName, in.ContentType, in.FileBytes)
 	if err != nil {
 		return nil, shared.NewValidation(err.Error())
+	}
+	if len(sheet.Rows) == 0 {
+		return nil, shared.NewValidation("file has a header row but no data rows")
 	}
 	now := time.Now().UTC()
 	job := &domain.ImportJob{

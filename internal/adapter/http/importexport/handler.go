@@ -2,6 +2,7 @@ package importexport
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -58,7 +59,13 @@ func (h Handler) Upload(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, domain.MaxUploadBytes+(1<<20))
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			response.Error(w, shared.NewValidation(domain.ErrFileTooLarge.Error()))
+			return
+		}
 		response.Error(w, shared.NewValidation("multipart form required"))
 		return
 	}
