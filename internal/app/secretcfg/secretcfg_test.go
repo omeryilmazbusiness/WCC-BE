@@ -26,7 +26,7 @@ func vault(t *testing.T) secretcfg.Vault {
 
 func TestApplySealLoad(t *testing.T) {
 	v := vault(t)
-	b := crypto.Binding{Table: "file_sync_connections", RowID: uuid.New(), BranchID: uuid.New()}
+	b := crypto.Binding{Table: "integration_accounts", RowID: uuid.New(), BranchID: uuid.New()}
 
 	cfg, err := v.Apply(secretcfg.Config{}, json.RawMessage(`{"tenant":"acme","api_key":"sk-1234567"}`))
 	if err != nil {
@@ -60,7 +60,7 @@ func TestApplySealLoad(t *testing.T) {
 
 func TestLoadFallsBackToLegacyPlaintext(t *testing.T) {
 	v := vault(t)
-	b := crypto.Binding{Table: "file_sync_connections", RowID: uuid.New(), BranchID: uuid.New()}
+	b := crypto.Binding{Table: "integration_accounts", RowID: uuid.New(), BranchID: uuid.New()}
 	loaded, err := v.Load(json.RawMessage(`{"drive":"d1","client_secret":"legacy-secret"}`), "", b)
 	if err != nil || loaded.Secrets["client_secret"] != "legacy-secret" || strings.Contains(string(loaded.Public), "legacy") {
 		t.Fatalf("loaded=%+v err=%v", loaded, err)

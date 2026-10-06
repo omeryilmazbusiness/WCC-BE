@@ -56,8 +56,6 @@ const (
 	PermAIRead              Permission = "ai.read"
 	PermAIWrite             Permission = "ai.write"
 	PermAISetup             Permission = "ai.setup"
-	PermFileSyncRead        Permission = "filesync.read"
-	PermFileSyncWrite       Permission = "filesync.write"
 	PermSettingsRead        Permission = "settings.read"
 	PermSettingsWrite       Permission = "settings.write"
 	// PermPrivacyManage serves KVKK data subject requests (export, anonymize).
@@ -111,7 +109,6 @@ func PermissionsFor(role Role) []Permission {
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite, PermAISetup,
-			PermFileSyncRead, PermFileSyncWrite,
 			PermSettingsRead, PermSettingsWrite,
 			PermPrivacyManage,
 			PermFXManage,
@@ -139,7 +136,6 @@ func PermissionsFor(role Role) []Permission {
 			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite, PermAISetup,
-			PermFileSyncRead, PermFileSyncWrite,
 			PermSettingsRead, PermSettingsWrite,
 			PermBookingsOverride, PermBookingsDiscount,
 			PermFlightsSearch,
@@ -153,7 +149,6 @@ func PermissionsFor(role Role) []Permission {
 			PermNotificationsRead, PermNotificationsWrite,
 			PermReportsRead,
 			PermAIRead, PermAIWrite,
-			PermFileSyncRead,
 			PermFlightsSearch,
 		}
 	case RoleFinance:
@@ -164,7 +159,6 @@ func PermissionsFor(role Role) []Permission {
 			PermNotificationsRead, PermNotificationsWrite,
 			PermReportsRead, PermReportsExport,
 			PermAIRead,
-			PermFileSyncRead,
 			PermSettingsRead,
 			PermFXManage,
 		}
@@ -178,7 +172,6 @@ func PermissionsFor(role Role) []Permission {
 			PermNotificationsRead, PermNotificationsWrite,
 			PermReportsRead, PermReportsExport,
 			PermAIRead, PermAIWrite,
-			PermFileSyncRead, PermFileSyncWrite,
 			PermSettingsRead,
 			PermFlightsSearch,
 		}

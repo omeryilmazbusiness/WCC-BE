@@ -76,7 +76,7 @@ type TargetStatusChangedPayload struct {
 
 type IntegrationFailedPayload struct {
 	BranchID  uuid.UUID  `json:"branch_id"`
-	Source    string     `json:"source"` // inbox_send | webhook | file_sync | external
+	Source    string     `json:"source"` // inbox_send | webhook | external
 	Provider  string     `json:"provider"`
 	AccountID *uuid.UUID `json:"account_id,omitempty"`
 	Error     string     `json:"error"`

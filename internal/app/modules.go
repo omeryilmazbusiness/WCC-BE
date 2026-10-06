@@ -10,7 +10,6 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	aiprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/ai"
-	filesyncprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/filesync"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/healthprobe"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/email"
@@ -26,7 +25,6 @@ import (
 	pgcompany "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/company"
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
 	pgdocument "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/document"
-	pgfilesync "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/filesync"
 	pghotel "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/hotel"
 	pgidentity "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/identity"
 	pgimportexport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/importexport"
@@ -61,7 +59,6 @@ import (
 	appdashboard "github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
 	"github.com/wodi-crm/wodi-crm-be/internal/app/dataprotection"
 	appdocument "github.com/wodi-crm/wodi-crm-be/internal/app/document"
-	appfilesync "github.com/wodi-crm/wodi-crm-be/internal/app/filesync"
 	appfinance "github.com/wodi-crm/wodi-crm-be/internal/app/finance"
 	appflight "github.com/wodi-crm/wodi-crm-be/internal/app/flight"
 	apphotel "github.com/wodi-crm/wodi-crm-be/internal/app/hotel"
@@ -137,7 +134,6 @@ type modules struct {
 	reports      *appreport.Service
 	schedules    *appreport.Scheduler
 	ai           *appai.Service
-	fileSync     *appfilesync.Service
 	inbox        *appinbox.Service
 	inboxAccts   *appinbox.WebhookAccounts
 	adminConfig  *appadminconfig.Service
@@ -311,12 +307,6 @@ func (m *modules) build() error {
 	m.ai.SetLostLeadReader(aiLostBridge{repo: leadRepo})
 	m.ai.SetDraftConversationReader(aiInboxBridge{repo: inboxRepo})
 	m.ai.SetPackageCatalog(aiPackageCatalog{repo: pkgRepo})
-
-	m.fileSync = appfilesync.NewService(pgfilesync.NewRepository(pool), filesyncprovider.NewRegistry(
-		filesyncprovider.NewOneDrive(),
-		filesyncprovider.NewSharePoint(),
-	), secretBox)
-	m.fileSync.SetOutbox(outbox)
 
 	m.inbox = appinbox.NewService(inboxRepo, integration.NewRegistry(
 		stub.New(),

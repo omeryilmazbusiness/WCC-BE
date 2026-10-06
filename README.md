@@ -362,19 +362,16 @@ Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supp
 
 | Task | Status |
 |------|--------|
-| T-202 Connected Excel sync (OneDrive / SharePoint) | Done |
+| T-202 Connected Excel sync (OneDrive / SharePoint) | Removed |
 | T-203 Advanced supplier invoice / cost tracking | Done |
 | T-204 External accounting / GDS / payment stubs | Removed |
-| T-205 File sync FE surfaces | Done (FE) |
+| T-205 File sync FE surfaces | Removed |
 | T-206 Supplier invoice FE | Done (FE) |
 | T-207 External integrations FE | Removed |
 
-- `GET/POST /v1/file-sync/connections` · `GET/PATCH/DELETE /v1/file-sync/connections/{id}`
-- `POST /v1/file-sync/connections/{id}/connect` · `POST /v1/file-sync/connections/{id}/sync` · `GET /v1/file-sync/runs`
 - `GET/POST /v1/suppliers/invoices` · `GET/PATCH /v1/suppliers/invoices/{id}` · `PUT /v1/suppliers/invoices/{id}/lines` · `GET /v1/suppliers/{id}/invoices`
-- Permissions: `filesync.read` / `filesync.write`; invoices reuse `suppliers.*`
-- Platform DB remains authoritative on sync; conflict policy applied via pure domain `ResolveConflict` / `ApplySampleRows`
-- Cloud adapters are stubs (no live network in MVP)
+- Permissions: invoices reuse `suppliers.*`
+- File sync tables dropped in `00049_drop_file_sync.sql`
 
 ## Epic 17 Cross-Cutting Hardening & Definition of Done
 
@@ -595,7 +592,7 @@ in an import never overwrite a stored passport.
   identities and conversation subjects, deletes companion links and writes `privacy.anonymized`
   (`extra.reason`). Payments and audit events are append-only and stay untouched.
 - `POST /v1/ops/encrypt-backfill` (`users.write`) optional `{"rehash":true}` →
-  `{"data":{"secrets":{"integration_accounts":n,"ai_settings":n,"file_sync_connections":n},"passports":{"customers":n,"booking_participants":n}}}`
+  `{"data":{"secrets":{"integration_accounts":n,"ai_settings":n},"passports":{"customers":n,"booking_participants":n}}}`
   (audited `ops.encrypt_backfill`; also worker job `security.encrypt_backfill` with payload `{"rehash":bool}`).
 
 **Backfill procedure**

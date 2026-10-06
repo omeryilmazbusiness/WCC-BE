@@ -28,7 +28,6 @@ type SecretTable struct {
 var SecretTables = []SecretTable{
 	{Name: "integration_accounts", VerifyTokenHash: true},
 	{Name: "ai_settings"},
-	{Name: "file_sync_connections"},
 }
 
 // PassportTables are all tables with encrypted passports.

@@ -24,7 +24,6 @@ import (
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
-	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
 	financehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/finance"
 	flighthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/flight"
 	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
@@ -139,7 +138,6 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Branding:     brandinghttp.Handler{Svc: m.tenancy.branding},
 		Report:       reporthttp.Handler{Svc: m.reports, Schedules: m.schedules},
 		AI:           aihttp.Handler{Svc: m.ai},
-		FileSync:     filesynchttp.Handler{Svc: m.fileSync},
 		AdminConfig:  adminconfighttp.Handler{Svc: m.adminConfig},
 		Rooming:      roominghttp.Handler{Svc: m.rooming},
 		Hotel:        hotelhttp.Handler{Svc: m.hotels},

@@ -19,9 +19,8 @@ import (
 // secretIDColumns whitelists the tables (and their row key) the backfill may
 // touch; table names are interpolated into SQL.
 var secretIDColumns = map[string]string{
-	"integration_accounts":  "id",
-	"ai_settings":           "branch_id",
-	"file_sync_connections": "id",
+	"integration_accounts": "id",
+	"ai_settings":          "branch_id",
 }
 
 var passportTables = map[string]bool{

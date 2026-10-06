@@ -43,7 +43,7 @@ func TestRolePermissionMatrixCoverage(t *testing.T) {
 	required := []auth.Permission{
 		auth.PermLeadsWrite, auth.PermBookingsWrite, auth.PermPaymentsApprove,
 		auth.PermDocsReview, auth.PermImportsWrite, auth.PermReportsExport,
-		auth.PermFileSyncWrite, auth.PermIntegrationsWrite, auth.PermAISetup,
+		auth.PermIntegrationsWrite, auth.PermAISetup,
 	}
 	for _, p := range required {
 		if !auth.HasPermission(auth.RoleGM, p) {

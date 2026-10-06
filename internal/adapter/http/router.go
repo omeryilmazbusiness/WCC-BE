@@ -18,7 +18,6 @@ import (
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
-	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
 	financehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/finance"
 	flighthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/flight"
 	fxhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/fx"
@@ -74,7 +73,6 @@ type Handlers struct {
 	Branding     brandinghttp.Handler
 	Report       reporthttp.Handler
 	AI           aihttp.Handler
-	FileSync     filesynchttp.Handler
 	Webhook      webhookhttp.Handler
 	AdminConfig  adminconfighttp.Handler
 	Rooming      roominghttp.Handler
@@ -652,16 +650,6 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/runs/{id}/feedback", h.AI.Feedback)
 			})
 
-			r.Route("/file-sync", func(r chi.Router) {
-				r.With(middleware.RequirePermission(platformauth.PermFileSyncRead)).Get("/connections", h.FileSync.List)
-				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Post("/connections", h.FileSync.Create)
-				r.With(middleware.RequirePermission(platformauth.PermFileSyncRead)).Get("/connections/{id}", h.FileSync.Get)
-				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Patch("/connections/{id}", h.FileSync.Update)
-				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Delete("/connections/{id}", h.FileSync.Delete)
-				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Post("/connections/{id}/connect", h.FileSync.Connect)
-				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Post("/connections/{id}/sync", h.FileSync.Sync)
-				r.With(middleware.RequirePermission(platformauth.PermFileSyncRead)).Get("/runs", h.FileSync.ListRuns)
-			})
 		})
 
 		// Provider webhooks: signature-verified, branch resolved from the integration account.

@@ -21,7 +21,7 @@ func TestSecretBoxRoundTripAndBinding(t *testing.T) {
 		t.Fatalf("open: %v %v", got, err)
 	}
 	for _, other := range []Binding{
-		{Table: "file_sync_connections", RowID: b.RowID, BranchID: b.BranchID},
+		{Table: "integration_accounts", RowID: b.RowID, BranchID: b.BranchID},
 		{Table: b.Table, RowID: uuid.New(), BranchID: b.BranchID},
 		{Table: b.Table, RowID: b.RowID, BranchID: uuid.New()},
 	} {
