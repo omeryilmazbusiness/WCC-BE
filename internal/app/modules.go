@@ -70,6 +70,7 @@ import (
 	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
 	apppreference "github.com/wodi-crm/wodi-crm-be/internal/app/preference"
 	appprivacy "github.com/wodi-crm/wodi-crm-be/internal/app/privacy"
+	appprofile "github.com/wodi-crm/wodi-crm-be/internal/app/profile"
 	appreport "github.com/wodi-crm/wodi-crm-be/internal/app/report"
 	"github.com/wodi-crm/wodi-crm-be/internal/app/retention"
 	apprevenuetarget "github.com/wodi-crm/wodi-crm-be/internal/app/revenuetarget"
@@ -131,6 +132,7 @@ type modules struct {
 	suppliers    *appsupplier.Service
 	notify       *appnotification.Service
 	preferences  *apppreference.Service
+	profile      *appprofile.Service
 	reports      *appreport.Service
 	schedules    *appreport.Scheduler
 	ai           *appai.Service
@@ -217,6 +219,7 @@ func (m *modules) build() error {
 	}
 	m.auth = newAuthService(cfg, identityRepo, securityRepo, pgcompany.NewRepository(pool), m.audit, m.tokens, txm, m.keyring, m.limiter, m.sessionCheck)
 	m.users = appuser.NewService(identityRepo, m.audit, txm, m.sessionCheck)
+	m.profile = appprofile.NewService(identityRepo, identityRepo, m.audit, txm, m.sessionCheck)
 	m.retention = retention.NewService(securityRepo, pgwebhook.NewRepository(pool), m.audit, retention.DefaultPolicy)
 
 	m.customers = appcustomer.NewService(customerRepo, txm)

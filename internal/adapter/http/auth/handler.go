@@ -45,6 +45,11 @@ type mfaCodeRequest struct {
 	Password string `json:"password"`
 }
 
+type changePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
 type mfaSetupRequest struct {
 	EnrollmentToken string `json:"enrollment_token"`
 	Code            string `json:"code"`
@@ -205,6 +210,33 @@ func (h Handler) RevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]any{"revoked": n})
+}
+
+// ChangePassword sets the caller's new password and answers with the token
+// pair of the session that replaces the current one; every other session ends.
+func (h Handler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	actor, ok := sessionActor(w, r)
+	if !ok {
+		return
+	}
+	var req changePasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	pair, err := h.Svc.ChangePassword(r.Context(), appsvc.ChangePasswordInput{
+		SessionActor: actor, CurrentPassword: req.CurrentPassword, NewPassword: req.NewPassword,
+	})
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]any{
+		"access_token":       pair.AccessToken,
+		"refresh_token":      pair.RefreshToken,
+		"expires_in":         pair.ExpiresIn,
+		"refresh_expires_at": pair.RefreshExpiresAt,
+	})
 }
 
 // AdminRevokeUserSessions ends every session of a user (PermUsersWrite).
@@ -444,15 +476,25 @@ func mapUser(user *identity.User) map[string]any {
 		return nil
 	}
 	return map[string]any{
-		"id":          user.ID,
-		"email":       user.Email,
-		"full_name":   user.FullName,
-		"role":        user.Role,
-		"branch_id":   branchOrNull(user.BranchID),
-		"team_id":     user.TeamID,
-		"is_active":   user.IsActive,
-		"mfa_enabled": user.MFAEnabled,
+		"id":             user.ID,
+		"email":          user.Email,
+		"full_name":      user.FullName,
+		"role":           user.Role,
+		"branch_id":      branchOrNull(user.BranchID),
+		"team_id":        user.TeamID,
+		"is_active":      user.IsActive,
+		"mfa_enabled":    user.MFAEnabled,
+		"job_title":      user.JobTitle,
+		"avatar_version": avatarVersion(user),
 	}
+}
+
+// avatarVersion is null without a photo; it changes with every upload.
+func avatarVersion(user *identity.User) any {
+	if user.AvatarUpdatedAt == nil {
+		return nil
+	}
+	return identity.AvatarVersion(*user.AvatarUpdatedAt)
 }
 
 // branchOrNull renders uuid.Nil (a platform admin without branch) as null.

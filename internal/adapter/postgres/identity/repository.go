@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/pgscope"
@@ -27,6 +28,16 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
+// uniqueViolation on a users update can only be the email: the id never changes.
+const uniqueViolation = "23505"
+
+// userColumns is the column list scanUser reads, in order.
+const userColumns = `id, email, password_hash, full_name, role,
+		COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::uuid), team_id, is_active,
+		COALESCE(mfa_enabled, false), COALESCE(phone, ''), COALESCE(job_title, ''),
+		(SELECT a.updated_at FROM user_avatars a WHERE a.user_id = users.id),
+		created_at, updated_at, token_version`
+
 var (
 	userScope   = pgscope.Columns{Branch: "branch_id"}
 	branchScope = pgscope.Columns{Branch: "id"}
@@ -39,18 +50,14 @@ var (
 func (r *Repository) FindUserByEmail(ctx context.Context, email string) (*identity.User, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	row := q.QueryRow(ctx, `
-		SELECT id, email, password_hash, full_name, role, COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::uuid), team_id, is_active,
-		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version
-		FROM users WHERE email = $1`, email)
+		SELECT `+userColumns+` FROM users WHERE email = $1`, email)
 	return scanUser(row)
 }
 
 func (r *Repository) FindUserByID(ctx context.Context, id uuid.UUID) (*identity.User, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
 	row := q.QueryRow(ctx, `
-		SELECT id, email, password_hash, full_name, role, COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::uuid), team_id, is_active,
-		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version
-		FROM users WHERE id = $1`, id)
+		SELECT `+userColumns+` FROM users WHERE id = $1`, id)
 	return scanUser(row)
 }
 
@@ -74,7 +81,7 @@ func (r *Repository) UpdateUser(ctx context.Context, user *identity.User) error 
 	}
 	args := []any{
 		user.ID, user.Email, user.PasswordHash, user.FullName, user.Role, user.BranchID, user.TeamID,
-		user.IsActive, user.MFAEnabled, user.UpdatedAt,
+		user.IsActive, user.MFAEnabled, user.UpdatedAt, user.Phone, user.JobTitle,
 	}
 	clause, args, err := pgscope.Clause(ctx, userScope, args)
 	if err != nil {
@@ -84,9 +91,13 @@ func (r *Repository) UpdateUser(ctx context.Context, user *identity.User) error 
 	tag, err := q.Exec(ctx, `
 		UPDATE users SET
 			email=$2, password_hash=$3, full_name=$4, role=$5, branch_id=NULLIF($6::uuid, '00000000-0000-0000-0000-000000000000'::uuid), team_id=$7,
-			is_active=$8, mfa_enabled=$9, updated_at=$10
+			is_active=$8, mfa_enabled=$9, updated_at=$10, phone=NULLIF($11, ''), job_title=NULLIF($12, '')
 		WHERE id=$1`+clause, args...)
 	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
+			return identity.ErrEmailTaken
+		}
 		return err
 	}
 	if tag.RowsAffected() == 0 {
@@ -141,8 +152,7 @@ func (r *Repository) ListUsers(ctx context.Context, f identity.UserFilter) ([]id
 	}
 	args = append(args, limit, f.Offset)
 	rows, err := q.Query(ctx, `
-		SELECT id, email, password_hash, full_name, role, COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::uuid), team_id, is_active,
-		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version,
+		SELECT `+userColumns+`,
 		       COALESCE((SELECT c.name_en FROM branches b JOIN companies c ON c.id = b.company_id WHERE b.id = users.branch_id), ''),
 		       CASE WHEN locked_until > NOW() THEN locked_until END
 		FROM users WHERE `+w+`
@@ -227,7 +237,8 @@ func (w withExtras) Scan(dest ...any) error {
 func scanUser(row scannable) (*identity.User, error) {
 	var u identity.User
 	var role string
-	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.FullName, &role, &u.BranchID, &u.TeamID, &u.IsActive, &u.MFAEnabled, &u.CreatedAt, &u.UpdatedAt, &u.TokenVersion)
+	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.FullName, &role, &u.BranchID, &u.TeamID, &u.IsActive, &u.MFAEnabled,
+		&u.Phone, &u.JobTitle, &u.AvatarUpdatedAt, &u.CreatedAt, &u.UpdatedAt, &u.TokenVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("user: %w", err)
 	}
@@ -248,4 +259,34 @@ func ensureUserBranch(ctx context.Context, branchID uuid.UUID) error {
 		return nil
 	}
 	return pgscope.EnsureBranch(ctx, branchID)
+}
+
+// Avatar returns the user's photo; not found when they have none.
+func (r *Repository) Avatar(ctx context.Context, userID uuid.UUID) (*identity.Avatar, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	var a identity.Avatar
+	err := q.QueryRow(ctx, `SELECT content_type, data, updated_at FROM user_avatars WHERE user_id = $1`, userID).
+		Scan(&a.ContentType, &a.Data, &a.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, shared.NewNotFound("avatar")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (r *Repository) SetAvatar(ctx context.Context, userID uuid.UUID, a identity.Avatar) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	_, err := q.Exec(ctx, `
+		INSERT INTO user_avatars (user_id, content_type, data, updated_at) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (user_id) DO UPDATE SET content_type = EXCLUDED.content_type, data = EXCLUDED.data, updated_at = EXCLUDED.updated_at`,
+		userID, a.ContentType, a.Data, a.UpdatedAt)
+	return err
+}
+
+func (r *Repository) DeleteAvatar(ctx context.Context, userID uuid.UUID) error {
+	q := tx.QuerierFrom(ctx, r.pool)
+	_, err := q.Exec(ctx, `DELETE FROM user_avatars WHERE user_id = $1`, userID)
+	return err
 }

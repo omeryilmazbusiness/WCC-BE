@@ -19,6 +19,11 @@ type User struct {
 	TeamID       *uuid.UUID
 	IsActive     bool
 	MFAEnabled   bool
+	// Phone and JobTitle are self-service profile details; empty when unset.
+	Phone    string
+	JobTitle string
+	// AvatarUpdatedAt is set while the user has a profile photo.
+	AvatarUpdatedAt *time.Time
 	// TokenVersion is maintained by the database; access tokens carry it as ver.
 	TokenVersion int
 	// CompanyName is the English name of the user's company; filled by

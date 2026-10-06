@@ -25,6 +25,21 @@ import (
 type fakeUsers struct {
 	identity.Repository
 	byID map[uuid.UUID]*identity.User
+	// onUpdate stands in for the users triggers (token_version bump, session revocation).
+	onUpdate func(before, after *identity.User)
+}
+
+func (f *fakeUsers) UpdateUser(_ context.Context, u *identity.User) error {
+	before, ok := f.byID[u.ID]
+	if !ok {
+		return errors.New("user: not found")
+	}
+	cp := *u
+	if f.onUpdate != nil {
+		f.onUpdate(before, &cp)
+	}
+	f.byID[u.ID] = &cp
+	return nil
 }
 
 func (f *fakeUsers) FindUserByEmail(_ context.Context, email string) (*identity.User, error) {

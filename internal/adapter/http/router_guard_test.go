@@ -35,6 +35,12 @@ var authOnly = map[string]bool{
 	"GET /v1/me/preferences":          true, // the caller's own UI preferences
 	"PUT /v1/me/preferences":          true,
 	"POST /v1/me/preferences/welcome": true,
+	"GET /v1/me/profile":              true, // the caller's own profile, keyed on the token subject
+	"PATCH /v1/me/profile":            true,
+	"PUT /v1/me/email":                true,
+	"GET /v1/me/avatar":               true,
+	"PUT /v1/me/avatar":               true,
+	"DELETE /v1/me/avatar":            true,
 }
 
 func exempt(pattern string) bool {
@@ -183,6 +189,13 @@ func TestSessionRoutesAreAuthenticated(t *testing.T) {
 		{http.MethodGet, "/v1/auth/sessions"},
 		{http.MethodDelete, "/v1/auth/sessions/" + uuid.NewString()},
 		{http.MethodPost, "/v1/auth/sessions/revoke-others"},
+		{http.MethodPost, "/v1/auth/password"},
+		{http.MethodGet, "/v1/me/profile"},
+		{http.MethodPatch, "/v1/me/profile"},
+		{http.MethodPut, "/v1/me/email"},
+		{http.MethodGet, "/v1/me/avatar"},
+		{http.MethodPut, "/v1/me/avatar"},
+		{http.MethodDelete, "/v1/me/avatar"},
 	} {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(rt.method, rt.path, nil))

@@ -37,6 +37,7 @@ import (
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
 	preferencehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/preference"
 	privacyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/privacy"
+	profilehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/profile"
 	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
 	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
@@ -135,6 +136,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Import:       importhttp.Handler{Svc: m.imports},
 		Notification: notificationhttp.Handler{Svc: m.notify},
 		Preference:   preferencehttp.Handler{Svc: m.preferences},
+		Profile:      profilehttp.Handler{Svc: m.profile},
 		Branding:     brandinghttp.Handler{Svc: m.tenancy.branding},
 		Report:       reporthttp.Handler{Svc: m.reports, Schedules: m.schedules},
 		AI:           aihttp.Handler{Svc: m.ai},

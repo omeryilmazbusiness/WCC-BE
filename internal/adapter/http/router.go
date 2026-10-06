@@ -32,6 +32,7 @@ import (
 	paymenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/payment"
 	preferencehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/preference"
 	privacyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/privacy"
+	profilehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/profile"
 	reporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/report"
 	targethttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/revenuetarget"
 	roominghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/rooming"
@@ -70,6 +71,7 @@ type Handlers struct {
 	Import       importhttp.Handler
 	Notification notificationhttp.Handler
 	Preference   preferencehttp.Handler
+	Profile      profilehttp.Handler
 	Branding     brandinghttp.Handler
 	Report       reporthttp.Handler
 	AI           aihttp.Handler
@@ -184,6 +186,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			r.Group(func(r chi.Router) {
 				r.Use(authenticate)
 				r.Get("/me", h.Auth.Me)
+				r.Post("/password", h.Auth.ChangePassword)
 				r.Post("/mfa/enroll", h.Auth.MFAEnroll)
 				r.Post("/mfa/confirm", h.Auth.MFAConfirm)
 				r.Post("/mfa/disable", h.Auth.MFADisable)
@@ -216,6 +219,13 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			r.Get("/me/preferences", h.Preference.Get)
 			r.Put("/me/preferences", h.Preference.Update)
 			r.Post("/me/preferences/welcome", h.Preference.MarkWelcomeSeen)
+			// Self-service profile: callers edit only their own account.
+			r.Get("/me/profile", h.Profile.Get)
+			r.Patch("/me/profile", h.Profile.Update)
+			r.Put("/me/email", h.Profile.ChangeEmail)
+			r.Get("/me/avatar", h.Profile.Avatar)
+			r.Put("/me/avatar", h.Profile.UploadAvatar)
+			r.Delete("/me/avatar", h.Profile.DeleteAvatar)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Company.ListBranches)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Post("/branches", h.Company.CreateBranch)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Patch("/branches/{id}", h.Company.UpdateBranch)
