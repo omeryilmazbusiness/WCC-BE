@@ -21,7 +21,6 @@ import (
 var secretIDColumns = map[string]string{
 	"integration_accounts":  "id",
 	"ai_settings":           "branch_id",
-	"external_integrations": "id",
 	"file_sync_connections": "id",
 }
 

@@ -18,7 +18,6 @@ import (
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
 	documenthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/document"
-	extinthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/extint"
 	filesynchttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/filesync"
 	financehttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/finance"
 	flighthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/flight"
@@ -76,7 +75,6 @@ type Handlers struct {
 	Report       reporthttp.Handler
 	AI           aihttp.Handler
 	FileSync     filesynchttp.Handler
-	ExtInt       extinthttp.Handler
 	Webhook      webhookhttp.Handler
 	AdminConfig  adminconfighttp.Handler
 	Rooming      roominghttp.Handler
@@ -663,16 +661,6 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Post("/connections/{id}/connect", h.FileSync.Connect)
 				r.With(middleware.RequirePermission(platformauth.PermFileSyncWrite)).Post("/connections/{id}/sync", h.FileSync.Sync)
 				r.With(middleware.RequirePermission(platformauth.PermFileSyncRead)).Get("/runs", h.FileSync.ListRuns)
-			})
-
-			r.Route("/external-integrations", func(r chi.Router) {
-				r.With(middleware.RequirePermission(platformauth.PermIntegrationsRead)).Get("/catalog", h.ExtInt.Catalog)
-				r.With(middleware.RequirePermission(platformauth.PermIntegrationsRead)).Get("/", h.ExtInt.List)
-				r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).Post("/", h.ExtInt.Enable)
-				r.With(middleware.RequirePermission(platformauth.PermIntegrationsRead)).Get("/{id}", h.ExtInt.Get)
-				r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).Patch("/{id}", h.ExtInt.Patch)
-				r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).Delete("/{id}", h.ExtInt.Delete)
-				r.With(middleware.RequirePermission(platformauth.PermIntegrationsWrite)).Post("/{id}/probe", h.ExtInt.Probe)
 			})
 		})
 

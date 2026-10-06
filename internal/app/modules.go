@@ -10,7 +10,6 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	aiprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/ai"
-	extintadapter "github.com/wodi-crm/wodi-crm-be/internal/adapter/extint"
 	filesyncprovider "github.com/wodi-crm/wodi-crm-be/internal/adapter/filesync"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/healthprobe"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration"
@@ -27,7 +26,6 @@ import (
 	pgcompany "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/company"
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
 	pgdocument "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/document"
-	pgextint "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/extint"
 	pgfilesync "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/filesync"
 	pghotel "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/hotel"
 	pgidentity "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/identity"
@@ -63,7 +61,6 @@ import (
 	appdashboard "github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
 	"github.com/wodi-crm/wodi-crm-be/internal/app/dataprotection"
 	appdocument "github.com/wodi-crm/wodi-crm-be/internal/app/document"
-	appextint "github.com/wodi-crm/wodi-crm-be/internal/app/extint"
 	appfilesync "github.com/wodi-crm/wodi-crm-be/internal/app/filesync"
 	appfinance "github.com/wodi-crm/wodi-crm-be/internal/app/finance"
 	appflight "github.com/wodi-crm/wodi-crm-be/internal/app/flight"
@@ -141,7 +138,6 @@ type modules struct {
 	schedules    *appreport.Scheduler
 	ai           *appai.Service
 	fileSync     *appfilesync.Service
-	extInt       *appextint.Service
 	inbox        *appinbox.Service
 	inboxAccts   *appinbox.WebhookAccounts
 	adminConfig  *appadminconfig.Service
@@ -321,8 +317,6 @@ func (m *modules) build() error {
 		filesyncprovider.NewSharePoint(),
 	), secretBox)
 	m.fileSync.SetOutbox(outbox)
-	m.extInt = appextint.NewService(pgextint.NewRepository(pool), extintadapter.DefaultRegistry(), extintadapter.Catalog(), secretBox)
-	m.extInt.SetOutbox(outbox)
 
 	m.inbox = appinbox.NewService(inboxRepo, integration.NewRegistry(
 		stub.New(),
