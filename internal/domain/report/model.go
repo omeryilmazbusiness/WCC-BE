@@ -168,9 +168,14 @@ func BuildCSV(columns []string, rows []Row) ([]byte, error) {
 	}
 	for _, r := range rows {
 		line := make([]string, 0, len(header))
-		line = append(line, r.ID, r.Label)
+		line = append(line, CSVSafe(r.ID), CSVSafe(r.Label))
 		for _, c := range columns {
-			line = append(line, Stringify(r.Metrics[c]))
+			v := r.Metrics[c]
+			if s, ok := v.(string); ok {
+				line = append(line, CSVSafe(s))
+				continue
+			}
+			line = append(line, Stringify(v))
 		}
 		line = append(line, r.Severity)
 		href := ""
@@ -184,6 +189,19 @@ func BuildCSV(columns []string, rows []Row) ([]byte, error) {
 	}
 	w.Flush()
 	return []byte(b.String()), w.Error()
+}
+
+// CSVSafe neutralises free text that a spreadsheet would evaluate as a formula
+// (customer names, provider summaries) by prefixing an apostrophe.
+func CSVSafe(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
 }
 
 // Stringify converts metric values to CSV-safe text.

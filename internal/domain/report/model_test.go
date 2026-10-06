@@ -50,6 +50,30 @@ func TestBuildCSVAndSensitive(t *testing.T) {
 	}
 }
 
+func TestBuildCSVNeutralisesFormulasButKeepsNumbers(t *testing.T) {
+	cols := ColumnsFor(KindFinance)
+	rows := []Row{{
+		ID: "b1", Label: "=HYPERLINK(\"x\")",
+		Metrics: map[string]any{
+			"booked_amt": int64(0), "collected_amt": int64(0), "balance_amt": int64(-500),
+			"payment_count": 0, "overdue_count": 1, "currency": "@SUM(A1)",
+		},
+	}}
+	csv, err := BuildCSV(cols, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(csv)
+	for _, want := range []string{`"'=HYPERLINK(""x"")"`, "'@SUM(A1)", ",-500,"} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("missing %q in %q", want, s)
+		}
+	}
+	if CSVSafe("Alice") != "Alice" || CSVSafe("") != "" || CSVSafe("+1") != "'+1" {
+		t.Fatal("CSVSafe")
+	}
+}
+
 func TestValidKind(t *testing.T) {
 	if !ValidKind(KindSales) || ValidKind("nope") {
 		t.Fatal("kind")
