@@ -24,6 +24,8 @@ type User struct {
 	// CompanyName is the English name of the user's company; filled by
 	// listings only, empty for platform admins.
 	CompanyName string
+	// LockedUntil is set by listings while a login lockout is active.
+	LockedUntil *time.Time
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 }

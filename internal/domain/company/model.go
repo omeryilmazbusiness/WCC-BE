@@ -42,7 +42,7 @@ var reservedSlugs = map[string]struct{}{
 	"customers": {}, "packages": {}, "bookings": {}, "finance": {}, "targets": {}, "reports": {},
 	"suppliers": {}, "rooming": {}, "hotels": {}, "integrations": {}, "security": {}, "settings": {},
 	"import-export": {}, "missing-docs": {}, "flights": {}, "static": {}, "public": {}, "assets": {},
-	"en": {}, "ar": {}, "www": {}, "help": {}, "support": {}, "status": {}, "platform": {}, "confirm": {},
+	"en": {}, "ar": {}, "www": {}, "help": {}, "support": {}, "status": {}, "platform": {}, "confirm": {}, "team": {},
 }
 
 // reservedBranchSlugs would shadow company pages in /{locale}/{company}/{segment}

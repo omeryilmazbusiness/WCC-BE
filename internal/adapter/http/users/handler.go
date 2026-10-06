@@ -235,6 +235,9 @@ func mapUser(u *identity.User) map[string]any {
 	if u.CompanyName != "" {
 		out["company_name"] = u.CompanyName
 	}
+	if u.LockedUntil != nil {
+		out["locked_until"] = u.LockedUntil
+	}
 	return out
 }
 

@@ -61,6 +61,22 @@ type UpdateInput struct {
 	UserAgent  string
 }
 
+// checkSelfEdit stops an admin from locking themselves out: nobody can
+// deactivate their own account or change their own role (the last GM would
+// otherwise strand the company).
+func checkSelfEdit(in UpdateInput, currentRole platformauth.Role) error {
+	if in.ActorID == uuid.Nil || in.ActorID != in.UserID {
+		return nil
+	}
+	if in.IsActive != nil && !*in.IsActive {
+		return shared.NewForbidden("you cannot deactivate your own account")
+	}
+	if in.Role != nil && *in.Role != currentRole {
+		return shared.NewForbidden("you cannot change your own role")
+	}
+	return nil
+}
+
 // platformOperator reports a caller outside any company: the platform admin.
 // It oversees each company through its GM accounts only; everyone else is
 // managed by the company itself.
@@ -222,6 +238,9 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*identity.User, e
 	}
 	if u.Role == platformauth.RoleAdmin && access.From(ctx).Level != access.LevelGlobal {
 		return nil, shared.NewForbidden("platform accounts are managed by platform operators")
+	}
+	if err := checkSelfEdit(in, u.Role); err != nil {
+		return nil, err
 	}
 	if in.FullName != nil {
 		u.FullName = strings.TrimSpace(*in.FullName)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -142,7 +143,8 @@ func (r *Repository) ListUsers(ctx context.Context, f identity.UserFilter) ([]id
 	rows, err := q.Query(ctx, `
 		SELECT id, email, password_hash, full_name, role, COALESCE(branch_id, '00000000-0000-0000-0000-000000000000'::uuid), team_id, is_active,
 		       COALESCE(mfa_enabled, false), created_at, updated_at, token_version,
-		       COALESCE((SELECT c.name_en FROM branches b JOIN companies c ON c.id = b.company_id WHERE b.id = users.branch_id), '')
+		       COALESCE((SELECT c.name_en FROM branches b JOIN companies c ON c.id = b.company_id WHERE b.id = users.branch_id), ''),
+		       CASE WHEN locked_until > NOW() THEN locked_until END
 		FROM users WHERE `+w+`
 		ORDER BY full_name ASC
 		LIMIT $`+fmt.Sprint(i)+` OFFSET $`+fmt.Sprint(i+1), args...)
@@ -153,11 +155,13 @@ func (r *Repository) ListUsers(ctx context.Context, f identity.UserFilter) ([]id
 	var out []identity.User
 	for rows.Next() {
 		var company string
-		u, err := scanUser(withCompany{rows, &company})
+		var lockedUntil *time.Time
+		u, err := scanUser(withExtras{rows, []any{&company, &lockedUntil}})
 		if err != nil {
 			return nil, 0, err
 		}
 		u.CompanyName = company
+		u.LockedUntil = lockedUntil
 		out = append(out, *u)
 	}
 	return out, total, rows.Err()
@@ -210,14 +214,14 @@ type scannable interface {
 	Scan(dest ...any) error
 }
 
-// withCompany scans the trailing company name column of a user listing.
-type withCompany struct {
-	row     scannable
-	company *string
+// withExtras scans listing-only columns that follow the user columns.
+type withExtras struct {
+	row    scannable
+	extras []any
 }
 
-func (w withCompany) Scan(dest ...any) error {
-	return w.row.Scan(append(dest, w.company)...)
+func (w withExtras) Scan(dest ...any) error {
+	return w.row.Scan(append(dest, w.extras...)...)
 }
 
 func scanUser(row scannable) (*identity.User, error) {

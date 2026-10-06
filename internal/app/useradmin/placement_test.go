@@ -38,3 +38,29 @@ func TestPlacementPlatformAdminHasNoBranch(t *testing.T) {
 		t.Fatalf("foreign branch must be rejected, got %v", err)
 	}
 }
+
+func TestSelfEditCannotLockOut(t *testing.T) {
+	me := uuid.New()
+	off, on := false, true
+	gm, emp := platformauth.RoleGM, platformauth.RoleEmployee
+	cases := []struct {
+		name string
+		in   UpdateInput
+		ok   bool
+	}{
+		{"deactivate self", UpdateInput{UserID: me, ActorID: me, IsActive: &off}, false},
+		{"demote self", UpdateInput{UserID: me, ActorID: me, Role: &emp}, false},
+		{"rename self", UpdateInput{UserID: me, ActorID: me, Role: &gm, IsActive: &on}, true},
+		{"deactivate other", UpdateInput{UserID: uuid.New(), ActorID: me, IsActive: &off}, true},
+		{"demote other", UpdateInput{UserID: uuid.New(), ActorID: me, Role: &emp}, true},
+	}
+	for _, c := range cases {
+		err := checkSelfEdit(c.in, platformauth.RoleGM)
+		if c.ok && err != nil {
+			t.Errorf("%s: unexpected %v", c.name, err)
+		}
+		if !c.ok && !errors.Is(err, shared.ErrForbidden) {
+			t.Errorf("%s: want forbidden, got %v", c.name, err)
+		}
+	}
+}
