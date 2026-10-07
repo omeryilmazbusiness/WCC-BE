@@ -3,6 +3,7 @@ package ai_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -23,8 +24,7 @@ func TestCompleteSetupRejectsCredentialsTheProviderRefuses(t *testing.T) {
 		{"unknown model", &domain.ProviderError{Status: 404, Body: `{"error":{"message":"models/test is not found for API version v1beta"}}`}, ai.CodeModelNotFound, "model"},
 		{"bad key", &domain.ProviderError{Status: 401, Body: `{"error":"invalid x-api-key"}`}, ai.CodeKeyInvalid, "api_key"},
 		{"gemini bad key", &domain.ProviderError{Status: 400, Body: `{"error":{"message":"API key not valid. Please pass a valid API key."}}`}, ai.CodeKeyInvalid, "api_key"},
-		{"quota", &domain.ProviderError{Status: 429, Body: `quota exceeded`}, ai.CodeRateLimited, "api_key"},
-		{"outage", &domain.ProviderError{Status: 503, Body: `overloaded`}, ai.CodeProviderError, ""},
+		{"server error", &domain.ProviderError{Status: 500, Body: `internal`}, ai.CodeProviderError, ""},
 		{"network", errors.New("dial tcp: timeout"), ai.CodeProviderError, ""},
 	}
 	for _, tc := range cases {
@@ -91,5 +91,77 @@ func TestRuntimeProviderFailureIsClassified(t *testing.T) {
 	_, err := svc.LostLeadsAnalysis(context.Background(), branch, uuid.New(), weekFrom, weekTo)
 	if err == nil || !strings.HasPrefix(err.Error(), ai.CodeModelNotFound) {
 		t.Fatalf("want %s, got %v", ai.CodeModelNotFound, err)
+	}
+}
+
+func TestThrottledProviderStillSavesTheKey(t *testing.T) {
+	for _, status := range []int{429, 503, 529} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) { throttledSaves(t, status) })
+	}
+}
+
+func TestSlowProviderStillSavesTheKey(t *testing.T) {
+	repo := &settingsRepo{rows: map[uuid.UUID]domain.Settings{}}
+	p := &fakeProvider{err: fmt.Errorf("post: %w", context.DeadlineExceeded)}
+	svc := ai.NewService(repo, registry{p: p}, testBox(t))
+	out, err := svc.CompleteSetup(context.Background(), ai.SetupInput{
+		BranchID: uuid.New(), Provider: domain.ProviderGemini, APIKey: "AIza-test-0000", Enabled: true,
+	})
+	if err != nil || out["verification"] != ai.VerificationThrottled {
+		t.Fatalf("timeout: out=%v err=%v", out, err)
+	}
+}
+
+func throttledSaves(t *testing.T, status int) {
+	repo := &settingsRepo{rows: map[uuid.UUID]domain.Settings{}}
+	p := &fakeProvider{err: &domain.ProviderError{Status: status, Body: `busy`}}
+	svc := ai.NewService(repo, registry{p: p}, testBox(t))
+	branch := uuid.New()
+
+	out, err := svc.CompleteSetup(context.Background(), ai.SetupInput{
+		BranchID: branch, Provider: domain.ProviderGemini, APIKey: "AIza-test-0000", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("a 429 means the key was accepted; setup must save: %v", err)
+	}
+	if out["verification"] != ai.VerificationThrottled || out["enabled"] != true {
+		t.Fatalf("out: %v", out)
+	}
+	if _, saved := repo.rows[branch]; !saved {
+		t.Fatal("throttled key not saved")
+	}
+}
+
+func TestKeepingTheStoredKey(t *testing.T) {
+	repo := &settingsRepo{rows: map[uuid.UUID]domain.Settings{}}
+	p := &fakeProvider{reply: "OK"}
+	svc := ai.NewService(repo, registry{p: p}, testBox(t))
+	branch := uuid.New()
+	ctx := context.Background()
+	if _, err := svc.CompleteSetup(ctx, ai.SetupInput{BranchID: branch, Provider: domain.ProviderGemini, APIKey: "AIza-test-0000", Model: "gemini-a", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same provider and model, blank key: nothing new to verify, even while the provider throttles.
+	p.err, p.req = &domain.ProviderError{Status: 429}, domain.CompletionRequest{}
+	out, err := svc.CompleteSetup(ctx, ai.SetupInput{BranchID: branch, Provider: domain.ProviderGemini, Model: "gemini-a", Enabled: true})
+	if err != nil || out["verification"] != ai.VerificationSkipped || p.req.Model != "" {
+		t.Fatalf("keep: out=%v err=%v called=%q", out, err, p.req.Model)
+	}
+	if out["key_hint"] == "" {
+		t.Fatal("stored key lost")
+	}
+
+	// A new model with the kept key is checked.
+	p.err = nil
+	out, err = svc.CompleteSetup(ctx, ai.SetupInput{BranchID: branch, Provider: domain.ProviderGemini, Model: "gemini-b", Enabled: true})
+	if err != nil || out["verification"] != ai.VerificationPassed || p.req.Model != "gemini-b" {
+		t.Fatalf("model change: out=%v err=%v called=%q", out, err, p.req.Model)
+	}
+
+	// Another provider never inherits this key.
+	_, err = svc.CompleteSetup(ctx, ai.SetupInput{BranchID: branch, Provider: domain.ProviderOpenAI, Enabled: true})
+	if err == nil || !strings.Contains(err.Error(), "api_key is required") {
+		t.Fatalf("provider switch without a key: %v", err)
 	}
 }

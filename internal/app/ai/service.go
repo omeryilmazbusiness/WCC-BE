@@ -142,14 +142,15 @@ func (s *Service) CompleteSetup(ctx context.Context, in SetupInput) (map[string]
 	if !domain.ValidProvider(in.Provider) {
 		return nil, shared.NewValidation("provider must be openai, anthropic, or gemini")
 	}
+	existing, err := s.repo.GetSettings(ctx, in.BranchID)
+	if err != nil {
+		return nil, err
+	}
 	key := strings.TrimSpace(in.APIKey)
-	if key == "" {
-		// allow update of model/enabled without rotating key
-		existing, err := s.repo.GetSettings(ctx, in.BranchID)
-		if err != nil {
-			return nil, err
-		}
-		if existing != nil {
+	kept := key == ""
+	if kept {
+		// A blank key keeps the stored one, but only for the provider it was issued by.
+		if existing != nil && existing.Provider == in.Provider {
 			if key, err = s.apiKey(existing); err != nil {
 				return nil, err
 			}
@@ -162,8 +163,9 @@ func (s *Service) CompleteSetup(ctx context.Context, in SetupInput) (map[string]
 	if model == "" {
 		model = domain.DefaultModel(in.Provider)
 	}
-	if in.Enabled {
-		if err := s.verifyCredentials(ctx, in.Provider, key, model); err != nil {
+	verification := VerificationSkipped
+	if in.Enabled && !(kept && existing.Model == model) {
+		if verification, err = s.verify(ctx, in.Provider, key, model); err != nil {
 			return nil, err
 		}
 	}
@@ -182,8 +184,13 @@ func (s *Service) CompleteSetup(ctx context.Context, in SetupInput) (map[string]
 	if err := s.repo.UpsertSettings(ctx, st); err != nil {
 		return nil, err
 	}
-	s.recordSettings(ctx, "ai.settings_updated", in.BranchID, in.ActorID, before, st, strings.TrimSpace(in.APIKey) != "")
-	return s.GetSetup(ctx, in.BranchID)
+	s.recordSettings(ctx, "ai.settings_updated", in.BranchID, in.ActorID, before, st, !kept)
+	out, err := s.GetSetup(ctx, in.BranchID)
+	if err != nil {
+		return nil, err
+	}
+	out["verification"] = verification
+	return out, nil
 }
 
 func (s *Service) Disable(ctx context.Context, branchID, actorID uuid.UUID) (map[string]any, error) {

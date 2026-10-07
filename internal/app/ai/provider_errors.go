@@ -18,7 +18,7 @@ const (
 	CodeRateLimited   = "ai_rate_limited"
 )
 
-const verifyTimeout = 20 * time.Second
+const verifyTimeout = 12 * time.Second
 
 // providerFailure maps a failed vendor call to a user-actionable validation error.
 func providerFailure(err error, model string) *shared.AppError {
@@ -58,22 +58,50 @@ func classifyProviderError(err error) (code, field string) {
 	}
 }
 
-// verifyCredentials makes one tiny call so a wrong key or model fails at setup, not on first use.
-func (s *Service) verifyCredentials(ctx context.Context, provider domain.Provider, key, model string) error {
+// Outcome of the setup check, returned to the client as `verification`.
+const (
+	// VerificationPassed: the provider answered with this key and model.
+	VerificationPassed = "passed"
+	// VerificationSkipped: nothing to check (AI saved disabled, or key and model unchanged).
+	VerificationSkipped = "skipped"
+	// VerificationThrottled: the provider is over quota, rate-limited or overloaded right now.
+	// Those answers say nothing about the key or model being wrong, so the settings are saved.
+	VerificationThrottled = "throttled"
+)
+
+// verify makes one tiny call so a wrong key or model fails at setup, not on first use.
+func (s *Service) verify(ctx context.Context, provider domain.Provider, key, model string) (string, error) {
 	if s.registry == nil {
-		return shared.NewValidation("ai provider adapter missing")
+		return "", shared.NewValidation("ai provider adapter missing")
 	}
 	p, ok := s.registry.Get(provider)
 	if !ok {
-		return shared.NewValidation("ai provider adapter missing")
+		return "", shared.NewValidation("ai provider adapter missing")
 	}
 	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
 	_, err := p.Complete(ctx, key, domain.CompletionRequest{Model: model, User: "Reply with OK.", MaxTokens: 8})
-	if err != nil {
-		return providerFailure(err, model)
+	switch {
+	case err == nil:
+		return VerificationPassed, nil
+	case providerBusy(err):
+		return VerificationThrottled, nil
+	default:
+		return "", providerFailure(err, model)
 	}
-	return nil
+}
+
+// providerBusy: quota / rate limit (429), overloaded (503, Anthropic 529) or no answer in time —
+// transient, not a bad credential (a wrong key or model is refused immediately with 4xx).
+func providerBusy(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var pe *domain.ProviderError
+	if !errors.As(err, &pe) {
+		return false
+	}
+	return pe.Status == 429 || pe.Status == 503 || pe.Status == 529
 }
 
 func quote(s string) string { return "\"" + s + "\"" }
