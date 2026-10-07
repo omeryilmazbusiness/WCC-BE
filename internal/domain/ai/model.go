@@ -69,6 +69,7 @@ const (
 	KindOCRExtract      Kind = "document.ocr_extract"
 	KindLostLeads       Kind = "lead.lost_analysis"
 	KindLeadDraft       Kind = "conversation.lead_draft"
+	KindAssistantChat   Kind = "assistant.chat"
 )
 
 // Settings is per-branch BYO AI configuration (secrets in SecretsEnc).
@@ -144,8 +145,11 @@ type CompletionRequest struct {
 	User      string
 	MaxTokens int
 	JSONMode  bool
-	ImageB64  string // optional OCR
-	ImageMIME string
+	// LowReasoning asks reasoning models for the least hidden thinking they
+	// allow: short grounded answers do not need it, and it is billed and slow.
+	LowReasoning bool
+	ImageB64     string // optional OCR
+	ImageMIME    string
 }
 
 // CompletionResponse is normalized LLM output.

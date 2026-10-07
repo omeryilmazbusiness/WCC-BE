@@ -13,17 +13,26 @@ import (
 
 // Config holds process-wide settings loaded from environment.
 type Config struct {
-	App      AppConfig
-	HTTP     HTTPConfig
-	Database DatabaseConfig
-	Auth     AuthConfig
-	Redis    RedisConfig
-	Webhook  WebhookConfig
-	Storage  StorageConfig
-	Log      LogConfig
-	FX       FXConfig
-	Flights  FlightsConfig
-	Payments PaymentsConfig
+	App       AppConfig
+	HTTP      HTTPConfig
+	Database  DatabaseConfig
+	Auth      AuthConfig
+	Redis     RedisConfig
+	Webhook   WebhookConfig
+	Storage   StorageConfig
+	Log       LogConfig
+	FX        FXConfig
+	Flights   FlightsConfig
+	Payments  PaymentsConfig
+	Assistant AssistantConfig
+}
+
+// AssistantConfig tunes the in-app AI assistant. DailyQuota is model answers
+// per user per day (0 = unlimited); past it answers continue without the model.
+// BurstPerMinute is a flood guard on chat messages per user.
+type AssistantConfig struct {
+	DailyQuota     int
+	BurstPerMinute int
 }
 
 // PaymentsConfig configures customer payment links. LinkURLTemplate is the
@@ -255,6 +264,10 @@ func Load() (Config, error) {
 			SecretKey: getEnv("S3_SECRET_KEY", "minioadmin"),
 			UseSSL:    getBool("S3_USE_SSL", false),
 			PublicURL: getEnv("S3_PUBLIC_URL", "http://localhost:9000"),
+		},
+		Assistant: AssistantConfig{
+			DailyQuota:     max(0, getInt("AI_ASSISTANT_DAILY_QUOTA", 40)),
+			BurstPerMinute: max(1, getInt("AI_ASSISTANT_BURST_PER_MINUTE", 20)),
 		},
 		Payments: PaymentsConfig{
 			LinkURLTemplate: getEnv("PAYMENT_LINK_URL_TEMPLATE", ""),

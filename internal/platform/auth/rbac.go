@@ -68,6 +68,9 @@ const (
 	PermCompaniesManage Permission = "companies.manage"
 	// PermFlightsSearch looks up flight fares for customers.
 	PermFlightsSearch Permission = "flights.search"
+	// Help requests: every company user can send one; the platform team works them.
+	PermSupportWrite  Permission = "support.write"
+	PermSupportManage Permission = "support.manage"
 )
 
 const (
@@ -115,6 +118,7 @@ func PermissionsFor(role Role) []Permission {
 			PermBookingsOverride, PermBookingsDiscount,
 			PermSetupManage, PermBranchesManage,
 			PermFlightsSearch,
+			PermSupportWrite,
 		}
 	case RoleAdmin:
 		return []Permission{
@@ -122,6 +126,7 @@ func PermissionsFor(role Role) []Permission {
 			// data and configuration belong to each company's GM.
 			PermCompaniesManage,
 			PermUsersRead, PermUsersWrite, PermUsersUnlock, PermAuditRead, PermOpsRead,
+			PermSupportManage,
 		}
 	case RoleManager:
 		return []Permission{
@@ -139,6 +144,7 @@ func PermissionsFor(role Role) []Permission {
 			PermSettingsRead, PermSettingsWrite,
 			PermBookingsOverride, PermBookingsDiscount,
 			PermFlightsSearch,
+			PermSupportWrite,
 		}
 	case RoleEmployee:
 		return []Permission{
@@ -150,6 +156,7 @@ func PermissionsFor(role Role) []Permission {
 			PermReportsRead,
 			PermAIRead, PermAIWrite,
 			PermFlightsSearch,
+			PermSupportWrite,
 		}
 	case RoleFinance:
 		return []Permission{
@@ -161,6 +168,7 @@ func PermissionsFor(role Role) []Permission {
 			PermAIRead,
 			PermSettingsRead,
 			PermFXManage,
+			PermSupportWrite,
 		}
 	case RoleOperations:
 		return []Permission{
@@ -174,6 +182,7 @@ func PermissionsFor(role Role) []Permission {
 			PermAIRead, PermAIWrite,
 			PermSettingsRead,
 			PermFlightsSearch,
+			PermSupportWrite,
 		}
 	default:
 		return nil

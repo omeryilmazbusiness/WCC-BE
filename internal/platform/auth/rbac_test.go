@@ -136,7 +136,7 @@ func TestFXManagePermission(t *testing.T) {
 func TestPlatformAdminHoldsPlatformPermissionsOnly(t *testing.T) {
 	want := map[Permission]bool{
 		PermCompaniesManage: true, PermUsersRead: true, PermUsersWrite: true, PermUsersUnlock: true,
-		PermAuditRead: true, PermOpsRead: true,
+		PermAuditRead: true, PermOpsRead: true, PermSupportManage: true,
 	}
 	got := PermissionsFor(RoleAdmin)
 	if len(got) != len(want) {
@@ -145,6 +145,18 @@ func TestPlatformAdminHoldsPlatformPermissionsOnly(t *testing.T) {
 	for _, p := range got {
 		if !want[p] {
 			t.Fatalf("admin must not hold %s", p)
+		}
+	}
+}
+
+// Every company user can ask for help; only the platform team works the inbox.
+func TestSupportPermissions(t *testing.T) {
+	for _, r := range AllRoles() {
+		if HasPermission(r, PermSupportWrite) != (r != RoleAdmin) {
+			t.Fatalf("%s support.write", r)
+		}
+		if HasPermission(r, PermSupportManage) != (r == RoleAdmin) {
+			t.Fatalf("%s support.manage", r)
 		}
 	}
 }

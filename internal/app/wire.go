@@ -16,6 +16,7 @@ import (
 	httpadapter "github.com/wodi-crm/wodi-crm-be/internal/adapter/http"
 	adminconfighttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/adminconfig"
 	aihttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ai"
+	assistanthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/assistant"
 	audithttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/audithttp"
 	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
@@ -45,6 +46,7 @@ import (
 	setuphttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/setup"
 	streamhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/stream"
 	supplierhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/supplier"
+	supporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/support"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
@@ -137,9 +139,11 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Notification: notificationhttp.Handler{Svc: m.notify},
 		Preference:   preferencehttp.Handler{Svc: m.preferences},
 		Profile:      profilehttp.Handler{Svc: m.profile},
+		Support:      supporthttp.Handler{Svc: m.support},
 		Branding:     brandinghttp.Handler{Svc: m.tenancy.branding},
 		Report:       reporthttp.Handler{Svc: m.reports, Schedules: m.schedules},
 		AI:           aihttp.Handler{Svc: m.ai},
+		Assistant:    assistanthttp.Handler{Svc: m.assistant},
 		AdminConfig:  adminconfighttp.Handler{Svc: m.adminConfig},
 		Rooming:      roominghttp.Handler{Svc: m.rooming},
 		Hotel:        hotelhttp.Handler{Svc: m.hotels},

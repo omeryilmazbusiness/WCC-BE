@@ -10,6 +10,7 @@ import (
 
 	adminconfighttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/adminconfig"
 	aihttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/ai"
+	assistanthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/assistant"
 	audithttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/audithttp"
 	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
@@ -40,6 +41,7 @@ import (
 	setuphttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/setup"
 	streamhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/stream"
 	supplierhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/supplier"
+	supporthttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/support"
 	taskhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/task"
 	pkghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/tourpackage"
 	usershttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/users"
@@ -75,6 +77,8 @@ type Handlers struct {
 	Branding     brandinghttp.Handler
 	Report       reporthttp.Handler
 	AI           aihttp.Handler
+	Assistant    assistanthttp.Handler
+	Support      supporthttp.Handler
 	Webhook      webhookhttp.Handler
 	AdminConfig  adminconfighttp.Handler
 	Rooming      roominghttp.Handler
@@ -229,6 +233,16 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Company.ListBranches)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Post("/branches", h.Company.CreateBranch)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Patch("/branches/{id}", h.Company.UpdateBranch)
+			r.Route("/support/requests", func(r chi.Router) {
+				r.Use(middleware.RequirePermission(platformauth.PermSupportWrite))
+				r.Post("/", h.Support.Submit)
+				r.Get("/mine", h.Support.Mine)
+			})
+			r.Route("/platform/support/requests", func(r chi.Router) {
+				r.Use(middleware.RequirePermission(platformauth.PermSupportManage))
+				r.Get("/", h.Support.Inbox)
+				r.Patch("/{id}", h.Support.Update)
+			})
 			r.Route("/platform/companies", func(r chi.Router) {
 				r.Use(middleware.RequirePermission(platformauth.PermCompaniesManage))
 				r.Get("/", h.Company.ListCompanies)
@@ -658,6 +672,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Get("/targets/{id}/insight", h.AI.TargetInsight)
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/ocr", h.AI.OCRExtract)
 				r.With(middleware.RequirePermission(platformauth.PermAIWrite)).Post("/runs/{id}/feedback", h.AI.Feedback)
+				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Get("/assistant/protocol", h.Assistant.Protocol)
+				r.With(middleware.RequirePermission(platformauth.PermAIRead)).Post("/assistant/chat", h.Assistant.Chat)
 			})
 
 		})

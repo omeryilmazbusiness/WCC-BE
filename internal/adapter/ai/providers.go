@@ -87,7 +87,13 @@ func (o *OpenAI) Complete(ctx context.Context, apiKey string, req domain.Complet
 	if req.JSONMode {
 		body["response_format"] = map[string]string{"type": "json_object"}
 	}
-	raw, err := postJSON(ctx, o.Client, o.Base+"/chat/completions", apiKey, body)
+	var tuning map[string]any
+	if req.LowReasoning && openAIReasons(model) {
+		tuning = map[string]any{"reasoning_effort": "low"}
+	}
+	raw, err := withOptional(body, tuning, func(b map[string]any) (json.RawMessage, error) {
+		return postJSON(ctx, o.Client, o.Base+"/chat/completions", apiKey, b)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -217,10 +223,22 @@ func (g *Gemini) Complete(ctx context.Context, apiKey string, req domain.Complet
 	if req.JSONMode {
 		body["generationConfig"].(map[string]any)["responseMimeType"] = "application/json"
 	}
+	var tuning map[string]any
+	if req.LowReasoning {
+		if t := geminiThinking(model); t != nil {
+			cfg := map[string]any{"thinkingConfig": t}
+			for k, v := range body["generationConfig"].(map[string]any) {
+				cfg[k] = v
+			}
+			tuning = map[string]any{"generationConfig": cfg}
+		}
+	}
 	endpoint := fmt.Sprintf("%s/models/%s:generateContent", g.Base, url.PathEscape(model))
-	raw, err := postJSONHeaders(ctx, g.Client, endpoint, map[string]string{
-		"Content-Type": "application/json", "x-goog-api-key": apiKey,
-	}, body)
+	raw, err := withOptional(body, tuning, func(b map[string]any) (json.RawMessage, error) {
+		return postJSONHeaders(ctx, g.Client, endpoint, map[string]string{
+			"Content-Type": "application/json", "x-goog-api-key": apiKey,
+		}, b)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -243,6 +261,57 @@ func (g *Gemini) Complete(ctx context.Context, apiKey string, req domain.Complet
 		}
 	}
 	return &domain.CompletionResponse{Text: text, Model: model, Raw: raw}, nil
+}
+
+// openAIReasons reports models that accept reasoning_effort (o-series, GPT-5 and later).
+func openAIReasons(model string) bool {
+	m := strings.ToLower(model)
+	if len(m) >= 2 && m[0] == 'o' && m[1] >= '1' && m[1] <= '9' {
+		return true
+	}
+	if rest, ok := strings.CutPrefix(m, "gpt-"); ok && rest != "" && rest[0] >= '5' && rest[0] <= '9' {
+		return true
+	}
+	return false
+}
+
+// geminiThinking is the smallest thinking setting each Gemini generation accepts:
+// 2.5 Flash can turn it off, 2.5 Pro needs a minimum budget, 3.x uses levels;
+// older models do not think at all.
+func geminiThinking(model string) map[string]any {
+	m := strings.ToLower(model)
+	switch {
+	case strings.HasPrefix(m, "gemini-2.5-flash"):
+		return map[string]any{"thinkingBudget": 0}
+	case strings.HasPrefix(m, "gemini-2.5"):
+		return map[string]any{"thinkingBudget": 128}
+	case strings.HasPrefix(m, "gemini-1"), strings.HasPrefix(m, "gemini-2"):
+		return nil
+	default:
+		return map[string]any{"thinkingLevel": "low"}
+	}
+}
+
+// withOptional sends body with the optional tuning fields merged in; if the
+// model rejects them (400), it retries once with the plain body so an
+// optimisation can never cost the answer.
+func withOptional(body, tuning map[string]any, send func(map[string]any) (json.RawMessage, error)) (json.RawMessage, error) {
+	if len(tuning) == 0 {
+		return send(body)
+	}
+	tuned := make(map[string]any, len(body)+len(tuning))
+	for k, v := range body {
+		tuned[k] = v
+	}
+	for k, v := range tuning {
+		tuned[k] = v
+	}
+	raw, err := send(tuned)
+	var pe *domain.ProviderError
+	if err != nil && errors.As(err, &pe) && pe.Status == http.StatusBadRequest {
+		return send(body)
+	}
+	return raw, err
 }
 
 // reasoningHeadroom is added to output limits because reasoning models

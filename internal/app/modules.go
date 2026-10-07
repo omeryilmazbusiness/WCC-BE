@@ -19,6 +19,7 @@ import (
 	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
 	pgadminconfig "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/adminconfig"
 	pgai "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/ai"
+	pgassistant "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/assistant"
 	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgautomation "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/automation"
 	pgbooking "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/booking"
@@ -42,6 +43,7 @@ import (
 	pgschedule "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/schedule"
 	pgsearch "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/search"
 	pgsupplier "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/supplier"
+	pgsupport "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/support"
 	pgtask "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/task"
 	pkgpg "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/tourpackage"
 	pgvisa "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/visa"
@@ -51,6 +53,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/storage"
 	appadminconfig "github.com/wodi-crm/wodi-crm-be/internal/app/adminconfig"
 	appai "github.com/wodi-crm/wodi-crm-be/internal/app/ai"
+	appassistant "github.com/wodi-crm/wodi-crm-be/internal/app/assistant"
 	appaudit "github.com/wodi-crm/wodi-crm-be/internal/app/audit"
 	appauth "github.com/wodi-crm/wodi-crm-be/internal/app/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/app/automation"
@@ -77,12 +80,14 @@ import (
 	approoming "github.com/wodi-crm/wodi-crm-be/internal/app/rooming"
 	appsearch "github.com/wodi-crm/wodi-crm-be/internal/app/search"
 	appsupplier "github.com/wodi-crm/wodi-crm-be/internal/app/supplier"
+	appsupport "github.com/wodi-crm/wodi-crm-be/internal/app/support"
 	apptask "github.com/wodi-crm/wodi-crm-be/internal/app/task"
 	apppkg "github.com/wodi-crm/wodi-crm-be/internal/app/tourpackage"
 	appuser "github.com/wodi-crm/wodi-crm-be/internal/app/useradmin"
 	appvisa "github.com/wodi-crm/wodi-crm-be/internal/app/visa"
 	appwebhook "github.com/wodi-crm/wodi-crm-be/internal/app/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
+	domainassistant "github.com/wodi-crm/wodi-crm-be/internal/domain/assistant"
 	domaininbox "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/crypto"
@@ -133,9 +138,11 @@ type modules struct {
 	notify       *appnotification.Service
 	preferences  *apppreference.Service
 	profile      *appprofile.Service
+	support      *appsupport.Service
 	reports      *appreport.Service
 	schedules    *appreport.Scheduler
 	ai           *appai.Service
+	assistant    *appassistant.Service
 	inbox        *appinbox.Service
 	inboxAccts   *appinbox.WebhookAccounts
 	adminConfig  *appadminconfig.Service
@@ -220,6 +227,7 @@ func (m *modules) build() error {
 	m.auth = newAuthService(cfg, identityRepo, securityRepo, pgcompany.NewRepository(pool), m.audit, m.tokens, txm, m.keyring, m.limiter, m.sessionCheck)
 	m.users = appuser.NewService(identityRepo, m.audit, txm, m.sessionCheck)
 	m.profile = appprofile.NewService(identityRepo, identityRepo, m.audit, txm, m.sessionCheck)
+	m.support = appsupport.NewService(pgsupport.NewRepository(pool), m.audit, m.limiter, appsupport.Config{Logger: log})
 	m.retention = retention.NewService(securityRepo, pgwebhook.NewRepository(pool), m.audit, retention.DefaultPolicy)
 
 	m.customers = appcustomer.NewService(customerRepo, txm)
@@ -310,6 +318,14 @@ func (m *modules) build() error {
 	m.ai.SetLostLeadReader(aiLostBridge{repo: leadRepo})
 	m.ai.SetDraftConversationReader(aiInboxBridge{repo: inboxRepo})
 	m.ai.SetPackageCatalog(aiPackageCatalog{repo: pkgRepo})
+	m.assistant = appassistant.NewService(
+		assistantFactsBridge{dash: m.dashboard},
+		assistantCompleterBridge{ai: m.ai},
+		pgassistant.NewUsageRepository(pool),
+		appassistant.NewMemoryCache(domainassistant.CacheTTL, 2000),
+		appassistant.Config{DailyQuota: cfg.Assistant.DailyQuota, BurstPerMinute: cfg.Assistant.BurstPerMinute, Location: loc, Logger: log},
+	)
+	m.assistant.SetRateWindow(m.limiter)
 
 	m.inbox = appinbox.NewService(inboxRepo, integration.NewRegistry(
 		stub.New(),
