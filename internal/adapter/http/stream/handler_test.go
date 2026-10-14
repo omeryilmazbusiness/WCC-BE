@@ -53,7 +53,8 @@ func TestStreamDeliversOnlyVisibleSignalsAndEndsAtExpiry(t *testing.T) {
 	hub := realtime.NewHub(8, 10)
 	me, other, branch := uuid.New(), uuid.New(), uuid.New()
 	claims := &platformauth.Claims{UserID: me, SessionID: uuid.New(), BranchID: branch, Role: platformauth.RoleEmployee,
-		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(700 * time.Millisecond))}}
+		// NumericDate truncates to whole seconds, so a sub-second expiry may already be past.
+		RegisteredClaims: jwt.RegisteredClaims{ExpiresAt: jwt.NewNumericDate(time.Now().Add(2 * time.Second))}}
 	srv := httptest.NewServer(authed(claims, Handler{Hub: hub, Heartbeat: time.Hour}.Stream))
 	defer srv.Close()
 

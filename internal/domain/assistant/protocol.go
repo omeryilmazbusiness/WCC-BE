@@ -2,10 +2,14 @@
 // in-app AI assistant. See docs/AI_ASSISTANT_PROTOCOL.md.
 package assistant
 
-import "time"
+import (
+	"strings"
+	"time"
+	"unicode/utf8"
+)
 
 // ProtocolVersion changes whenever a rule or capability changes.
-const ProtocolVersion = "2026-10.2"
+const ProtocolVersion = "2026-10.3"
 
 // RuleID names a non-negotiable assistant rule; the UI translates it.
 type RuleID string
@@ -17,7 +21,8 @@ const (
 	RuleNoInventedNumbers RuleID = "no_invented_numbers"
 	RuleMinimalData       RuleID = "minimal_data"
 	RuleFAQFirst          RuleID = "faq_first"
-	RuleFixedCapabilities RuleID = "fixed_capabilities"
+	RuleWorkOnly          RuleID = "work_only"
+	RuleTaskStyle         RuleID = "task_style"
 	RuleNeverBlocked      RuleID = "never_blocked"
 	RuleAudited           RuleID = "audited"
 	RuleUserLanguage      RuleID = "user_language"
@@ -26,8 +31,8 @@ const (
 // Rules lists every rule in display order.
 func Rules() []RuleID {
 	return []RuleID{
-		RuleReadOnly, RuleNoSend, RuleOwnScope, RuleNoInventedNumbers, RuleMinimalData,
-		RuleFAQFirst, RuleFixedCapabilities, RuleNeverBlocked, RuleAudited, RuleUserLanguage,
+		RuleWorkOnly, RuleTaskStyle, RuleReadOnly, RuleNoSend, RuleOwnScope, RuleNoInventedNumbers,
+		RuleMinimalData, RuleFAQFirst, RuleNeverBlocked, RuleAudited, RuleUserLanguage,
 	}
 }
 
@@ -40,6 +45,7 @@ const (
 	CapRevenueStatus CapabilityID = "revenue_status"
 	CapMessageDraft  CapabilityID = "message_draft"
 	CapAppHelp       CapabilityID = "app_help"
+	CapWorkRequest   CapabilityID = "work_request"
 	CapGreeting      CapabilityID = "greeting"
 	CapOutOfScope    CapabilityID = "out_of_scope"
 )
@@ -51,6 +57,7 @@ const (
 	KindData  Kind = "data"  // explains server-computed facts
 	KindDraft Kind = "draft" // writes text for the user to review
 	KindHelp  Kind = "help"  // how to use the product
+	KindTask  Kind = "task"  // any other WODI work request, scope-checked by the model
 	KindRule  Kind = "rule"  // answered by a fixed rule, never by the model
 )
 
@@ -118,6 +125,13 @@ var catalog = []Capability{
 		History: 2, MaxOutputTokens: 220,
 		Task: "Explain how to do this in the WODI app in a few steps. Screens: " + screenMap + ". If unsure, point to Settings → Help & FAQ.",
 	},
+	{
+		ID: CapWorkRequest, Kind: KindTask, Requires: []string{PermAIRead},
+		History: 4, MaxOutputTokens: 350,
+		Task: "Do the request. WODI work means the app, the agency's customers, leads, bookings, payments, tasks, " +
+			"documents, staff, sales, service or Hajj/Umrah operations. Give concrete steps, advice or text. " +
+			"Ask one short question only if a required detail is missing. Screens: " + screenMap + ".",
+	},
 	{ID: CapGreeting, Kind: KindRule, Requires: []string{PermAIRead}},
 	{ID: CapOutOfScope, Kind: KindRule},
 }
@@ -125,6 +139,20 @@ var catalog = []Capability{
 // screenMap is the cheapest possible product map for app_help prompts.
 const screenMap = "Manager, Pipeline (leads), Inbox, Customers, Bookings, Packages, Flights, Hotels, Suppliers, " +
 	"Tasks, Missing documents, Finance, Reports, Targets, Import/Export, Settings (profile, team, roles, audit, help)"
+
+// OutOfScopeReply is what the model answers to a request outside WODI work; the
+// server replaces it with the fixed refusal.
+const OutOfScopeReply = "OUT_OF_SCOPE"
+
+// maxSentinelRunes bounds a reply still read as the sentinel (quotes, a full stop).
+const maxSentinelRunes = 32
+
+// IsOutOfScopeReply reports whether the model declined the request as not WODI work.
+func IsOutOfScopeReply(reply string) bool {
+	reply = strings.TrimSpace(reply)
+	return reply != "" && utf8.RuneCountInString(reply) <= maxSentinelRunes &&
+		strings.Contains(strings.ToUpper(reply), OutOfScopeReply)
+}
 
 // Capabilities returns the closed catalogue in display order.
 func Capabilities() []Capability {

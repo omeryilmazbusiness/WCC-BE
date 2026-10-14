@@ -23,12 +23,25 @@ func TestClassify(t *testing.T) {
 		"How do I create a booking?":                     CapAppHelp,
 		"where is the import screen":                     CapAppHelp,
 		"Kullanıcı nasıl eklenir, ayarlar nerede?":       CapAppHelp,
-		"hi":                             CapGreeting,
-		"Thanks!":                        CapGreeting,
-		"مرحبا":                          CapGreeting,
-		"What is the capital of France?": CapOutOfScope,
-		"tell me a joke":                 CapOutOfScope,
-		"":                               CapOutOfScope,
+		"hi":                                     CapGreeting,
+		"Thanks!":                                CapGreeting,
+		"How are you?":                           CapGreeting,
+		"مرحبا":                                  CapGreeting,
+		"What is the capital of France?":         CapOutOfScope,
+		"tell me a joke":                         CapOutOfScope,
+		"bana bir şiir yaz":                      CapMessageDraft,
+		"bir şiir söyle":                         CapOutOfScope,
+		"اكتب قصيدة":                             CapMessageDraft,
+		"قل لي نكتة":                             CapOutOfScope,
+		"":                                       CapOutOfScope,
+		"Make it shorter and more formal":        CapWorkRequest,
+		"What should a pilgrim pack for Hajj?":   CapWorkRequest,
+		"Give me 3 tips to increase Umrah sales": CapWorkRequest,
+		"Umrah satışlarını artırmak için öneri ver":           CapWorkRequest,
+		"How should we handle a customer who wants a refund?": CapWorkRequest,
+		"this is it":   CapWorkRequest,
+		"I miss you":   CapOutOfScope,
+		"Tarife nedir": CapWorkRequest,
 	}
 	for q, want := range cases {
 		if got := Classify(q); got != want {
@@ -38,16 +51,52 @@ func TestClassify(t *testing.T) {
 }
 
 func TestClassifyWordBoundaries(t *testing.T) {
-	// "hi" inside "this" / "which" must not read as a greeting or anything else.
-	if got := Classify("this is it"); got != CapOutOfScope {
+	// "hi" inside "this" / "which" must not read as a greeting.
+	if got := Classify("this is it"); got == CapGreeting {
 		t.Fatalf("got %s", got)
 	}
 	if got := Classify("hi, give me today's summary please"); got != CapOpsSummary {
 		t.Fatalf("a greeting with a real question routes to the question, got %s", got)
 	}
 	// "missing" must not be matched by "miss".
-	if got := Classify("I miss you"); got != CapOutOfScope {
+	if got := Classify("which bookings are missing documents"); got != CapOpsSummary {
 		t.Fatalf("got %s", got)
+	}
+}
+
+func TestOffTopicNeverBeatsAWorkCue(t *testing.T) {
+	if got := Classify("draft a message about the song played on the coach"); got != CapMessageDraft {
+		t.Fatalf("a work cue wins over an off-topic word, got %s", got)
+	}
+	if got := Classify("Which leads should I focus on?"); got != CapLeadFocus {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestOutOfScopeSentinel(t *testing.T) {
+	for _, s := range []string{"OUT_OF_SCOPE", " out_of_scope. ", "`OUT_OF_SCOPE`", "**OUT_OF_SCOPE**"} {
+		if !IsOutOfScopeReply(s) {
+			t.Errorf("%q is the sentinel", s)
+		}
+	}
+	for _, s := range []string{"", "Here is the plan. Nothing is OUT_OF_SCOPE about refunds; follow these steps.", "In scope"} {
+		if IsOutOfScopeReply(s) {
+			t.Errorf("%q is a real answer", s)
+		}
+	}
+}
+
+func TestSystemPromptIsTaskStyle(t *testing.T) {
+	for _, c := range Capabilities() {
+		if !c.UsesModel() {
+			continue
+		}
+		sys := BuildPrompt(c, "en", &Facts{}, nil, "q").System
+		for _, want := range []string{"Carry out the request directly", "no greeting, small talk", "reply exactly " + OutOfScopeReply, "never invent numbers", "cannot change data"} {
+			if !strings.Contains(sys, want) {
+				t.Errorf("%s: system prompt lacks %q", c.ID, want)
+			}
+		}
 	}
 }
 
@@ -73,8 +122,8 @@ func TestCatalog(t *testing.T) {
 			t.Errorf("router targets unknown capability %s", s.id)
 		}
 	}
-	if len(Rules()) != 10 {
-		t.Fatalf("rules = %d", len(Rules()))
+	if r := Rules(); len(r) != 11 || r[0] != RuleWorkOnly || r[1] != RuleTaskStyle {
+		t.Fatalf("rules = %v", r)
 	}
 	draft, _ := Lookup(CapMessageDraft)
 	if draft.Allowed(func(p string) bool { return p == PermAIRead }) {
@@ -240,9 +289,22 @@ func TestRender(t *testing.T) {
 	if strings.Count(list, "\n- ") != 2 {
 		t.Errorf("only real capabilities are listed: %s", list)
 	}
+	all := []CapabilityID{CapOpsSummary, CapLeadFocus, CapRevenueStatus, CapMessageDraft, CapAppHelp, CapWorkRequest}
+	greet := RenderGreeting("en", all)
+	if strings.Contains(greet, "Hello") || strings.Contains(greet, "?") || strings.Count(greet, "\n- ") != len(all) {
+		t.Errorf("greeting asks for a task, no small talk: %s", greet)
+	}
+	offline := RenderNeedsAI("en", all)
+	if strings.Contains(offline, "Draft a customer message") || strings.Contains(offline, "any question") ||
+		!strings.Contains(offline, "Summarise today's operations") || !strings.Contains(offline, "how to use a screen") {
+		t.Errorf("without AI only data and help answers are offered: %s", offline)
+	}
 	for _, loc := range []string{"en", "ar"} {
 		c := copies[loc]
-		for _, id := range []CapabilityID{CapOpsSummary, CapLeadFocus, CapRevenueStatus, CapMessageDraft, CapAppHelp} {
+		if c.needsAI == "" {
+			t.Errorf("%s: needsAI copy", loc)
+		}
+		for _, id := range all {
 			if c.can[id] == "" {
 				t.Errorf("%s: label for %s", loc, id)
 			}

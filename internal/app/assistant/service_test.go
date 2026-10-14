@@ -113,7 +113,7 @@ func TestRulesNeverCallTheModel(t *testing.T) {
 			t.Fatalf("%q: %+v", q, a)
 		}
 	}
-	out := ask(t, h, manager, "what is the weather")
+	out := ask(t, h, manager, "what is the capital of France")
 	if !strings.Contains(out.Reply, "Draft a customer message") {
 		t.Fatalf("refusal lists what is possible: %s", out.Reply)
 	}
@@ -240,6 +240,66 @@ func TestDraftAndHelpPrompts(t *testing.T) {
 	}
 }
 
+func TestWorkRequestIsDoneByTheModel(t *testing.T) {
+	h := newHarness(10)
+	draft := []domain.Turn{{Role: "user", Content: "Draft a reply to Ahmed about visas"}, {Role: "assistant", Content: "Hello Ahmed, ..."}}
+	_, err := h.svc.Ask(context.Background(), manager, Request{Locale: "en", Screen: "inbox",
+		Messages: append(draft, domain.Turn{Role: "user", Content: "Make it shorter and more formal"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := ask(t, h, manager, "What should a pilgrim pack for Hajj?")
+	if a.Source != SourceAI || a.Capability != domain.CapWorkRequest || a.Reply != "**AI** answer" {
+		t.Fatalf("free-form WODI work reaches the model: %+v", a)
+	}
+	follow := h.ai.calls[0]
+	if follow.Capability != domain.CapWorkRequest || !strings.Contains(follow.Prompt.User, "History:") ||
+		!strings.HasPrefix(follow.Prompt.User, "Screen: inbox\n") || strings.Contains(follow.Prompt.User, "Facts:") {
+		t.Fatalf("follow-ups keep their context, no facts: %q", follow.Prompt.User)
+	}
+	if h.facts.calls != 0 {
+		t.Fatal("work requests read no data")
+	}
+}
+
+func TestModelDeclinesOffTopicWithTheFixedRefusal(t *testing.T) {
+	h := newHarness(10)
+	h.ai.reply = "OUT_OF_SCOPE"
+	a := ask(t, h, manager, "Which phone should I buy?")
+	if a.Source != SourceRule || a.Capability != domain.CapOutOfScope || !strings.Contains(a.Reply, "not WODI work") {
+		t.Fatalf("the sentinel becomes the fixed refusal: %+v", a)
+	}
+	if strings.Contains(a.Reply, "OUT_OF_SCOPE") || a.Quota.Used != 1 {
+		t.Fatalf("the sentinel never reaches the user; the call counts: %+v", a)
+	}
+	again := ask(t, h, manager, "Which phone should I buy?")
+	if again.Capability != domain.CapOutOfScope || len(h.ai.calls) != 1 || again.Quota.Used != 1 {
+		t.Fatalf("a cached refusal stays a refusal, free: %+v calls=%d", again, len(h.ai.calls))
+	}
+}
+
+func TestWorkRequestWithoutAI(t *testing.T) {
+	h := newHarness(10)
+	h.ai.configured = false
+	a := ask(t, h, manager, "What should a pilgrim pack for Hajj?")
+	if a.Source != SourceRule || a.Notice != domain.NoticeNotConfigured || !strings.Contains(a.Reply, "Summarise today's operations") {
+		t.Fatalf("offers what works without AI: %+v", a)
+	}
+	if strings.Contains(a.Reply, "Draft a customer message") || len(h.ai.calls) != 0 || h.facts.calls != 0 {
+		t.Fatalf("no model, no data, no AI-only offers: %s", a.Reply)
+	}
+}
+
+func TestGreetingAsksForATask(t *testing.T) {
+	h := newHarness(10)
+	reader := Viewer{UserID: uuid.New(), BranchID: manager.BranchID, Can: only("ai.read", "dashboard.read")}
+	a := ask(t, h, reader, "hello")
+	if a.Source != SourceRule || strings.Contains(a.Reply, "Hello") || strings.Contains(a.Reply, "Draft a customer message") ||
+		!strings.Contains(a.Reply, "Summarise today's operations") {
+		t.Fatalf("greeting lists the viewer's tasks without small talk: %s", a.Reply)
+	}
+}
+
 func TestHistoryIsTrimmed(t *testing.T) {
 	h := newHarness(10)
 	var history []domain.Turn
@@ -277,7 +337,7 @@ func TestProtocolView(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Version != domain.ProtocolVersion || len(p.Rules) != 10 || !p.AIConfigured || p.Quota.Used != 1 || p.Quota.Limit != 5 {
+	if p.Version != domain.ProtocolVersion || len(p.Rules) != len(domain.Rules()) || !p.AIConfigured || p.Quota.Used != 1 || p.Quota.Limit != 5 {
 		t.Fatalf("%+v", p)
 	}
 	allowed := map[domain.CapabilityID]bool{}

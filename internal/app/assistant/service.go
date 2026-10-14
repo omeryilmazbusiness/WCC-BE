@@ -164,12 +164,15 @@ func (s *Service) Ask(ctx context.Context, v Viewer, req Request) (*Answer, erro
 	answer := func(reply string, src Source, notice domain.Notice) *Answer {
 		return &Answer{Reply: reply, Capability: capID, Source: src, Notice: notice, Quota: quota}
 	}
+	refuse := func() *Answer {
+		return &Answer{Reply: domain.RenderOutOfScope(locale, allowedIDs(v)), Capability: domain.CapOutOfScope, Source: SourceRule, Quota: quota}
+	}
 
 	switch {
 	case capID == domain.CapGreeting:
-		return answer(domain.RenderGreeting(locale), SourceRule, domain.NoticeNone), nil
+		return answer(domain.RenderGreeting(locale, allowedIDs(v)), SourceRule, domain.NoticeNone), nil
 	case capID == domain.CapOutOfScope:
-		return answer(domain.RenderOutOfScope(locale, allowedIDs(v)), SourceRule, domain.NoticeNone), nil
+		return refuse(), nil
 	case !cap.Allowed(v.Can):
 		return answer(domain.RenderNotAllowed(locale, allowedIDs(v)), SourceRule, domain.NoticeNotAllowed), nil
 	}
@@ -181,11 +184,14 @@ func (s *Service) Ask(ctx context.Context, v Viewer, req Request) (*Answer, erro
 		}
 	}
 	essential := func(n domain.Notice) *Answer {
-		src := SourceRule
-		if cap.NeedsFacts {
-			src = SourceData
+		switch {
+		case capID == domain.CapWorkRequest:
+			return answer(domain.RenderNeedsAI(locale, allowedIDs(v)), SourceRule, n)
+		case cap.NeedsFacts:
+			return answer(domain.RenderEssential(capID, locale, facts), SourceData, n)
+		default:
+			return answer(domain.RenderEssential(capID, locale, facts), SourceRule, n)
 		}
-		return answer(domain.RenderEssential(capID, locale, facts), src, n)
 	}
 
 	configured, err := s.configured(ctx, v.BranchID)
@@ -203,11 +209,14 @@ func (s *Service) Ask(ctx context.Context, v Viewer, req Request) (*Answer, erro
 	}
 
 	prompt := domain.BuildPrompt(cap, locale, facts, history, question)
-	if screen := screenHint(req.Screen); capID == domain.CapAppHelp && screen != "" {
+	if screen := screenHint(req.Screen); (capID == domain.CapAppHelp || capID == domain.CapWorkRequest) && screen != "" {
 		prompt.User = "Screen: " + screen + "\n" + prompt.User
 	}
 	key := cacheKey(v, capID, locale, facts, prompt.User)
 	if hit, ok := s.cache.Get(key); ok {
+		if domain.IsOutOfScopeReply(hit) {
+			return refuse(), nil
+		}
 		return answer(hit, SourceCache, domain.NoticeNone), nil
 	}
 
@@ -228,6 +237,9 @@ func (s *Service) Ask(ctx context.Context, v Viewer, req Request) (*Answer, erro
 	}
 	quota.Used++
 	s.cache.Put(key, reply)
+	if domain.IsOutOfScopeReply(reply) {
+		return refuse(), nil
+	}
 	return answer(reply, SourceAI, domain.NoticeNone), nil
 }
 

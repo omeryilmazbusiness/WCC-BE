@@ -25,6 +25,12 @@ var signals = []signal{
 		phrases: []string{"how do i", "how can i", "how to", "where is", "where can", "where do", "nasıl yap", "nasıl ekle", "nasıl aç", "nerede", "nereden", "كيف أ", "كيف يمكنني", "أين", "اين"},
 	},
 	{
+		// Advice is a work request even when it names a data topic ("tips to grow sales").
+		id:      CapWorkRequest,
+		words:   []string{"tip", "tips", "advice", "advise", "idea*", "strateg*", "improve", "increase", "öneri*", "tavsiye*", "fikir*", "strateji*", "artır*"},
+		phrases: []string{"how should", "what should we do", "best way", "نصيحة", "نصائح", "اقتراح", "استراتيجية", "كيف نزيد"},
+	},
+	{
 		id:      CapRevenueStatus,
 		words:   []string{"revenue*", "target*", "sales", "collected", "collection*", "income", "margin*", "gelir*", "hedef*", "satış*", "tahsilat*", "ciro*"},
 		phrases: []string{"إيراد", "ايراد", "هدف", "أهداف", "مبيعات", "تحصيل"},
@@ -47,15 +53,28 @@ var signals = []signal{
 	},
 }
 
+// offTopic declines, without a model call, requests that are plainly not WODI work.
+// It is checked only after every capability cue missed, so "draft a message about
+// the weather delay" still drafts.
+var offTopic = signal{
+	id: CapOutOfScope,
+	words: []string{"joke*", "poem*", "lyric*", "song*", "recipe*", "movie*", "football", "soccer", "horoscope*",
+		"bitcoin", "crypto*", "politic*", "election*", "celebrit*", "girlfriend", "boyfriend",
+		"fıkra", "şiir*", "şarkı*", "futbol", "siyaset*", "burç*", "kripto*"},
+	phrases: []string{"capital of", "who won", "love you", "miss you", "date me", "yemek tarifi", "maç sonucu",
+		"نكتة", "قصيدة", "أغنية", "اغنية", "وصفة", "كرة القدم", "سياسة", "أبراج"},
+}
+
 var greetings = []string{
-	"hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening",
-	"merhaba", "selam", "teşekkürler", "teşekkür ederim", "sağ ol",
-	"مرحبا", "مرحباً", "السلام عليكم", "شكرا", "شكراً", "أهلا", "اهلا",
+	"hi", "hello", "hey", "thanks", "thank you", "good morning", "good evening", "how are you",
+	"merhaba", "selam", "teşekkürler", "teşekkür ederim", "sağ ol", "nasılsın",
+	"مرحبا", "مرحباً", "السلام عليكم", "شكرا", "شكراً", "أهلا", "اهلا", "كيف حالك",
 }
 
 const maxGreetingRunes = 24
 
-// Classify maps a question to one capability without any model call.
+// Classify maps a question to one capability without any model call. Anything
+// without a cue is a work request: the model does it or answers OutOfScopeReply.
 func Classify(question string) CapabilityID {
 	text := strings.ToLower(strings.TrimSpace(question))
 	if text == "" {
@@ -75,7 +94,10 @@ func Classify(question string) CapabilityID {
 			return s.id
 		}
 	}
-	return CapOutOfScope
+	if hasPhrase(text, offTopic.phrases) || hasWord(tokens, offTopic.words) {
+		return CapOutOfScope
+	}
+	return CapWorkRequest
 }
 
 func tokenize(text string) []string {

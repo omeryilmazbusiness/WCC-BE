@@ -18,25 +18,26 @@ const (
 )
 
 type copyset struct {
-	greeting, outOfScope, notAllowed, helpFallback string
-	can                                            map[CapabilityID]string
-	summaryHead, leadsHead, revenueHead, noTarget  string
-	openLeads, overdue, unpaid, missing, nothing   string
-	targetLine                                     string
-	status                                         map[string]string
-	draft                                          string
+	greeting, outOfScope, notAllowed, helpFallback, needsAI string
+	can                                                     map[CapabilityID]string
+	summaryHead, leadsHead, revenueHead, noTarget           string
+	openLeads, overdue, unpaid, missing, nothing            string
+	targetLine                                              string
+	status                                                  map[string]string
+	draft                                                   string
 }
 
 var copies = map[string]copyset{
 	"en": {
-		greeting:     "Hello! I can brief you on today, point out leads to focus on, explain revenue against your target, draft customer messages and help with any screen. What do you need?",
-		outOfScope:   "I can only help with WODI work. Here is what I can do for you:",
-		notAllowed:   "Your role doesn't include access to this information, so I can't answer it. Here is what I can do for you:",
+		greeting:     "Ready. Give me a WODI task, for example:",
+		outOfScope:   "That is not WODI work, so I can't do it. Ask me to:",
+		notAllowed:   "Your role doesn't include access to this information, so I can't answer it. Ask me to:",
 		helpFallback: "Step-by-step help for every screen is in **Settings → Help & FAQ**: search for the screen or task. For anything not covered there, ask your administrator.",
+		needsAI:      "This request needs AI, which is not available right now. These work from your data:",
 		can: map[CapabilityID]string{
 			CapOpsSummary: "Summarise today's operations", CapLeadFocus: "Point out leads to focus on",
 			CapRevenueStatus: "Explain revenue against your target", CapMessageDraft: "Draft a customer message",
-			CapAppHelp: "Explain how to use a screen",
+			CapAppHelp: "Explain how to use a screen", CapWorkRequest: "Answer any question or task about your WODI work",
 		},
 		summaryHead: "### Today at a glance", leadsHead: "### Where to focus", revenueHead: "### Revenue vs target",
 		noTarget:  "There is no active revenue target for you right now.",
@@ -47,14 +48,15 @@ var copies = map[string]copyset{
 		draft:      "Hello [Customer name],\n\nThank you for contacting us. %s\n\nPlease let me know if you have any questions.\n\nKind regards,\n[Your name]",
 	},
 	"ar": {
-		greeting:     "مرحبًا! يمكنني تلخيص يومك، والإشارة إلى العملاء المحتملين الأهم، وشرح الإيرادات مقابل هدفك، وكتابة رسائل للعملاء، والمساعدة في أي شاشة. بماذا أساعدك؟",
-		outOfScope:   "يمكنني المساعدة في أعمال WODI فقط. هذا ما يمكنني فعله لك:",
-		notAllowed:   "دورك لا يتيح الوصول إلى هذه المعلومات، لذا لا يمكنني الإجابة. هذا ما يمكنني فعله لك:",
+		greeting:     "جاهز. أعطني مهمة من أعمال WODI، مثلًا:",
+		outOfScope:   "هذا ليس من أعمال WODI، لذا لا يمكنني تنفيذه. اطلب مني:",
+		notAllowed:   "دورك لا يتيح الوصول إلى هذه المعلومات، لذا لا يمكنني الإجابة. اطلب مني:",
 		helpFallback: "تجد شرحًا خطوة بخطوة لكل شاشة في **الإعدادات ← المساعدة والأسئلة الشائعة**: ابحث عن الشاشة أو المهمة. وما لم يُذكر هناك، اسأل المسؤول.",
+		needsAI:      "هذا الطلب يحتاج إلى الذكاء الاصطناعي، وهو غير متاح الآن. هذه تعمل من بياناتك:",
 		can: map[CapabilityID]string{
 			CapOpsSummary: "تلخيص عمليات اليوم", CapLeadFocus: "الإشارة إلى العملاء المحتملين الأهم",
 			CapRevenueStatus: "شرح الإيرادات مقابل هدفك", CapMessageDraft: "كتابة مسودة رسالة لعميل",
-			CapAppHelp: "شرح طريقة استخدام شاشة",
+			CapAppHelp: "شرح طريقة استخدام شاشة", CapWorkRequest: "الإجابة عن أي سؤال أو مهمة تخص عملك في WODI",
 		},
 		summaryHead: "### اليوم في لمحة", leadsHead: "### أين تركّز", revenueHead: "### الإيرادات مقابل الهدف",
 		noTarget:  "لا يوجد لديك هدف إيرادات نشط حاليًا.",
@@ -68,8 +70,24 @@ var copies = map[string]copyset{
 
 func copyFor(locale string) copyset { return copies[NormalizeLocale(locale)] }
 
-// RenderGreeting is the fixed reply to hello / thanks.
-func RenderGreeting(locale string) string { return copyFor(locale).greeting }
+// RenderGreeting answers hello / thanks with a prompt for a task, not small talk.
+func RenderGreeting(locale string, allowed []CapabilityID) string {
+	c := copyFor(locale)
+	return c.greeting + "\n" + bulletList(c, allowed)
+}
+
+// RenderNeedsAI answers a work request when the model cannot be used, offering what
+// still works without it.
+func RenderNeedsAI(locale string, allowed []CapabilityID) string {
+	c := copyFor(locale)
+	var offline []CapabilityID
+	for _, id := range allowed {
+		if cap, ok := Lookup(id); ok && (cap.Kind == KindData || cap.Kind == KindHelp) {
+			offline = append(offline, id)
+		}
+	}
+	return c.needsAI + "\n" + bulletList(c, offline)
+}
 
 // RenderOutOfScope declines and lists what the viewer may ask instead.
 func RenderOutOfScope(locale string, allowed []CapabilityID) string {
@@ -128,8 +146,6 @@ func RenderEssential(cap CapabilityID, locale string, f *Facts) string {
 		return fmt.Sprintf(c.draft, "[…]")
 	case CapAppHelp:
 		return c.helpFallback
-	case CapGreeting:
-		return c.greeting
 	default:
 		return c.outOfScope
 	}
