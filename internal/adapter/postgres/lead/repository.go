@@ -165,8 +165,12 @@ func (r *Repository) FindByID(ctx context.Context, id uuid.UUID) (*domain.Lead, 
 	return l, err
 }
 
-// filter builds the WHERE terms shared by List and Board; deleted leads never match.
-func filter(ctx context.Context, f domain.ListFilter) ([]string, []any, error) {
+// maxOwnerMatches bounds the owner ids a name search expands to.
+const maxOwnerMatches = 50
+
+// filter builds the WHERE terms shared by List and Board; deleted leads never
+// match. No term needs the users join, so counts and aggregates scan leads only.
+func filter(ctx context.Context, q tx.Querier, f domain.ListFilter) ([]string, []any, error) {
 	where := []string{"l.deleted_at IS NULL"}
 	args := []any{}
 	add := func(term string, v any) {
@@ -203,15 +207,68 @@ func filter(ctx context.Context, f domain.ListFilter) ([]string, []any, error) {
 	if f.CreatedTo != nil {
 		add("l.created_at < $%d", *f.CreatedTo)
 	}
-	if qstr := strings.TrimSpace(f.Query); qstr != "" {
-		args = append(args, "%"+qstr+"%")
-		i := len(args)
-		where = append(where, fmt.Sprintf(
-			`(l.full_name ILIKE $%d OR l.phone ILIKE $%d OR l.email ILIKE $%d OR l.company_name ILIKE $%d OR l.source ILIKE $%d OR COALESCE(u.full_name,'') ILIKE $%d)`,
-			i, i, i, i, i, i,
-		))
+	if f.LostReason != "" {
+		add("l.stage='lost' AND l.lost_reason_code=$%d", f.LostReason)
+	}
+	if f.Segment != "" {
+		add("l.segment=$%d", string(f.Segment))
+	}
+	terms, err := domain.ParseSearch(f.Query)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !terms.Empty() {
+		term, termArgs, err := searchTerm(ctx, q, terms, len(args))
+		if err != nil {
+			return nil, nil, err
+		}
+		where = append(where, term)
+		args = append(args, termArgs...)
 	}
 	return pgscope.Append(ctx, scopeAliased, where, args)
+}
+
+// searchTerm requires every token in the lead's search document (or, for
+// digits, in its phone), or the whole query in the owner's name. Each branch
+// is served by a trigram or owner index, so Postgres can combine them with a
+// bitmap OR instead of scanning the archive.
+func searchTerm(ctx context.Context, q tx.Querier, t domain.SearchTerms, offset int) (string, []any, error) {
+	var args []any
+	param := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", offset+len(args))
+	}
+	all := make([]string, 0, len(t.Tokens))
+	for _, tok := range t.Tokens {
+		like := param("%" + domain.EscapeLike(tok) + "%")
+		cond := "l.search_text LIKE " + like
+		if domain.IsPhoneToken(tok) {
+			cond = "(" + cond + " OR l.phone_digits LIKE " + like + ")"
+		}
+		all = append(all, cond)
+	}
+	term := "(" + strings.Join(all, " AND ") + ")"
+
+	owners, err := ownersNamed(ctx, q, t.Raw)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(owners) > 0 {
+		term = "(" + term + " OR l.owner_id = ANY(" + param(owners) + "))"
+	}
+	return term, args, nil
+}
+
+// ownersNamed resolves a name fragment to user ids up front, keeping the
+// users table out of the lead scan.
+func ownersNamed(ctx context.Context, q tx.Querier, raw string) ([]uuid.UUID, error) {
+	rows, err := q.Query(ctx, `
+		SELECT id FROM users WHERE lower(full_name) LIKE $1 LIMIT $2`,
+		"%"+domain.EscapeLike(strings.ToLower(raw))+"%", maxOwnerMatches)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
 }
 
 // orderBy maps a whitelisted sort to SQL; the id tiebreak keeps pages stable.
@@ -234,7 +291,7 @@ func orderBy(s domain.Sort) string {
 
 func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Lead, int, error) {
 	q := tx.QuerierFrom(ctx, r.pool)
-	where, args, err := filter(ctx, f)
+	where, args, err := filter(ctx, q, f)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -245,7 +302,7 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Le
 		limit = 50
 	}
 
-	countSQL := `SELECT COUNT(*) FROM leads l LEFT JOIN users u ON u.id = l.owner_id WHERE ` + clause
+	countSQL := `SELECT COUNT(*) FROM leads l WHERE ` + clause
 	var total int
 	if err := q.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, err
@@ -281,19 +338,19 @@ func (r *Repository) query(ctx context.Context, sql string, args ...any) ([]doma
 
 func (r *Repository) Board(ctx context.Context, f domain.ListFilter, perStage int) (*domain.Board, error) {
 	f.Stage = ""
-	where, args, err := filter(ctx, f)
+	q := tx.QuerierFrom(ctx, r.pool)
+	where, args, err := filter(ctx, q, f)
 	if err != nil {
 		return nil, err
 	}
 	clause := strings.Join(where, " AND ")
-	q := tx.QuerierFrom(ctx, r.pool)
 
 	rows, err := q.Query(ctx, `
 		SELECT l.stage, l.budget_currency, COUNT(*),
 			COALESCE(SUM(l.budget_amount) FILTER (WHERE l.budget_amount > 0), 0)::bigint,
 			COUNT(*) FILTER (WHERE l.budget_amount > 0),
 			COUNT(*) FILTER (WHERE l.no_follow_up)
-		FROM leads l LEFT JOIN users u ON u.id = l.owner_id
+		FROM leads l
 		WHERE `+clause+`
 		GROUP BY l.stage, l.budget_currency`, args...)
 	if err != nil {
@@ -337,19 +394,26 @@ func (r *Repository) Board(ctx context.Context, f domain.ListFilter, perStage in
 		return board, nil
 	}
 
+	// One bounded index walk per stage instead of ranking the whole filtered
+	// set, so a year of leads costs the same as a week.
 	order := orderBy(f.Sort)
 	n := len(args) + 1
+	stages := make([]string, 0, len(board.Columns))
+	for _, c := range board.Columns {
+		if c.Total > 0 {
+			stages = append(stages, string(c.Stage))
+		}
+	}
 	items, err := r.query(ctx, fmt.Sprintf(`
-		SELECT %[1]s FROM leads l
+		SELECT %[1]s FROM unnest($%[4]d::text[]) AS s(stage)
+		CROSS JOIN LATERAL (
+			SELECT l.* FROM leads l
+			WHERE %[3]s AND l.stage = s.stage
+			ORDER BY %[2]s
+			LIMIT $%[5]d
+		) l
 		LEFT JOIN users u ON u.id = l.owner_id
-		WHERE l.id IN (
-			SELECT id FROM (
-				SELECT l.id, ROW_NUMBER() OVER (PARTITION BY l.stage ORDER BY %[2]s) AS rn
-				FROM leads l LEFT JOIN users u ON u.id = l.owner_id
-				WHERE %[3]s
-			) ranked WHERE rn <= $%[4]d
-		)
-		ORDER BY %[2]s`, leadCols, order, clause, n), append(args, perStage)...)
+		ORDER BY %[2]s`, leadCols, order, clause, n, n+1), append(args, stages, perStage)...)
 	if err != nil {
 		return nil, err
 	}

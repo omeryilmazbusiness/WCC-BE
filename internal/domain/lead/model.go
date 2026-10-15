@@ -96,6 +96,9 @@ type ListFilter struct {
 	Stage      Stage
 	Source     string
 	Priority   Priority
+	// LostReason narrows to leads lost for this taxonomy code.
+	LostReason string
+	Segment    Segment
 	Query      string
 	NoFollowUp *bool
 	// CreatedFrom and CreatedTo bound created_at as [from, to).

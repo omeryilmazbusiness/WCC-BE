@@ -181,10 +181,12 @@ func listFilter(r *http.Request) (domain.ListFilter, error) {
 	if f.CreatedTo, err = optionalTime(r, "created_to"); err != nil {
 		return f, err
 	}
-	if f.CreatedFrom != nil && f.CreatedTo != nil && !f.CreatedTo.After(*f.CreatedFrom) {
-		return f, shared.NewValidation("created_to must be after created_from")
+	f.LostReason = strings.ToLower(request.FilterString(r, "lost_reason"))
+	f.Segment = domain.Segment(strings.ToLower(request.FilterString(r, "segment")))
+	if _, err := domain.ParseSearch(f.Query); err != nil {
+		return f, err
 	}
-	return f, nil
+	return f, domain.ValidateFilter(f)
 }
 
 // optionalTime parses an RFC 3339 instant, so the caller's time zone decides
