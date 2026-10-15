@@ -82,6 +82,8 @@ func mapTask(t *domain.Task) map[string]any {
 		"outcome":         t.Outcome,
 		"assignee_id":     t.AssigneeID,
 		"assignee_name":   t.AssigneeName,
+		"created_by":      t.CreatedBy,
+		"created_by_name": t.CreatedByName,
 		"related_type":    t.RelatedType,
 		"related_id":      t.RelatedID,
 		"due_at":          due,

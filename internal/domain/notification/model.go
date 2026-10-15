@@ -70,6 +70,7 @@ const (
 	KindAISummary           = "ai.summary"
 	KindAILostLeads         = "ai.lost_leads"
 	KindTaskReminder        = "task.reminder"
+	KindTaskNote            = "task.note"
 	KindSupplierLowBalance  = "supplier.low_balance"
 	KindSupplierContract    = "supplier.contract_expiring"
 )
@@ -254,6 +255,8 @@ func GroupLabel(kind string, count int, baseTitle string) string {
 		return c + " passports expiring"
 	case KindVisaFollowUp:
 		return c + " visas awaiting decision"
+	case KindTaskNote:
+		return c + " new notes on a task"
 	default:
 		return c + " alerts — " + baseTitle
 	}

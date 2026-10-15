@@ -43,6 +43,7 @@ func samplePayloads() map[string]any {
 		events.PaymentReversed:             events.PaymentReversedPayload{PaymentID: id, BranchID: b, Amount: 100, Currency: "USD"},
 		events.DocumentStatusChanged:       events.DocumentStatusChangedPayload{DocumentID: id, BranchID: b, To: "approved"},
 		events.TaskOverdue:                 events.TaskOverduePayload{TaskID: id, BranchID: b},
+		events.TaskNoteAdded:               events.TaskNoteAddedPayload{NoteID: id, TaskID: id, BranchID: b, Excerpt: "Need one more day"},
 		events.TargetStatusChanged:         events.TargetStatusChangedPayload{TargetID: id, BranchID: b, From: "on_track", To: "behind"},
 		events.IntegrationFailed:           events.IntegrationFailedPayload{BranchID: b, Source: "webhook", Provider: "meta"},
 		events.ImportCompleted:             events.ImportCompletedPayload{ImportJobID: id, BranchID: b, Inserted: 3},
@@ -73,8 +74,8 @@ func TestDurableRoundTrip(t *testing.T) {
 			t.Fatalf("%s: round trip %v != %v (%v)", e.Name, back.Payload, p, err)
 		}
 	}
-	if durable != 9 {
-		t.Fatalf("want 9 durable events, got %d", durable)
+	if durable != 10 {
+		t.Fatalf("want 10 durable events, got %d", durable)
 	}
 }
 

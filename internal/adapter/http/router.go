@@ -374,6 +374,10 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/cancel", h.Task.Cancel)
 				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Post("/{id}/assign", h.Task.Assign)
 				r.With(middleware.RequirePermission(platformauth.PermTasksWrite)).Put("/{id}/package", h.Task.LinkPackage)
+				// Notes are guarded by thread participation (assignee ↔ creator), so read access suffices.
+				r.With(middleware.RequirePermission(platformauth.PermTasksRead)).Get("/{id}/notes", h.Task.ListNotes)
+				r.With(middleware.RequirePermission(platformauth.PermTasksRead)).Post("/{id}/notes", h.Task.AddNote)
+				r.With(middleware.RequirePermission(platformauth.PermTasksRead)).Post("/{id}/notes/read", h.Task.MarkNotesRead)
 			})
 
 			r.With(middleware.RequirePermission(platformauth.PermPaymentsWrite)).Post("/payments", h.Payment.Record)

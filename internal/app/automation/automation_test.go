@@ -210,6 +210,37 @@ func TestLeadClosedAndNotificationEvents(t *testing.T) {
 	}
 }
 
+func TestTaskNoteNotifiesRecipientOnce(t *testing.T) {
+	f := newFixture(nil)
+	gm, agent, task := uuid.New(), uuid.New(), uuid.New()
+	p := events.TaskNoteAddedPayload{
+		NoteID: uuid.New(), TaskID: task, BranchID: uuid.New(), AuthorID: agent, AuthorName: "Aisha Khan",
+		RecipientID: gm, TaskTitle: "Visa checklist", Excerpt: "Customer needs one more day",
+	}
+	deliver(t, f.bus, events.TaskNoteAdded, p)
+	deliver(t, f.bus, events.TaskNoteAdded, p)
+	if len(f.notes.sent) != 1 {
+		t.Fatalf("redelivery must not notify twice: %d", len(f.notes.sent))
+	}
+	got := f.notes.sent[0]
+	if got.to != gm || got.in.Kind != notificationdomain.KindTaskNote || got.in.EntityID == nil || *got.in.EntityID != task {
+		t.Fatalf("note alert = %+v", got)
+	}
+	if got.in.Title != "New note from Aisha Khan" || got.in.Body != "Visa checklist: Customer needs one more day" {
+		t.Fatalf("copy = %q / %q", got.in.Title, got.in.Body)
+	}
+	if got.in.HrefHint != "/tasks?task="+task.String() {
+		t.Fatalf("deep link = %q", got.in.HrefHint)
+	}
+
+	p.NoteID = uuid.New()
+	p.RecipientID = agent
+	deliver(t, f.bus, events.TaskNoteAdded, p)
+	if len(f.notes.sent) != 1 {
+		t.Fatal("a note must never notify its own author")
+	}
+}
+
 func TestPaymentDueAlertOncePerDueDate(t *testing.T) {
 	f := newFixture(nil)
 	booking, due := uuid.New(), time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)

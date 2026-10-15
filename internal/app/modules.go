@@ -258,6 +258,8 @@ func (m *modules) build() error {
 	m.tasks.SetConversationReader(taskConvBridge{repo: inboxRepo})
 	m.tasks.SetOutbox(outbox)
 	m.tasks.SetPackageLinker(taskPackageBridge{repo: pkgRepo})
+	m.tasks.SetNotes(taskRepo)
+	m.tasks.SetNoteRateWindow(m.limiter)
 
 	targetRepo := pgrevenuetarget.NewRepository(pool)
 	m.targets = apprevenuetarget.NewService(targetRepo, txm)

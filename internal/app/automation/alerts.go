@@ -33,6 +33,7 @@ const (
 	ledgerMissingDocs  = "alert.missing_docs"
 	ledgerAISummary    = "ai.summary_daily"
 	ledgerLostLeads    = "ai.lost_leads_weekly"
+	ledgerTaskNote     = "alert.task_note"
 )
 
 // Alerts implements the alert ports of the document, supplier, visa, target,

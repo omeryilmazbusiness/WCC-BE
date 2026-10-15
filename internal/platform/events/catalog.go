@@ -29,6 +29,7 @@ const (
 	PaymentReversed             = "payment.reversed"
 	DocumentStatusChanged       = "document.status_changed"
 	TaskOverdue                 = "task.overdue"
+	TaskNoteAdded               = "task.note_added"
 	TargetStatusChanged         = "target.status_changed"
 	IntegrationFailed           = "integration.failed"
 	ImportCompleted             = "import.completed"
@@ -66,6 +67,7 @@ func Catalog() []CatalogEntry {
 		{Name: PaymentReversed, Description: "Payment reversed (refund or correction)", Idempotent: true, Durable: true},
 		{Name: DocumentStatusChanged, Description: "Document status changed (uploaded, approved, rejected, expired)", Idempotent: true, Durable: true},
 		{Name: TaskOverdue, Description: "Task passed its due time", Idempotent: true, Durable: true},
+		{Name: TaskNoteAdded, Description: "Task participant sent a note to the other (assignee ↔ creator)", Idempotent: true, Durable: true},
 		{Name: TargetStatusChanged, Description: "Revenue target pace status changed", Idempotent: true, Durable: true},
 		{Name: IntegrationFailed, Description: "Channel, webhook, file sync or external integration failed", Idempotent: true, Durable: true},
 		{Name: ImportCompleted, Description: "Excel import finished", Idempotent: true, Durable: true},

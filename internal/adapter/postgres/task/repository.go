@@ -37,7 +37,8 @@ const taskCols = `id, branch_id, title, kind, status, priority, outcome, assigne
 	COALESCE((SELECT p.name_en FROM packages p WHERE p.id = tasks.package_id), ''),
 	COALESCE((SELECT p.name_ar FROM packages p WHERE p.id = tasks.package_id), ''),
 	COALESCE((SELECT d.code FROM departures d WHERE d.id = tasks.departure_id), ''),
-	(SELECT d.depart_date FROM departures d WHERE d.id = tasks.departure_id)`
+	(SELECT d.depart_date FROM departures d WHERE d.id = tasks.departure_id),
+	COALESCE((SELECT u.full_name FROM users u WHERE u.id = tasks.created_by), '')`
 
 const taskFrom = ` FROM tasks`
 
@@ -298,6 +299,7 @@ func scan(row pgx.Row) (*domain.Task, error) {
 		&t.CreatedAt, &t.UpdatedAt, &t.CompletedAt, &t.AssigneeName, &t.Description,
 		&t.Package.PackageID, &t.Package.DepartureID,
 		&t.Package.PackageCode, &t.Package.PackageName, &t.Package.PackageNameAr, &t.Package.DepartureCode, &t.Package.DepartDate,
+		&t.CreatedByName,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w", pgx.ErrNoRows)
@@ -321,6 +323,7 @@ func scanRows(rows pgx.Rows) (*domain.Task, error) {
 		&t.CreatedAt, &t.UpdatedAt, &t.CompletedAt, &t.AssigneeName, &t.Description,
 		&t.Package.PackageID, &t.Package.DepartureID,
 		&t.Package.PackageCode, &t.Package.PackageName, &t.Package.PackageNameAr, &t.Package.DepartureCode, &t.Package.DepartDate,
+		&t.CreatedByName,
 	)
 	if err != nil {
 		return nil, err

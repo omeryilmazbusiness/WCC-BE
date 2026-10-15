@@ -60,6 +60,7 @@ type Task struct {
 	SourceRule string
 	// CreatedBy is the user who created a manual task (nil for automation).
 	CreatedBy         *uuid.UUID
+	CreatedByName     string // join enrichment (not persisted)
 	OverdueNotifiedAt *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time

@@ -63,6 +63,17 @@ type TaskOverduePayload struct {
 	DueAt      time.Time `json:"due_at"`
 }
 
+type TaskNoteAddedPayload struct {
+	NoteID      uuid.UUID `json:"note_id"`
+	TaskID      uuid.UUID `json:"task_id"`
+	BranchID    uuid.UUID `json:"branch_id"`
+	AuthorID    uuid.UUID `json:"author_id"`
+	AuthorName  string    `json:"author_name"`
+	RecipientID uuid.UUID `json:"recipient_id"`
+	TaskTitle   string    `json:"task_title"`
+	Excerpt     string    `json:"excerpt"`
+}
+
 type TargetStatusChangedPayload struct {
 	TargetID uuid.UUID `json:"target_id"`
 	BranchID uuid.UUID `json:"branch_id"`
@@ -98,6 +109,7 @@ func (p LeadStageChangedPayload) EventBranch() uuid.UUID            { return p.B
 func (p PaymentReversedPayload) EventBranch() uuid.UUID             { return p.BranchID }
 func (p DocumentStatusChangedPayload) EventBranch() uuid.UUID       { return p.BranchID }
 func (p TaskOverduePayload) EventBranch() uuid.UUID                 { return p.BranchID }
+func (p TaskNoteAddedPayload) EventBranch() uuid.UUID               { return p.BranchID }
 func (p TargetStatusChangedPayload) EventBranch() uuid.UUID         { return p.BranchID }
 func (p IntegrationFailedPayload) EventBranch() uuid.UUID           { return p.BranchID }
 func (p ImportCompletedPayload) EventBranch() uuid.UUID             { return p.BranchID }
@@ -109,6 +121,7 @@ var durableDecoders = map[string]func([]byte) (any, error){
 	PaymentReversed:             decodeAs[PaymentReversedPayload],
 	DocumentStatusChanged:       decodeAs[DocumentStatusChangedPayload],
 	TaskOverdue:                 decodeAs[TaskOverduePayload],
+	TaskNoteAdded:               decodeAs[TaskNoteAddedPayload],
 	TargetStatusChanged:         decodeAs[TargetStatusChangedPayload],
 	IntegrationFailed:           decodeAs[IntegrationFailedPayload],
 	ImportCompleted:             decodeAs[ImportCompletedPayload],

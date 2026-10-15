@@ -38,6 +38,7 @@ func (r *Reactor) Register(bus *events.Bus) {
 	bus.Subscribe(events.ConversationResolved, r.onConversationResolved)
 	bus.Subscribe(events.TargetStatusChanged, r.onTargetStatusChanged)
 	bus.Subscribe(events.TaskOverdue, r.onTaskOverdue)
+	bus.Subscribe(events.TaskNoteAdded, r.onTaskNoteAdded)
 	bus.Subscribe(events.IntegrationFailed, r.onIntegrationFailed)
 	bus.Subscribe(events.ImportCompleted, r.onImportCompleted)
 	bus.Subscribe(events.LeadStageChanged, r.onLeadStageChanged)
@@ -128,6 +129,31 @@ func (r *Reactor) onTaskOverdue(ctx context.Context, ev events.Event) error {
 		BranchID: p.BranchID, Kind: notificationdomain.KindTaskOverdue, Title: "Task overdue",
 		Body: p.Title, EntityType: "task", EntityID: &id, HrefHint: "/tasks",
 		Meta: map[string]any{"due_at": p.DueAt},
+	})
+}
+
+// onTaskNoteAdded tells the other participant about a task note; the ledger
+// keeps a redelivered event from bumping the alert twice.
+func (r *Reactor) onTaskNoteAdded(ctx context.Context, ev events.Event) error {
+	p, ok := ev.Payload.(events.TaskNoteAddedPayload)
+	if !ok || p.RecipientID == uuid.Nil || p.RecipientID == p.AuthorID {
+		return nil
+	}
+	id := p.TaskID
+	title := "New note on a task"
+	if p.AuthorName != "" {
+		title = "New note from " + p.AuthorName
+	}
+	body := p.Excerpt
+	if p.TaskTitle != "" {
+		body = p.TaskTitle + ": " + p.Excerpt
+	}
+	return r.alerts.once(ctx, ledgerTaskNote, p.NoteID.String(), "note", func(ctx context.Context) error {
+		return r.alerts.emitTo(ctx, p.RecipientID, appnotification.EmitInput{
+			BranchID: p.BranchID, Kind: notificationdomain.KindTaskNote, Title: title, Body: body,
+			EntityType: "task", EntityID: &id, HrefHint: "/tasks?task=" + p.TaskID.String(),
+			Meta: map[string]any{"note_id": p.NoteID, "author_id": p.AuthorID, "task_title": p.TaskTitle},
+		})
 	})
 }
 

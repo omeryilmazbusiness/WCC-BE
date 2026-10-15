@@ -145,6 +145,11 @@ func DefaultRules() []Rule {
 			Groupable: false, DefaultTitle: "Task reminder",
 			DefaultHref: "/tasks", EntityType: "task",
 		},
+		{
+			Kind: KindTaskNote, Severity: SeverityInfo,
+			Groupable: true, DefaultTitle: "New note on a task",
+			DefaultHref: "/tasks", EntityType: "task",
+		},
 	}
 }
 

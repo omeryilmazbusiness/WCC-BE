@@ -72,6 +72,8 @@ type Service struct {
 	outbox   events.Outbox
 	grace    GracePolicy
 	packages PackageLinker
+	notes    domain.NoteRepository
+	noteRate NoteRateWindow
 	now      func() time.Time
 }
 
@@ -163,10 +165,8 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Task, err
 		return nil, err
 	}
 	s.bus.Publish(ctx, events.Event{Name: events.TaskCreated, Payload: t})
-	if !link.Empty() {
-		if enriched, err := s.repo.FindByID(ctx, t.ID); err == nil {
-			return enriched, nil
-		}
+	if enriched, err := s.repo.FindByID(ctx, t.ID); err == nil && enriched != nil {
+		return enriched, nil
 	}
 	return t, nil
 }
