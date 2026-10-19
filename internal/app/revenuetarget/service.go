@@ -24,38 +24,41 @@ type RecoveryTaskCreator interface {
 }
 
 type CreateInput struct {
-	BranchID     uuid.UUID
-	OwnerID      *uuid.UUID
-	TeamID       *uuid.UUID
-	Label        string
-	TargetAmount int64
-	Currency     string
-	Metric       domain.Metric
-	ScopeType    domain.ScopeType
-	CurveType    domain.CurveType
-	PeriodKind   domain.PeriodKind
-	PeriodStart  time.Time
-	PeriodEnd    time.Time // ignored for calendar kinds
-	ActorID      uuid.UUID
+	BranchID        uuid.UUID
+	OwnerID         *uuid.UUID
+	TeamID          *uuid.UUID
+	Label           string
+	TargetAmount    int64
+	TargetCustomers *int // optional travellers-to-send goal
+	Currency        string
+	Metric          domain.Metric
+	ScopeType       domain.ScopeType
+	CurveType       domain.CurveType
+	PeriodKind      domain.PeriodKind
+	PeriodStart     time.Time
+	PeriodEnd       time.Time // ignored for calendar kinds
+	ActorID         uuid.UUID
 }
 
 // PatchInput is the HTTP-friendly update DTO (nil fields = leave unchanged).
 type PatchInput struct {
-	ID           uuid.UUID
-	OwnerID      *uuid.UUID
-	ClearOwner   bool
-	TeamID       *uuid.UUID
-	ClearTeam    bool
-	Label        *string
-	TargetAmount *int64
-	Currency     *string
-	Metric       *domain.Metric
-	ScopeType    *domain.ScopeType
-	CurveType    *domain.CurveType
-	PeriodKind   *domain.PeriodKind
-	PeriodStart  *time.Time
-	PeriodEnd    *time.Time
-	ActorID      uuid.UUID
+	ID              uuid.UUID
+	OwnerID         *uuid.UUID
+	ClearOwner      bool
+	TeamID          *uuid.UUID
+	ClearTeam       bool
+	Label           *string
+	TargetAmount    *int64
+	TargetCustomers *int
+	ClearCustomers  bool // explicit null clears the volume goal
+	Currency        *string
+	Metric          *domain.Metric
+	ScopeType       *domain.ScopeType
+	CurveType       *domain.CurveType
+	PeriodKind      *domain.PeriodKind
+	PeriodStart     *time.Time
+	PeriodEnd       *time.Time
+	ActorID         uuid.UUID
 }
 
 type Service struct {
@@ -105,6 +108,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Target, e
 	if in.TargetAmount <= 0 {
 		return nil, shared.NewValidation("target_amount must be > 0")
 	}
+	customers, err := domain.NormalizeTargetCustomers(in.TargetCustomers)
+	if err != nil {
+		return nil, shared.NewValidation(err.Error())
+	}
 	if in.BranchID == uuid.Nil {
 		return nil, shared.NewValidation("branch_id is required")
 	}
@@ -146,7 +153,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*domain.Target, e
 	actor := in.ActorID
 	t := &domain.Target{
 		ID: uuid.New(), BranchID: in.BranchID, OwnerID: in.OwnerID, TeamID: in.TeamID,
-		Label: label, TargetAmount: in.TargetAmount, Currency: currency,
+		Label: label, TargetAmount: in.TargetAmount, TargetCustomers: customers, Currency: currency,
 		Metric: metric, ScopeType: scope, CurveType: curve, PeriodKind: kind,
 		PeriodStart: start, PeriodEnd: end,
 		CreatedBy: &actor, CreatedAt: now, UpdatedAt: now,
@@ -192,6 +199,15 @@ func (s *Service) Update(ctx context.Context, in PatchInput) (*domain.Target, er
 			return nil, shared.NewValidation("target_amount must be > 0")
 		}
 		t.TargetAmount = *in.TargetAmount
+	}
+	if in.ClearCustomers {
+		t.TargetCustomers = nil
+	} else if in.TargetCustomers != nil {
+		customers, err := domain.NormalizeTargetCustomers(in.TargetCustomers)
+		if err != nil {
+			return nil, shared.NewValidation(err.Error())
+		}
+		t.TargetCustomers = customers
 	}
 	if in.Currency != nil {
 		cur := strings.ToUpper(strings.TrimSpace(*in.Currency))
@@ -370,31 +386,54 @@ func (s *Service) progress(ctx context.Context, t *domain.Target, asOf time.Time
 		PeriodStart: t.PeriodStart, PeriodEnd: t.PeriodEnd, AsOf: asOf,
 		Curve: t.CurveType, Weights: weights,
 	})
+	status := calc.Status
+	p := &domain.Progress{
+		TargetID: t.ID, Label: t.Label, Currency: t.Currency, Metric: t.Metric,
+		ScopeType: t.ScopeType, CurveType: t.CurveType, PeriodKind: t.PeriodKind, TargetAmount: t.TargetAmount,
+		ActualAmount: actual, ExpectedToDate: calc.ExpectedToDate, Variance: calc.Variance,
+		ProgressBps: calc.ProgressBps, PaceBps: calc.PaceBps, ForecastAmount: calc.ForecastAmount,
+		RequiredPaceDaily: calc.RequiredPaceDaily,
+		PeriodStart:       t.PeriodStart.Format("2006-01-02"), PeriodEnd: t.PeriodEnd.Format("2006-01-02"),
+		AsOf:        asOf.Format("2006-01-02"),
+		DaysTotal:   domain.DaysInclusive(t.PeriodStart, t.PeriodEnd),
+		Unconverted: missing,
+	}
+	if !asOf.After(t.PeriodEnd) {
+		p.DaysLeft = domain.DaysInclusive(maxTime(asOf, t.PeriodStart), t.PeriodEnd)
+	}
+	if t.TargetCustomers != nil {
+		custActual, err := s.repo.SumCustomersActual(ctx, t, t.PeriodStart, minTime(asOf, t.PeriodEnd))
+		if err != nil {
+			return nil, err
+		}
+		cc := s.engine.Calculate(domain.CalcInput{
+			TargetAmount: int64(*t.TargetCustomers), Actual: custActual,
+			PeriodStart: t.PeriodStart, PeriodEnd: t.PeriodEnd, AsOf: asOf,
+			Curve: t.CurveType, Weights: weights,
+		})
+		goal, actualN := *t.TargetCustomers, int(custActual)
+		exp, prog, pace, req := cc.ExpectedToDate, cc.ProgressBps, cc.PaceBps, cc.RequiredPaceDaily
+		p.TargetCustomers = &goal
+		p.ActualCustomers = &actualN
+		p.CustomersExpectedToDate = &exp
+		p.CustomersProgressBps = &prog
+		p.CustomersPaceBps = &pace
+		p.CustomersRequiredDaily = &req
+		p.CustomersStatus = cc.Status
+		status = domain.CombineStatus(calc.Status, cc.Status)
+	}
+	p.Status = status
 	snap := &domain.Snapshot{
 		TargetID: t.ID, AsOf: asOf, ActualAmount: actual,
 		ExpectedToDate: calc.ExpectedToDate, Variance: calc.Variance,
 		ProgressBps: calc.ProgressBps, PaceBps: calc.PaceBps,
-		ForecastAmount: calc.ForecastAmount, Status: calc.Status,
+		ForecastAmount: calc.ForecastAmount, Status: status,
 		UpdatedAt: time.Now().UTC(),
 	}
 	if err := s.saveSnapshot(ctx, t, snap); err != nil {
 		return nil, err
 	}
-	daysLeft := 0
-	if !asOf.After(t.PeriodEnd) {
-		daysLeft = domain.DaysInclusive(maxTime(asOf, t.PeriodStart), t.PeriodEnd)
-	}
-	return &domain.Progress{
-		TargetID: t.ID, Label: t.Label, Currency: t.Currency, Metric: t.Metric,
-		ScopeType: t.ScopeType, CurveType: t.CurveType, PeriodKind: t.PeriodKind, TargetAmount: t.TargetAmount,
-		ActualAmount: actual, ExpectedToDate: calc.ExpectedToDate, Variance: calc.Variance,
-		ProgressBps: calc.ProgressBps, PaceBps: calc.PaceBps, ForecastAmount: calc.ForecastAmount,
-		RequiredPaceDaily: calc.RequiredPaceDaily, Status: calc.Status,
-		PeriodStart: t.PeriodStart.Format("2006-01-02"), PeriodEnd: t.PeriodEnd.Format("2006-01-02"),
-		AsOf:      asOf.Format("2006-01-02"),
-		DaysTotal: domain.DaysInclusive(t.PeriodStart, t.PeriodEnd), DaysLeft: daysLeft,
-		Unconverted: missing,
-	}, nil
+	return p, nil
 }
 
 // actual sums the metric from period start to asOf in the target currency.
@@ -665,6 +704,9 @@ func targetSnapshot(t *domain.Target) map[string]any {
 		"period_kind":  t.PeriodKind,
 		"period_start": t.PeriodStart.Format("2006-01-02"),
 		"period_end":   t.PeriodEnd.Format("2006-01-02"),
+	}
+	if t.TargetCustomers != nil {
+		m["target_customers"] = *t.TargetCustomers
 	}
 	if t.OwnerID != nil {
 		m["owner_id"] = *t.OwnerID

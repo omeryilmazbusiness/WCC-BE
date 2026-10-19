@@ -45,16 +45,19 @@ type Target struct {
 	TeamID       *uuid.UUID
 	Label        string
 	TargetAmount int64
-	Currency     string
-	Metric       Metric
-	ScopeType    ScopeType
-	CurveType    CurveType
-	PeriodKind   PeriodKind
-	PeriodStart  time.Time // date
-	PeriodEnd    time.Time
-	CreatedBy    *uuid.UUID
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// TargetCustomers is an optional volume goal: travellers to send in the
+	// period (sold booking pax). Nil means money-only.
+	TargetCustomers *int
+	Currency        string
+	Metric          Metric
+	ScopeType       ScopeType
+	CurveType       CurveType
+	PeriodKind      PeriodKind
+	PeriodStart     time.Time // date
+	PeriodEnd       time.Time
+	CreatedBy       *uuid.UUID
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type Weight struct {
@@ -115,6 +118,14 @@ type Progress struct {
 	DaysLeft          int        `json:"days_left"`
 	// Unconverted lists currencies left out of ActualAmount for lack of an FX rate.
 	Unconverted []string `json:"unconverted,omitempty"`
+	// Customer volume (omitted when the target has no customer goal).
+	TargetCustomers         *int   `json:"target_customers,omitempty"`
+	ActualCustomers         *int   `json:"actual_customers,omitempty"`
+	CustomersExpectedToDate *int64 `json:"customers_expected_to_date,omitempty"`
+	CustomersProgressBps    *int   `json:"customers_progress_bps,omitempty"`
+	CustomersPaceBps        *int   `json:"customers_pace_bps,omitempty"`
+	CustomersRequiredDaily  *int64 `json:"customers_required_daily,omitempty"`
+	CustomersStatus         Status `json:"customers_status,omitempty"`
 }
 
 // CurrencyAmount is an actual total in one currency, in minor units.
@@ -169,6 +180,8 @@ type Repository interface {
 	// SumActual totals actuals per currency, preferring rows already snapshotted
 	// in the target currency; the service converts the rest.
 	SumActual(ctx context.Context, t *Target, from, to time.Time) ([]CurrencyAmount, error)
+	// SumCustomersActual totals sold booking pax in the period (travellers sent).
+	SumCustomersActual(ctx context.Context, t *Target, from, to time.Time) (int64, error)
 	SumActualByOwner(ctx context.Context, t *Target, from, to time.Time) ([]Contribution, error)
 	ListSources(ctx context.Context, t *Target, from, to time.Time, limit int) ([]SourceRow, error)
 	ListTargetsForBranch(ctx context.Context, branchID uuid.UUID) ([]Target, error)

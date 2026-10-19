@@ -25,7 +25,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
 
-const targetCols = `id, branch_id, owner_id, team_id, label, target_amount, currency,
+const targetCols = `id, branch_id, owner_id, team_id, label, target_amount, target_customers, currency,
 	COALESCE(metric,'collected'), COALESCE(scope_type,'branch'), COALESCE(curve_type,'linear'),
 	period_kind, period_start, period_end, created_by, created_at, COALESCE(updated_at, created_at)`
 
@@ -79,7 +79,7 @@ func scanTarget(scan func(dest ...any) error) (*domain.Target, error) {
 	var t domain.Target
 	var metric, scope, curve, kind string
 	err := scan(
-		&t.ID, &t.BranchID, &t.OwnerID, &t.TeamID, &t.Label, &t.TargetAmount, &t.Currency,
+		&t.ID, &t.BranchID, &t.OwnerID, &t.TeamID, &t.Label, &t.TargetAmount, &t.TargetCustomers, &t.Currency,
 		&metric, &scope, &curve, &kind, &t.PeriodStart, &t.PeriodEnd, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt,
 	)
 	if err != nil {
@@ -99,11 +99,11 @@ func (r *Repository) Create(ctx context.Context, t *domain.Target) error {
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `
 		INSERT INTO revenue_targets (
-			id, branch_id, owner_id, team_id, label, target_amount, currency,
+			id, branch_id, owner_id, team_id, label, target_amount, target_customers, currency,
 			metric, scope_type, curve_type, period_start, period_end, created_by, created_at, updated_at,
 			period_kind
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-		t.ID, t.BranchID, t.OwnerID, t.TeamID, t.Label, t.TargetAmount, t.Currency,
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+		t.ID, t.BranchID, t.OwnerID, t.TeamID, t.Label, t.TargetAmount, t.TargetCustomers, t.Currency,
 		string(t.Metric), string(t.ScopeType), string(t.CurveType),
 		t.PeriodStart, t.PeriodEnd, t.CreatedBy, t.CreatedAt, t.UpdatedAt, string(t.PeriodKind),
 	)
@@ -113,7 +113,7 @@ func (r *Repository) Create(ctx context.Context, t *domain.Target) error {
 func (r *Repository) Update(ctx context.Context, t *domain.Target) error {
 	q := tx.QuerierFrom(ctx, r.pool)
 	clause, args, err := targetScope(ctx, []any{
-		t.ID, t.OwnerID, t.TeamID, t.Label, t.TargetAmount, t.Currency,
+		t.ID, t.OwnerID, t.TeamID, t.Label, t.TargetAmount, t.TargetCustomers, t.Currency,
 		string(t.Metric), string(t.ScopeType), string(t.CurveType),
 		t.PeriodStart, t.PeriodEnd, t.UpdatedAt, string(t.PeriodKind),
 	})
@@ -122,9 +122,9 @@ func (r *Repository) Update(ctx context.Context, t *domain.Target) error {
 	}
 	ct, err := q.Exec(ctx, `
 		UPDATE revenue_targets t SET
-			owner_id=$2, team_id=$3, label=$4, target_amount=$5, currency=$6,
-			metric=$7, scope_type=$8, curve_type=$9, period_start=$10, period_end=$11, updated_at=$12,
-			period_kind=$13
+			owner_id=$2, team_id=$3, label=$4, target_amount=$5, target_customers=$6, currency=$7,
+			metric=$8, scope_type=$9, curve_type=$10, period_start=$11, period_end=$12, updated_at=$13,
+			period_kind=$14
 		WHERE t.id=$1`+clause, args...)
 	if err != nil {
 		return err
@@ -445,6 +445,28 @@ func (r *Repository) SumActual(ctx context.Context, t *domain.Target, from, to t
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// SumCustomersActual totals sold booking pax (travellers sent) in [from, to].
+func (r *Repository) SumCustomersActual(ctx context.Context, t *domain.Target, from, to time.Time) (int64, error) {
+	q := tx.QuerierFrom(ctx, r.pool)
+	applyOwner, ownerID := ownerFilter(t)
+	fromDay := from.UTC().Truncate(24 * time.Hour)
+	toDay := to.UTC().Truncate(24 * time.Hour)
+	args := []any{t.BranchID, fromDay, toDay}
+	owner := ""
+	if applyOwner {
+		args = append(args, ownerID)
+		owner = ` AND b.owner_id = $4`
+	}
+	var n int64
+	err := q.QueryRow(ctx, `
+		SELECT COALESCE(SUM(b.pax_count), 0)
+		FROM bookings b
+		WHERE b.branch_id = $1`+owner+`
+		  AND b.status IN ('confirmed','partially_paid','ready','travelled','completed')
+		  AND b.created_at >= $2 AND b.created_at < $3::date + 1`, args...).Scan(&n)
+	return n, err
 }
 
 func (r *Repository) SumActualByOwner(ctx context.Context, t *domain.Target, from, to time.Time) ([]domain.Contribution, error) {

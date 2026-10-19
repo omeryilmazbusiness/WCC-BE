@@ -65,6 +65,7 @@ func TestCreateRejectsBadInput(t *testing.T) {
 		"unknown kind":       func(in *appsvc.CreateInput) { in.PeriodKind = "quarterly" },
 		"bad currency":       func(in *appsvc.CreateInput) { in.Currency = "RIYAL" },
 		"zero amount":        func(in *appsvc.CreateInput) { in.TargetAmount = 0 },
+		"zero customers":     func(in *appsvc.CreateInput) { z := 0; in.TargetCustomers = &z },
 		"bad curve":          func(in *appsvc.CreateInput) { in.CurveType = "steep" },
 	}
 	for name, mutate := range bad {

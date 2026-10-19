@@ -13,13 +13,14 @@ import (
 )
 
 type memRepo struct {
-	targets map[uuid.UUID]*domain.Target
-	weights map[uuid.UUID][]domain.Weight
-	shares  map[uuid.UUID][]domain.Share
-	snaps   map[string]*domain.Snapshot
-	actual  int64
-	sums    []domain.CurrencyAmount // overrides actual when set
-	byOwner []domain.Contribution
+	targets   map[uuid.UUID]*domain.Target
+	weights   map[uuid.UUID][]domain.Weight
+	shares    map[uuid.UUID][]domain.Share
+	snaps     map[string]*domain.Snapshot
+	actual    int64
+	customers int64
+	sums      []domain.CurrencyAmount // overrides actual when set
+	byOwner   []domain.Contribution
 }
 
 func newMemRepo() *memRepo {
@@ -107,6 +108,9 @@ func (m *memRepo) SumActual(ctx context.Context, t *domain.Target, from, to time
 	}
 	return []domain.CurrencyAmount{{Currency: t.Currency, Minor: m.actual}}, nil
 }
+func (m *memRepo) SumCustomersActual(ctx context.Context, t *domain.Target, from, to time.Time) (int64, error) {
+	return m.customers, nil
+}
 func (m *memRepo) Delete(ctx context.Context, id uuid.UUID) error {
 	delete(m.targets, id)
 	return nil
@@ -147,6 +151,54 @@ func TestProgressCalculatesAndSnapshots(t *testing.T) {
 	}
 	if len(repo.snaps) != 1 {
 		t.Fatalf("expected snapshot upsert, got %d", len(repo.snaps))
+	}
+}
+
+func TestProgressTracksCustomerGoal(t *testing.T) {
+	repo := newMemRepo()
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	id := uuid.New()
+	goal := 100
+	repo.targets[id] = &domain.Target{
+		ID: id, BranchID: uuid.New(), Label: "Jan", TargetAmount: 10000, TargetCustomers: &goal,
+		Currency: "SAR", Metric: domain.MetricCollected, ScopeType: domain.ScopeBranch,
+		CurveType: domain.CurveLinear, PeriodStart: start, PeriodEnd: end,
+	}
+	repo.actual = 10000 // money ahead / on track
+	repo.customers = 10 // customers far behind
+	svc := appsvc.NewService(repo, nil)
+	p, err := svc.Progress(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.TargetCustomers == nil || *p.TargetCustomers != 100 {
+		t.Fatalf("target customers %+v", p.TargetCustomers)
+	}
+	if p.ActualCustomers == nil || *p.ActualCustomers != 10 {
+		t.Fatalf("actual customers %+v", p.ActualCustomers)
+	}
+	if p.CustomersStatus != domain.StatusBehind {
+		t.Fatalf("customers status=%s", p.CustomersStatus)
+	}
+	if p.Status != domain.StatusBehind {
+		t.Fatalf("combined status must be behind when customers lag, got %s", p.Status)
+	}
+}
+
+func TestCreateStoresCustomerGoal(t *testing.T) {
+	repo := newMemRepo()
+	svc := appsvc.NewService(repo, nil)
+	n := 250
+	tg, err := svc.Create(context.Background(), appsvc.CreateInput{
+		BranchID: uuid.New(), Label: "Q1", TargetAmount: 50000, TargetCustomers: &n,
+		PeriodKind: domain.PeriodMonthly, PeriodStart: time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tg.TargetCustomers == nil || *tg.TargetCustomers != 250 {
+		t.Fatalf("stored %+v", tg.TargetCustomers)
 	}
 }
 

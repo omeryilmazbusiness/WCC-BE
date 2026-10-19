@@ -34,6 +34,9 @@ func mapTarget(t *domain.Target) map[string]any {
 		"created_at":   t.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at":   t.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
+	if t.TargetCustomers != nil {
+		m["target_customers"] = *t.TargetCustomers
+	}
 	if t.OwnerID != nil {
 		m["owner_id"] = *t.OwnerID
 	}
@@ -102,17 +105,18 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		OwnerID      *uuid.UUID `json:"owner_id"`
-		TeamID       *uuid.UUID `json:"team_id"`
-		Label        string     `json:"label"`
-		TargetAmount int64      `json:"target_amount"`
-		Currency     string     `json:"currency"`
-		Metric       string     `json:"metric"`
-		ScopeType    string     `json:"scope_type"`
-		CurveType    string     `json:"curve_type"`
-		PeriodKind   string     `json:"period_kind"`
-		PeriodStart  string     `json:"period_start"`
-		PeriodEnd    string     `json:"period_end"`
+		OwnerID         *uuid.UUID `json:"owner_id"`
+		TeamID          *uuid.UUID `json:"team_id"`
+		Label           string     `json:"label"`
+		TargetAmount    int64      `json:"target_amount"`
+		TargetCustomers *int       `json:"target_customers"`
+		Currency        string     `json:"currency"`
+		Metric          string     `json:"metric"`
+		ScopeType       string     `json:"scope_type"`
+		CurveType       string     `json:"curve_type"`
+		PeriodKind      string     `json:"period_kind"`
+		PeriodStart     string     `json:"period_start"`
+		PeriodEnd       string     `json:"period_end"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		response.Error(w, shared.NewValidation("invalid json"))
@@ -132,8 +136,9 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := h.Svc.Create(r.Context(), appsvc.CreateInput{
 		BranchID: branchID, OwnerID: body.OwnerID, TeamID: body.TeamID,
-		Label: body.Label, TargetAmount: body.TargetAmount, Currency: body.Currency,
-		Metric: domain.Metric(body.Metric), ScopeType: domain.ScopeType(body.ScopeType),
+		Label: body.Label, TargetAmount: body.TargetAmount, TargetCustomers: body.TargetCustomers,
+		Currency: body.Currency,
+		Metric:   domain.Metric(body.Metric), ScopeType: domain.ScopeType(body.ScopeType),
 		CurveType: domain.CurveType(body.CurveType), PeriodKind: domain.PeriodKind(body.PeriodKind),
 		PeriodStart: start, PeriodEnd: end,
 		ActorID: claims.UserID,
@@ -209,6 +214,18 @@ func (h Handler) Patch(w http.ResponseWriter, r *http.Request) {
 		var v int64
 		_ = json.Unmarshal(raw, &v)
 		in.TargetAmount = &v
+	}
+	if raw, ok := body["target_customers"]; ok {
+		if string(raw) == "null" {
+			in.ClearCustomers = true
+		} else {
+			var v int
+			if err := json.Unmarshal(raw, &v); err != nil {
+				response.Error(w, shared.NewValidation("invalid target_customers"))
+				return
+			}
+			in.TargetCustomers = &v
+		}
 	}
 	if raw, ok := body["currency"]; ok {
 		var v string
