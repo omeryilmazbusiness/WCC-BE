@@ -62,6 +62,30 @@ func TestCompanyNormalizeBasic(t *testing.T) {
 	}
 }
 
+func TestCompanyNormalizeCountryName(t *testing.T) {
+	c := Company{NameEN: "Wifad", Country: "  saudi   arabia ", City: "  Riyadh ", Address: " King Fahd Rd "}
+	if err := c.Normalize(ProfileBasic); err != nil {
+		t.Fatal(err)
+	}
+	if c.Country != "saudi arabia" || c.City != "Riyadh" || c.Address != "King Fahd Rd" {
+		t.Fatalf("place names = %+v", c)
+	}
+	named := Company{NameEN: "Wifad", Country: "Côte d'Ivoire"}
+	if err := named.Normalize(ProfileBasic); err != nil {
+		t.Fatal(err)
+	}
+	if named.Country != "Côte d'Ivoire" {
+		t.Fatalf("accented country = %q", named.Country)
+	}
+	bad := Company{NameEN: "Wifad", Country: "12", City: "x", Address: "y"}
+	fields := details(t, bad.Normalize(ProfileBasic))
+	for _, key := range []string{"country", "city", "address"} {
+		if _, ok := fields[key]; !ok {
+			t.Errorf("missing %s in %v", key, fields)
+		}
+	}
+}
+
 func TestCompanyNormalizeCompleteNeedsLocation(t *testing.T) {
 	c := Company{NameEN: "Wifad"}
 	fields := details(t, c.Normalize(ProfileComplete))
@@ -70,14 +94,14 @@ func TestCompanyNormalizeCompleteNeedsLocation(t *testing.T) {
 			t.Errorf("%s: %v", key, fields[key])
 		}
 	}
-	c = Company{NameEN: "Wifad", Country: "TR", City: "Istanbul", Address: "Levent 1"}
+	c = Company{NameEN: "Wifad", Country: "Turkey", City: "Istanbul", Address: "Levent 1"}
 	if err := c.Normalize(ProfileComplete); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestCompanyNormalizeFieldErrors(t *testing.T) {
-	c := Company{NameEN: "x", Slug: "setup", Email: "bad", Phone: "12", Country: "TUR", Currency: "dollar", Timezone: "Mars/Base", Website: "nope"}
+	c := Company{NameEN: "x", Slug: "setup", Email: "bad", Phone: "12", Country: "??", Currency: "dollar", Timezone: "Mars/Base", Website: "nope"}
 	fields := details(t, c.Normalize(ProfileBasic))
 	for _, key := range []string{"name_en", "slug", "email", "phone", "country", "currency", "timezone", "website"} {
 		if _, ok := fields[key]; !ok {

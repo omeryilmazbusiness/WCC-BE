@@ -30,7 +30,6 @@ var (
 	slugPattern     = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 	codePattern     = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{1,15}$`)
 	phonePattern    = regexp.MustCompile(`^\+?[0-9][0-9 ()-]{5,19}$`)
-	countryPattern  = regexp.MustCompile(`^[A-Z]{2}$`)
 	currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 )
 
@@ -129,9 +128,9 @@ func (c *Company) Normalize(level ProfileLevel) error {
 	c.Phone = strings.TrimSpace(c.Phone)
 	c.Email = strings.ToLower(strings.TrimSpace(c.Email))
 	c.Website = strings.TrimSpace(c.Website)
-	c.Country = strings.ToUpper(strings.TrimSpace(c.Country))
-	c.City = strings.TrimSpace(c.City)
-	c.Address = strings.TrimSpace(c.Address)
+	c.Country = normalizeCountry(c.Country)
+	c.City = collapseSpace(c.City)
+	c.Address = collapseSpace(c.Address)
 	c.Currency = strings.ToUpper(strings.TrimSpace(c.Currency))
 	c.Timezone = strings.TrimSpace(c.Timezone)
 	if c.Slug == "" {
@@ -172,14 +171,14 @@ func (c *Company) Normalize(level ProfileLevel) error {
 		}
 		c.Website = site
 	}
-	if c.Country != "" && !countryPattern.MatchString(c.Country) {
-		fields["country"] = "ISO 3166 alpha-2 code"
+	if c.Country != "" && !validCountryName(c.Country) {
+		fields["country"] = "country name"
 	}
-	if utf8.RuneCountInString(c.City) > 80 {
-		fields["city"] = "at most 80 characters"
+	if n := utf8.RuneCountInString(c.City); n > 80 || (n == 1) {
+		fields["city"] = "2-80 characters"
 	}
-	if utf8.RuneCountInString(c.Address) > 300 {
-		fields["address"] = "at most 300 characters"
+	if n := utf8.RuneCountInString(c.Address); n > 300 || (n == 1) {
+		fields["address"] = "2-300 characters"
 	}
 	if level == ProfileComplete {
 		for key, v := range map[string]string{"country": c.Country, "city": c.City, "address": c.Address} {
@@ -195,6 +194,39 @@ func (c *Company) Normalize(level ProfileLevel) error {
 		fields["timezone"] = "unknown timezone"
 	}
 	return fieldErrors("invalid company profile", fields)
+}
+
+func collapseSpace(s string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+}
+
+// normalizeCountry trims a country display name. A two-letter Latin token is
+// treated as a legacy ISO 3166-1 alpha-2 code and upper-cased; names keep
+// the casing the operator typed.
+func normalizeCountry(s string) string {
+	s = collapseSpace(s)
+	if len(s) == 2 && unicode.IsLetter(rune(s[0])) && unicode.IsLetter(rune(s[1])) && s[0] < unicode.MaxASCII && s[1] < unicode.MaxASCII {
+		return strings.ToUpper(s)
+	}
+	return s
+}
+
+func validCountryName(s string) bool {
+	n := utf8.RuneCountInString(s)
+	if n < 2 || n > 80 {
+		return false
+	}
+	letters := 0
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r):
+			letters++
+		case r == ' ' || r == '-' || r == '\'' || r == '.' || r == ',' || r == '(' || r == ')':
+		default:
+			return false
+		}
+	}
+	return letters >= 2
 }
 
 func normalizeWebsite(raw string) (string, bool) {
