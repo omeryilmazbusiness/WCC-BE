@@ -534,6 +534,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(middleware.RequirePermission(platformauth.PermPackagesRead)).Get("/", h.Package.ListPackages)
 				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Post("/", h.Package.CreatePackage)
 				r.With(middleware.RequirePermission(platformauth.PermPackagesRead)).Get("/{id}", h.Package.GetPackage)
+				r.With(middleware.RequirePermission(platformauth.PermPackagesRead)).Get("/{id}/brochure", h.Package.BrochurePDF)
+				r.With(middleware.RequirePermission(platformauth.PermPackagesRead)).Get("/{id}/brochure.pdf", h.Package.BrochurePDF)
 				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Patch("/{id}", h.Package.UpdatePackage)
 				r.With(middleware.RequirePermission(platformauth.PermPackagesWrite)).Post("/{id}/clone", h.Package.ClonePackage)
 				r.With(middleware.RequirePermission(platformauth.PermPackagesRead)).Get("/{id}/tiers", h.Package.ListPackageTiers)

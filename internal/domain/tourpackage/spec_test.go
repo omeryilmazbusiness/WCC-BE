@@ -68,8 +68,7 @@ func TestNormalizeSpecRejects(t *testing.T) {
 		"bad route":             func(s *domain.Spec) { s.Flights.Outbound.Route = "ISTANBUL" },
 		"inbound before out":    func(s *domain.Spec) { s.Flights.Inbound.Date = "2026-02-20" },
 		"bad visa":              func(s *domain.Spec) { s.Visa.Type = "WORK" },
-		"bad kit":               func(s *domain.Spec) { s.Kit = []string{"umbrella"} },
-		"wrong city ziyarat":    func(s *domain.Spec) { s.Ziyarat.Madinah = []string{"arafat"} },
+		"short kit":             func(s *domain.Spec) { s.Kit = []string{"x"} },
 		"itinerary past end":    func(s *domain.Spec) { s.Itinerary = []domain.ItineraryDay{{Day: 15, Title: "x"}} },
 		"itinerary duplicate":   func(s *domain.Spec) { s.Itinerary = []domain.ItineraryDay{{Day: 1, Title: "a"}, {Day: 1, Title: "b"}} },
 		"itinerary no title":    func(s *domain.Spec) { s.Itinerary = []domain.ItineraryDay{{Day: 3, Details: "free day"}} },
@@ -93,7 +92,7 @@ func TestNormalizeHeader(t *testing.T) {
 	if err := domain.NormalizeHeader(&h); err != nil {
 		t.Fatal(err)
 	}
-	if h.Kind != "hajj" || h.Category != "long" || h.BaseCurrency != "SAR" || h.TransportMode != "flight_scheduled" {
+	if h.Kind != "hajj" || h.Category != "standard" || h.BaseCurrency != "SAR" || h.TransportMode != "flight_scheduled" {
 		t.Fatalf("defaults not applied: %+v", h)
 	}
 	bad := []domain.Header{
@@ -131,6 +130,86 @@ func TestPassportValidFor(t *testing.T) {
 	}
 	if r.PassportValidFor(time.Date(2027, 2, 27, 0, 0, 0, 0, time.UTC), depart) {
 		t.Fatal("one day short must fail")
+	}
+}
+
+func TestNormalizeHeaderOtherAndTiers(t *testing.T) {
+	h := domain.Header{Kind: "OTHER", Category: "luxury"}
+	if err := domain.NormalizeHeader(&h); err != nil {
+		t.Fatal(err)
+	}
+	if h.Kind != domain.KindOther || h.Category != "luxury" {
+		t.Fatalf("got %+v", h)
+	}
+	legacy := domain.Header{Kind: "umrah", Category: "ramadan_last15"}
+	if err := domain.NormalizeHeader(&legacy); err != nil {
+		t.Fatal(err)
+	}
+	hajjEco := domain.Header{Kind: "hajj", Category: "economy"}
+	if err := domain.NormalizeHeader(&hajjEco); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNormalizeSpecOtherCustomTour(t *testing.T) {
+	s := domain.Spec{
+		Destination: domain.Destination{Country: "  Turkey ", Districts: []string{"Istanbul", "istanbul", "Cappadocia", ""}},
+		Stays: []domain.Stay{
+			{City: " Istanbul ", Nights: 3, Hotel: domain.Hotel{Name: " Pera Palace ", Stars: 5, Board: "BB", CheckIn: "2026-05-01", CheckOut: "2026-05-04"}},
+			{City: "Cappadocia", Nights: 2, Hotel: domain.Hotel{Name: "Cave Suites", Stars: 4}},
+		},
+		Bus:        domain.Bus{Company: " Metro Turizm ", Seats: 45, Price: 150000, Details: " VIP 2+1 "},
+		Transfers:  domain.Transfers{Intercity: "PRIVATE_CAR", AirportMeet: true},
+		Visa:       domain.Visa{Type: "UMRAH_VISA", HealthInsurance: true},
+		Kit:        []string{"ihram", "zamzam"},
+		Ziyarat:    domain.Ziyarat{Makkah: []string{"hira"}},
+		Included:   []string{"Umrah visa"},
+		Services:   []domain.Activity{{Title: " Airport transfer "}, {Title: "City card", Details: " 48h "}},
+		Activities: []domain.Activity{{Title: " Bosphorus cruise "}, {Title: "", Details: ""}},
+		Itinerary:  []domain.ItineraryDay{{Day: 1, City: "Istanbul", Title: "Arrival"}},
+	}
+	h := domain.Header{Kind: domain.KindOther, Category: "standard", DurationDays: 7, TransportMode: "flight_scheduled", BaseCurrency: "USD"}
+	if err := domain.NormalizeSpec(&s, h); err != nil {
+		t.Fatal(err)
+	}
+	if s.Destination.Country != "Turkey" || len(s.Destination.Districts) != 2 {
+		t.Fatalf("destination=%+v", s.Destination)
+	}
+	if s.Stays[0].Hotel.Name != "Pera Palace" || s.Stays[0].Hotel.Board != "bb" {
+		t.Fatalf("stay=%+v", s.Stays[0])
+	}
+	if s.Bus.Company != "Metro Turizm" || s.Transfers.Intercity != "private_car" {
+		t.Fatalf("bus/ground %+v %+v", s.Bus, s.Transfers)
+	}
+	if s.Visa.Type != "" || s.Visa.HealthInsurance || len(s.Kit) != 0 || len(s.Ziyarat.Makkah) != 0 || len(s.Included) != 0 || s.Guidance.FemaleGuide {
+		t.Fatalf("other must drop pilgrimage offer fields: visa=%+v kit=%v ziyarat=%+v included=%v", s.Visa, s.Kit, s.Ziyarat, s.Included)
+	}
+	if len(s.Services) != 2 || s.Services[0].Title != "Airport transfer" || s.Services[1].Details != "48h" {
+		t.Fatalf("services=%v", s.Services)
+	}
+	if len(s.Activities) != 1 || s.Activities[0].Title != "Bosphorus cruise" {
+		t.Fatalf("activities=%v", s.Activities)
+	}
+}
+
+func TestNormalizeSpecOtherRequiresDestination(t *testing.T) {
+	s := domain.Spec{}
+	h := domain.Header{Kind: domain.KindOther, Category: "economy", DurationDays: 5, TransportMode: "road", BaseCurrency: "TRY"}
+	if err := domain.NormalizeSpec(&s, h); err == nil {
+		t.Fatal("expected destination error")
+	}
+	s.Destination = domain.Destination{Country: "Georgia", Districts: []string{"Tbilisi"}}
+	if err := domain.NormalizeSpec(&s, h); err != nil {
+		t.Fatal(err)
+	}
+	s.Services = []domain.Activity{{Details: "included"}}
+	if err := domain.NormalizeSpec(&s, h); err == nil {
+		t.Fatal("expected untitled service error")
+	}
+	s.Services = nil
+	s.Activities = []domain.Activity{{Details: "free walking"}}
+	if err := domain.NormalizeSpec(&s, h); err == nil {
+		t.Fatal("expected untitled activity error")
 	}
 }
 

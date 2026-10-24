@@ -9,6 +9,7 @@ import (
 
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/tourpackage"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
@@ -100,11 +101,20 @@ type BookingReader interface {
 	CountConfirmedPaxByDeparture(ctx context.Context, departureID uuid.UUID) (int, error)
 }
 
+// BrochureBrand loads the company face printed on a package leaflet.
+type BrochureBrand interface {
+	CompanySlugOfBranch(ctx context.Context, branchID uuid.UUID) (string, error)
+	BrandingBySlug(ctx context.Context, slug string) (*company.Branding, error)
+	LogoBySlug(ctx context.Context, slug string) (*company.Logo, error)
+}
+
 type Service struct {
 	repo     domain.Repository
 	tx       tx.Runner
 	bookings BookingReader
 	audit    audit.Recorder
+	brand    BrochureBrand
+	brochure domain.BrochureRenderer
 }
 
 func NewService(repo domain.Repository, txm tx.Runner) *Service {
@@ -112,6 +122,54 @@ func NewService(repo domain.Repository, txm tx.Runner) *Service {
 }
 
 func (s *Service) SetBookingReader(b BookingReader) { s.bookings = b }
+
+func (s *Service) SetBrochure(brand BrochureBrand, pdf domain.BrochureRenderer) {
+	s.brand = brand
+	s.brochure = pdf
+}
+
+// BrochurePDF builds the marketing leaflet for a package in en or ar.
+func (s *Service) BrochurePDF(ctx context.Context, id uuid.UUID, lang string) ([]byte, string, error) {
+	if s.brochure == nil {
+		return nil, "", shared.NewUnavailable("brochure renderer is not configured", 0)
+	}
+	locale, err := domain.ParseBrochureLang(lang)
+	if err != nil {
+		return nil, "", err
+	}
+	p, err := s.repo.FindPackage(ctx, id)
+	if err != nil {
+		return nil, "", shared.NewNotFound("package")
+	}
+	tiers, err := s.repo.ListPackageTiers(ctx, id)
+	if err != nil {
+		return nil, "", err
+	}
+	doc := domain.BuildBrochure(*p, tiers, s.brandOf(ctx, p.BranchID), locale)
+	raw, err := s.brochure.Render(doc)
+	if err != nil {
+		return nil, "", err
+	}
+	return raw, doc.Filename, nil
+}
+
+func (s *Service) brandOf(ctx context.Context, branchID uuid.UUID) domain.BrochureBrand {
+	if s.brand == nil || branchID == uuid.Nil {
+		return domain.BrochureBrand{}
+	}
+	slug, err := s.brand.CompanySlugOfBranch(ctx, branchID)
+	if err != nil {
+		return domain.BrochureBrand{}
+	}
+	out := domain.BrochureBrand{}
+	if face, err := s.brand.BrandingBySlug(ctx, slug); err == nil && face != nil {
+		out.NameEN, out.NameAR = face.NameEN, face.NameAR
+	}
+	if logo, err := s.brand.LogoBySlug(ctx, slug); err == nil && logo != nil {
+		out.Logo, out.LogoType = logo.Data, logo.ContentType
+	}
+	return out
+}
 
 func (s *Service) CreatePackage(ctx context.Context, in CreatePackageInput) (*domain.Package, error) {
 	code := strings.ToUpper(strings.TrimSpace(in.Code))

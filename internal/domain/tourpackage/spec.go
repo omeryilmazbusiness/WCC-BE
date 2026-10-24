@@ -13,15 +13,21 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
-// Package kinds and their categories (Umrah tiers / Hajj programmes).
+// Package kinds. Other is a custom tour to a free-text destination.
 const (
 	KindUmrah = "umrah"
 	KindHajj  = "hajj"
+	KindOther = "other"
 )
 
-var categoriesByKind = map[string][]string{
-	KindUmrah: {"economy", "standard", "luxury", "boutique", "ramadan_first15", "ramadan_last15", "ramadan_full", "semester"},
+// PackageTiers are the only categories offered on a new package (all kinds).
+var PackageTiers = []string{"economy", "standard", "luxury"}
+
+// Legacy categories stay valid so existing product sheets still load and save.
+var legacyCategoriesByKind = map[string][]string{
+	KindUmrah: {"boutique", "ramadan_first15", "ramadan_last15", "ramadan_full", "semester"},
 	KindHajj:  {"short", "long", "special_mujamala", "special_commercial"},
+	KindOther: {},
 }
 
 var (
@@ -29,7 +35,7 @@ var (
 	boardTypes     = []string{"bb", "hb", "fb", "tabldot", "buffet"}
 	hotelAccess    = []string{"walking", "shuttle"}
 	flightRoutings = []string{"direct", "connecting"}
-	intercityModes = []string{"haramain_train", "bus"}
+	intercityModes = []string{"haramain_train", "bus", "private_car"}
 	// Visa types mirror the Nusuk Masar enums so bookings can be pushed without mapping.
 	visaTypes    = []string{"UMRAH_VISA", "TOURIST_VISA", "PERSONAL_VISIT", "HAJJ_VISA", "BUSINESS_VISIT"}
 	kitItems     = []string{"ihram", "luggage", "prayer_book", "zamzam"}
@@ -37,6 +43,11 @@ var (
 	ziyaratMed   = []string{"uhud", "qiblatayn", "seven_mosques", "quba", "baqi"}
 	itinCities   = []string{"", "makkah", "madinah", "jeddah", "transit"}
 )
+
+// IsPilgrimage reports whether kind is an Umrah or Hajj programme.
+func IsPilgrimage(kind string) bool {
+	return kind == KindUmrah || kind == KindHajj
+}
 
 // Currencies a package may be priced in; SAR is the operational default inside the Kingdom.
 var packageCurrencies = []string{"SAR", "USD", "EUR", "TRY", "SYP", "AED", "GBP"}
@@ -57,11 +68,43 @@ type Spec struct {
 	Visa         Visa           `json:"visa"`
 	Kit          []string       `json:"kit"`
 	Ziyarat      Ziyarat        `json:"ziyarat"`
+	Destination  Destination    `json:"destination"`
+	Stays        []Stay         `json:"stays"`
+	Bus          Bus            `json:"bus"`
+	Services     []Activity     `json:"services"`
+	Activities   []Activity     `json:"activities"`
 	Itinerary    []ItineraryDay `json:"itinerary"`
 	Requirements Requirements   `json:"requirements"`
 	Costs        Costs          `json:"costs"`
 	Included     []string       `json:"included"`
 	Excluded     []string       `json:"excluded"`
+}
+
+// Destination is the country + districts of a custom (other) tour.
+type Destination struct {
+	Country   string   `json:"country"`
+	Districts []string `json:"districts"`
+}
+
+// Stay is one city hotel night-block on a custom tour.
+type Stay struct {
+	City   string `json:"city"`
+	Nights int    `json:"nights"`
+	Hotel  Hotel  `json:"hotel"`
+}
+
+// Bus is a road coach booked like a flight block: operator, seats, price, notes.
+type Bus struct {
+	Company string `json:"company"`
+	Seats   int    `json:"seats"`
+	Price   int64  `json:"price"`
+	Details string `json:"details"`
+}
+
+// Activity is a titled free-text item: a custom-tour service or a programme activity.
+type Activity struct {
+	Title   string `json:"title"`
+	Details string `json:"details"`
 }
 
 type Nights struct {
@@ -194,9 +237,17 @@ type Header struct {
 	BaseCurrency  string
 }
 
-// ValidCategory reports whether category belongs to kind.
+// ValidKind reports whether kind is a supported package type.
+func ValidKind(kind string) bool {
+	return kind == KindUmrah || kind == KindHajj || kind == KindOther
+}
+
+// ValidCategory reports whether category belongs to kind (tier or a legacy value).
 func ValidCategory(kind, category string) bool {
-	return slices.Contains(categoriesByKind[kind], category)
+	if !ValidKind(kind) {
+		return false
+	}
+	return slices.Contains(PackageTiers, category) || slices.Contains(legacyCategoriesByKind[kind], category)
 }
 
 // NormalizeHeader trims and validates the header in place.
@@ -214,11 +265,11 @@ func NormalizeHeader(h *Header) error {
 	if h.TransportMode == "" {
 		h.TransportMode = "flight_scheduled"
 	}
-	if _, ok := categoriesByKind[h.Kind]; !ok {
-		return shared.NewValidation("kind must be umrah or hajj")
+	if !ValidKind(h.Kind) {
+		return shared.NewValidation("kind must be umrah, hajj or other")
 	}
 	if h.Category == "" {
-		h.Category = categoriesByKind[h.Kind][1%len(categoriesByKind[h.Kind])]
+		h.Category = "standard"
 	}
 	if !ValidCategory(h.Kind, h.Category) {
 		return shared.NewValidation(fmt.Sprintf("category %q is not valid for %s", h.Category, h.Kind))
@@ -243,7 +294,7 @@ func NormalizeSpec(s *Spec, h Header) error {
 	if s.Nights.Makkah < 0 || s.Nights.Madinah < 0 {
 		return shared.NewValidation("nights cannot be negative")
 	}
-	if h.DurationDays > 0 && s.Nights.Makkah+s.Nights.Madinah > h.DurationDays {
+	if IsPilgrimage(h.Kind) && h.DurationDays > 0 && s.Nights.Makkah+s.Nights.Madinah > h.DurationDays {
 		return shared.NewValidation("makkah + madinah nights cannot exceed duration_days")
 	}
 	if err := normalizeHotel(&s.Makkah, "makkah", s.Nights.Makkah); err != nil {
@@ -252,28 +303,53 @@ func NormalizeSpec(s *Spec, h Header) error {
 	if err := normalizeHotel(&s.Madinah, "madinah", s.Nights.Madinah); err != nil {
 		return err
 	}
+	if err := normalizeDestination(&s.Destination, h.Kind == KindOther); err != nil {
+		return err
+	}
+	if err := normalizeStays(&s.Stays, h); err != nil {
+		return err
+	}
 	if err := normalizeFlights(&s.Flights); err != nil {
+		return err
+	}
+	if err := normalizeBus(&s.Bus); err != nil {
 		return err
 	}
 	if err := normalizeTransfers(&s.Transfers); err != nil {
 		return err
 	}
 	s.Guidance.LeaderName = clip(s.Guidance.LeaderName, 120)
+	if h.Kind == KindOther {
+		s.Visa = Visa{}
+		s.Kit = nil
+		s.Ziyarat = Ziyarat{}
+		s.Guidance.FemaleGuide = false
+		s.Included = nil
+	} else {
+		s.Services = nil
+		s.Activities = nil
+	}
 	s.Visa.Type = strings.ToUpper(strings.TrimSpace(s.Visa.Type))
 	if s.Visa.Type != "" && !slices.Contains(visaTypes, s.Visa.Type) {
 		return shared.NewValidation("visa.type must be one of " + strings.Join(visaTypes, ", "))
 	}
 	var err error
-	if s.Kit, err = normalizeSet(s.Kit, kitItems, "kit"); err != nil {
+	if s.Kit, err = normalizeFlexibleSet(s.Kit, kitItems, "kit"); err != nil {
 		return err
 	}
-	if s.Ziyarat.Makkah, err = normalizeSet(s.Ziyarat.Makkah, ziyaratMecca, "ziyarat.makkah"); err != nil {
+	if s.Ziyarat.Makkah, err = normalizeFlexibleSet(s.Ziyarat.Makkah, ziyaratMecca, "ziyarat.makkah"); err != nil {
 		return err
 	}
-	if s.Ziyarat.Madinah, err = normalizeSet(s.Ziyarat.Madinah, ziyaratMed, "ziyarat.madinah"); err != nil {
+	if s.Ziyarat.Madinah, err = normalizeFlexibleSet(s.Ziyarat.Madinah, ziyaratMed, "ziyarat.madinah"); err != nil {
 		return err
 	}
-	if err := normalizeItinerary(s, h.DurationDays); err != nil {
+	if s.Services, err = normalizeNamedItems(s.Services, "services"); err != nil {
+		return err
+	}
+	if s.Activities, err = normalizeNamedItems(s.Activities, "activities"); err != nil {
+		return err
+	}
+	if err := normalizeItinerary(s, h); err != nil {
 		return err
 	}
 	if err := normalizeRequirements(&s.Requirements); err != nil {
@@ -367,12 +443,101 @@ func normalizeTransfers(t *Transfers) error {
 	t.Intercity = strings.ToLower(strings.TrimSpace(t.Intercity))
 	t.BusClass = clip(t.BusClass, 120)
 	if t.Intercity != "" && !slices.Contains(intercityModes, t.Intercity) {
-		return shared.NewValidation("transfers.intercity must be haramain_train or bus")
+		return shared.NewValidation("transfers.intercity must be haramain_train, bus or private_car")
 	}
 	return nil
 }
 
-func normalizeItinerary(s *Spec, days int) error {
+func normalizeDestination(d *Destination, required bool) error {
+	d.Country = clip(d.Country, 80)
+	out := make([]string, 0, len(d.Districts))
+	for _, v := range d.Districts {
+		if v = clip(v, 80); v == "" || containsFold(out, v) {
+			continue
+		}
+		out = append(out, v)
+		if len(out) == 20 {
+			break
+		}
+	}
+	d.Districts = out
+	if !required {
+		return nil
+	}
+	if len([]rune(d.Country)) < 2 {
+		return shared.NewValidation("destination.country is required")
+	}
+	if len(d.Districts) == 0 {
+		return shared.NewValidation("destination.districts must have at least one city")
+	}
+	return nil
+}
+
+func normalizeStays(stays *[]Stay, h Header) error {
+	in := *stays
+	out := make([]Stay, 0, len(in))
+	total := 0
+	for i := range in {
+		s := in[i]
+		s.City = clip(s.City, 80)
+		if s.Nights < 0 || s.Nights > 60 {
+			return shared.NewValidation("stays.nights must be between 0 and 60")
+		}
+		if err := normalizeHotel(&s.Hotel, "stays", s.Nights); err != nil {
+			return err
+		}
+		if s.City == "" && s.Hotel.Name == "" && s.Nights == 0 {
+			continue
+		}
+		if s.City == "" {
+			return shared.NewValidation("stays.city is required")
+		}
+		total += s.Nights
+		out = append(out, s)
+		if len(out) == 20 {
+			break
+		}
+	}
+	if h.Kind == KindOther && h.DurationDays > 0 && total > h.DurationDays {
+		return shared.NewValidation("stay nights cannot exceed duration_days")
+	}
+	*stays = out
+	return nil
+}
+
+func normalizeBus(b *Bus) error {
+	b.Company = clip(b.Company, 80)
+	b.Details = clip(b.Details, 2000)
+	if b.Seats < 0 || b.Seats > 2000 {
+		return shared.NewValidation("bus.seats must be between 0 and 2000")
+	}
+	if b.Price < 0 {
+		return shared.NewValidation("bus.price cannot be negative")
+	}
+	return nil
+}
+
+func normalizeNamedItems(in []Activity, field string) ([]Activity, error) {
+	out := make([]Activity, 0, len(in))
+	for _, a := range in {
+		a.Title = clip(a.Title, 160)
+		a.Details = clip(a.Details, 2000)
+		if a.Title == "" && a.Details == "" {
+			continue
+		}
+		if a.Title == "" {
+			return nil, shared.NewValidation(field + " item needs a title")
+		}
+		out = append(out, a)
+		if len(out) == 40 {
+			break
+		}
+	}
+	return out, nil
+}
+
+func normalizeItinerary(s *Spec, h Header) error {
+	days := h.DurationDays
 	if len(s.Itinerary) > 60 {
 		return shared.NewValidation("itinerary cannot have more than 60 days")
 	}
@@ -381,7 +546,11 @@ func normalizeItinerary(s *Spec, days int) error {
 	for _, d := range s.Itinerary {
 		d.Title = clip(d.Title, 160)
 		d.Details = clip(d.Details, 2000)
-		d.City = strings.ToLower(strings.TrimSpace(d.City))
+		if h.Kind == KindOther {
+			d.City = clip(d.City, 80)
+		} else {
+			d.City = strings.ToLower(strings.TrimSpace(d.City))
+		}
 		if d.Title == "" && d.Details == "" {
 			continue
 		}
@@ -391,7 +560,7 @@ func normalizeItinerary(s *Spec, days int) error {
 		if _, dup := seen[d.Day]; dup {
 			return shared.NewValidation(fmt.Sprintf("itinerary day %d appears twice", d.Day))
 		}
-		if !slices.Contains(itinCities, d.City) {
+		if h.Kind != KindOther && !slices.Contains(itinCities, d.City) {
 			return shared.NewValidation("itinerary city must be makkah, madinah, jeddah or transit")
 		}
 		if d.Title == "" {
@@ -438,20 +607,56 @@ func normalizeCosts(c *Costs, base string) error {
 }
 
 func normalizeSet(in, allowed []string, field string) ([]string, error) {
+	return normalizeFlexibleSet(in, allowed, field)
+}
+
+func normalizeFlexibleSet(in, presets []string, field string) ([]string, error) {
 	out := make([]string, 0, len(in))
 	for _, v := range in {
-		v = strings.ToLower(strings.TrimSpace(v))
-		if v == "" || slices.Contains(out, v) {
+		v = strings.TrimSpace(v)
+		if v == "" {
 			continue
 		}
-		if !slices.Contains(allowed, v) {
-			return nil, shared.NewValidation(fmt.Sprintf("%s: unknown value %q", field, v))
+		lower := strings.ToLower(v)
+		if slices.Contains(presets, lower) {
+			v = lower
+		} else {
+			v = clip(v, 80)
+			if len([]rune(v)) < 2 {
+				return nil, shared.NewValidation(fmt.Sprintf("%s: item is too short", field))
+			}
+		}
+		if containsFold(out, v) {
+			continue
 		}
 		out = append(out, v)
+		if len(out) == 40 {
+			break
+		}
 	}
-	// Canonical order keeps diffs and printed programmes stable.
-	sort.SliceStable(out, func(i, j int) bool { return slices.Index(allowed, out[i]) < slices.Index(allowed, out[j]) })
+	sort.SliceStable(out, func(i, j int) bool {
+		ii, jj := slices.Index(presets, strings.ToLower(out[i])), slices.Index(presets, strings.ToLower(out[j]))
+		if ii >= 0 && jj >= 0 {
+			return ii < jj
+		}
+		if ii >= 0 {
+			return true
+		}
+		if jj >= 0 {
+			return false
+		}
+		return strings.ToLower(out[i]) < strings.ToLower(out[j])
+	})
 	return out, nil
+}
+
+func containsFold(in []string, v string) bool {
+	for _, x := range in {
+		if strings.EqualFold(x, v) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeLines(in []string) []string {

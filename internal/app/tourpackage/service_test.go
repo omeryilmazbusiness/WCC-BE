@@ -271,3 +271,41 @@ func TestCreatePackageWithSpecAndPricingMatrix(t *testing.T) {
 		t.Fatalf("clone must copy header and spec: %+v", clone.Header)
 	}
 }
+
+type stubPDF struct{ last domain.Brochure }
+
+func (s *stubPDF) Render(doc domain.Brochure) ([]byte, error) {
+	s.last = doc
+	return []byte("%PDF-1.4 stub"), nil
+}
+
+func TestBrochurePDF(t *testing.T) {
+	repo := newMemPkg()
+	svc := apppkg.NewService(repo, tx.Nop{})
+	pdf := &stubPDF{}
+	svc.SetBrochure(nil, pdf)
+	p := &domain.Package{
+		ID: uuid.New(), Code: "UMR-2026-STD-01", NameEN: "Quiet Umrah",
+		Header: domain.Header{Kind: domain.KindUmrah, Category: "standard", DurationDays: 8, TransportMode: "flight_scheduled", BaseCurrency: "SAR"},
+		Spec:   domain.Spec{Visa: domain.Visa{Type: "UMRAH_VISA"}, Kit: []string{"ihram"}},
+	}
+	if err := repo.CreatePackage(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	raw, name, err := svc.BrochurePDF(context.Background(), p.ID, "en")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "%PDF-1.4 stub" || name != "UMR-2026-STD-01-brochure-en.pdf" {
+		t.Fatalf("%q %q", raw, name)
+	}
+	if pdf.last.Title != "Quiet Umrah" || pdf.last.Kind != "Umrah" {
+		t.Fatalf("doc %+v", pdf.last)
+	}
+	if _, _, err := svc.BrochurePDF(context.Background(), p.ID, "xx"); err == nil {
+		t.Fatal("expected lang error")
+	}
+	if _, _, err := svc.BrochurePDF(context.Background(), uuid.New(), "en"); err == nil {
+		t.Fatal("expected missing package")
+	}
+}

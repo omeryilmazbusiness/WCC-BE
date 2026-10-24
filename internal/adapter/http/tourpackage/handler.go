@@ -246,6 +246,24 @@ func (h Handler) GetPackage(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, mapPackage(p))
 }
 
+func (h Handler) BrochurePDF(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid id"))
+		return
+	}
+	raw, name, err := h.Svc.BrochurePDF(r.Context(), id, r.URL.Query().Get("lang"))
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
+}
+
 func (h Handler) UpdatePackage(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

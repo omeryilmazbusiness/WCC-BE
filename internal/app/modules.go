@@ -16,6 +16,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/instagram"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/stub"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/integration/whatsapp"
+	pdfbrochure "github.com/wodi-crm/wodi-crm-be/internal/adapter/pdf"
 	pgdash "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres"
 	pgadminconfig "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/adminconfig"
 	pgai "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/ai"
@@ -270,6 +271,7 @@ func (m *modules) build() error {
 	m.packages = apppkg.NewService(pkgRepo, txm)
 	m.packages.SetAuditor(m.audit)
 	m.packages.SetBookingReader(bookingRepo)
+	m.packages.SetBrochure(pgcompany.NewRepository(pool), pdfbrochure.NewRenderer())
 	dashAgg := pgdash.NewDashboardAggregator(pool)
 	m.dashboard = appdashboard.NewService(dashAgg)
 
