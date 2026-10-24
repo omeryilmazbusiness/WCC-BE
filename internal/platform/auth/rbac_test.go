@@ -12,21 +12,29 @@ func TestHasPermission(t *testing.T) {
 	if !HasPermission(RoleGM, PermUsersWrite) {
 		t.Fatal("gm should write users")
 	}
-	if HasPermission(RoleEmployee, PermPaymentsRead) {
-		t.Fatal("employee should not read payments by default")
+	if HasPermission(RoleAgent, PermPaymentsRead) {
+		t.Fatal("agent should not read payments by default")
 	}
 	if !HasPermission(RoleFinance, PermPaymentsWrite) {
 		t.Fatal("finance should write payments")
 	}
-	if !ValidRole(RoleOperations) || ValidRole(Role("nope")) {
+	if !ValidRole(RoleEmployee) || !ValidRole(RoleAgent) || ValidRole(Role("nope")) {
 		t.Fatal("role validation")
 	}
 }
 
-// Epic 17 T-210 — AI setup must not leak to non-privileged roles.
+func TestCanonicalRoleMapsLegacyTitles(t *testing.T) {
+	if CanonicalRole(RoleEmployee) != RoleAgent || CanonicalRole(RoleManager) != RoleAgent || CanonicalRole(RoleOperations) != RoleAgent {
+		t.Fatal("legacy company titles become agent")
+	}
+	if CanonicalRole(RoleGM) != RoleGM || CanonicalRole(RoleFinance) != RoleFinance {
+		t.Fatal("live titles stay")
+	}
+}
+
 func TestAISetupNotLeaked(t *testing.T) {
-	if HasPermission(RoleEmployee, PermAISetup) {
-		t.Fatal("employee must not setup AI")
+	if HasPermission(RoleAgent, PermAISetup) {
+		t.Fatal("agent must not setup AI")
 	}
 	if HasPermission(RoleFinance, PermAIWrite) {
 		t.Fatal("finance must not write AI")
@@ -36,22 +44,18 @@ func TestAISetupNotLeaked(t *testing.T) {
 	}
 }
 
-// Epic 18 — settings permissions matrix.
 func TestSettingsPermissions(t *testing.T) {
-	if !HasPermission(RoleGM, PermSettingsWrite) || !HasPermission(RoleManager, PermSettingsWrite) {
-		t.Fatal("gm/manager must write settings")
+	if !HasPermission(RoleGM, PermSettingsWrite) {
+		t.Fatal("gm must write settings")
 	}
 	if HasPermission(RoleAdmin, PermSettingsRead) {
 		t.Fatal("company settings belong to the company, not the platform admin")
 	}
-	if !HasPermission(RoleOperations, PermSettingsRead) || HasPermission(RoleOperations, PermSettingsWrite) {
-		t.Fatal("operations settings.read only")
-	}
 	if !HasPermission(RoleFinance, PermSettingsRead) || HasPermission(RoleFinance, PermSettingsWrite) {
 		t.Fatal("finance settings.read only")
 	}
-	if HasPermission(RoleEmployee, PermSettingsRead) {
-		t.Fatal("employee must not read settings")
+	if HasPermission(RoleAgent, PermSettingsRead) {
+		t.Fatal("agent must not read settings")
 	}
 }
 
@@ -64,7 +68,7 @@ func TestSetupIsGMOnly(t *testing.T) {
 }
 
 func TestCustomerAndPIIPermissions(t *testing.T) {
-	for _, r := range []Role{RoleGM, RoleManager, RoleEmployee, RoleFinance, RoleOperations} {
+	for _, r := range CompanyRoles() {
 		if !HasPermission(r, PermCustomersRead) {
 			t.Fatalf("%s must read customers", r)
 		}
@@ -72,11 +76,11 @@ func TestCustomerAndPIIPermissions(t *testing.T) {
 	if HasPermission(RoleAdmin, PermCustomersRead) || HasPermission(RoleFinance, PermCustomersWrite) {
 		t.Fatal("admin has no customer access; finance is read-only")
 	}
-	if HasPermission(RoleEmployee, PermPIIRead) || HasPermission(RoleFinance, PermPIIRead) {
-		t.Fatal("employee and finance see masked passports only")
+	if HasPermission(RoleAgent, PermPIIRead) || HasPermission(RoleFinance, PermPIIRead) {
+		t.Fatal("agent and finance see masked passports only")
 	}
-	if !HasPermission(RoleOperations, PermPIIRead) {
-		t.Fatal("operations needs passports for visa work")
+	if !HasPermission(RoleGM, PermPIIRead) {
+		t.Fatal("gm reads passports")
 	}
 }
 
@@ -84,23 +88,19 @@ func TestScopeLevels(t *testing.T) {
 	team := uuid.New()
 	cases := map[Role]access.Level{
 		RoleGM: access.LevelCompany, RoleAdmin: access.LevelGlobal,
-		RoleFinance: access.LevelBranch, RoleOperations: access.LevelBranch,
-		RoleManager: access.LevelTeam, RoleEmployee: access.LevelOwn,
+		RoleFinance: access.LevelBranch, RoleAgent: access.LevelOwn,
+		RoleEmployee: access.LevelOwn,
 	}
 	for r, want := range cases {
 		if got := ScopeLevelFor(r, team); got != want {
 			t.Fatalf("%s: got %s want %s", r, got, want)
 		}
 	}
-	if ScopeLevelFor(RoleManager, uuid.Nil) != access.LevelBranch {
-		t.Fatal("manager without team falls back to branch")
-	}
 	if ScopeLevelFor(Role("x"), team) != access.LevelNone {
 		t.Fatal("unknown role must be denied")
 	}
 }
 
-// Epic 20 T-267 — KVKK export/anonymize of company data is limited to the GM.
 func TestPrivacyManagePermission(t *testing.T) {
 	for _, r := range AllRoles() {
 		want := r == RoleGM
@@ -110,10 +110,9 @@ func TestPrivacyManagePermission(t *testing.T) {
 	}
 }
 
-// Epic 21 T-271/T-274 — status override and discounts are manager/GM only.
 func TestBookingOverrideAndDiscountPermissions(t *testing.T) {
 	for _, r := range AllRoles() {
-		want := r == RoleGM || r == RoleManager
+		want := r == RoleGM
 		for _, p := range []Permission{PermBookingsOverride, PermBookingsDiscount} {
 			if HasPermission(r, p) != want {
 				t.Fatalf("%s %s = %v, want %v", r, p, !want, want)
@@ -122,7 +121,6 @@ func TestBookingOverrideAndDiscountPermissions(t *testing.T) {
 	}
 }
 
-// Epic 21 T-272 — FX rates are maintained by GM and finance only.
 func TestFXManagePermission(t *testing.T) {
 	for _, r := range AllRoles() {
 		want := r == RoleGM || r == RoleFinance
@@ -132,7 +130,6 @@ func TestFXManagePermission(t *testing.T) {
 	}
 }
 
-// The platform admin runs tenants and accounts but holds no company data permission.
 func TestPlatformAdminHoldsPlatformPermissionsOnly(t *testing.T) {
 	want := map[Permission]bool{
 		PermCompaniesManage: true, PermUsersRead: true, PermUsersWrite: true, PermUsersUnlock: true,
@@ -149,14 +146,23 @@ func TestPlatformAdminHoldsPlatformPermissionsOnly(t *testing.T) {
 	}
 }
 
-func TestBusesPermissions(t *testing.T) {
-	for _, r := range []Role{RoleGM, RoleManager, RoleOperations} {
-		if !HasPermission(r, PermBusesRead) || !HasPermission(r, PermBusesWrite) {
-			t.Fatalf("%s must read and write buses", r)
+func TestHotelPricingIsContractingOnly(t *testing.T) {
+	if !HasPermission(RoleGM, PermHotelsPricing) {
+		t.Fatal("gm must set hotel prices")
+	}
+	for _, r := range []Role{RoleAgent, RoleFinance, RoleAdmin} {
+		if HasPermission(r, PermHotelsPricing) {
+			t.Fatalf("%s must not set hotel prices", r)
 		}
 	}
-	if !HasPermission(RoleEmployee, PermBusesRead) || HasPermission(RoleEmployee, PermBusesWrite) {
-		t.Fatal("employee buses.read only")
+}
+
+func TestBusesPermissions(t *testing.T) {
+	if !HasPermission(RoleGM, PermBusesRead) || !HasPermission(RoleGM, PermBusesWrite) {
+		t.Fatal("gm must read and write buses")
+	}
+	if !HasPermission(RoleAgent, PermBusesRead) || HasPermission(RoleAgent, PermBusesWrite) {
+		t.Fatal("agent buses.read only")
 	}
 	if !HasPermission(RoleFinance, PermBusesRead) || HasPermission(RoleFinance, PermBusesWrite) {
 		t.Fatal("finance buses.read only")
@@ -166,7 +172,6 @@ func TestBusesPermissions(t *testing.T) {
 	}
 }
 
-// Every company user can ask for help; only the platform team works the inbox.
 func TestSupportPermissions(t *testing.T) {
 	for _, r := range AllRoles() {
 		if HasPermission(r, PermSupportWrite) != (r != RoleAdmin) {

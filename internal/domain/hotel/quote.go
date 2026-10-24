@@ -142,8 +142,9 @@ func (r *QuoteRequest) normalize(h *Hotel) error {
 	return f.err("invalid quote request")
 }
 
-// Price quotes a stay from the hotel's seasons, allotments and stop sales.
-func Price(h *Hotel, seasons []Season, allotments []Allotment, stops []StopSale, req QuoteRequest) (*Quote, error) {
+// Price quotes a stay from monthly satış/firma rates when present, otherwise
+// from seasonal net matrices plus markup.
+func Price(h *Hotel, seasons []Season, allotments []Allotment, stops []StopSale, req QuoteRequest, monthly []MonthlyRate) (*Quote, error) {
 	if !h.IsActive {
 		return nil, shared.NewInvalidState("hotel is inactive")
 	}
@@ -162,7 +163,7 @@ func Price(h *Hotel, seasons []Season, allotments []Allotment, stops []StopSale,
 	nightlyGross := []int64{}
 	left := -1
 	for day := req.CheckIn; day.Before(req.CheckOut); day = day.AddDate(0, 0, 1) {
-		n := priceNight(h, seasons, req, day, q)
+		n := priceNight(h, seasons, monthly, req, day, q)
 		if slices.ContainsFunc(stops, func(s StopSale) bool { return s.Covers(day, req.RoomType) }) {
 			n.StopSale = true
 			q.StopSaleDates = append(q.StopSaleDates, n.Date)
@@ -196,8 +197,20 @@ func Price(h *Hotel, seasons []Season, allotments []Allotment, stops []StopSale,
 	return q, nil
 }
 
-func priceNight(h *Hotel, seasons []Season, req QuoteRequest, day time.Time, q *Quote) QuoteNight {
+func priceNight(h *Hotel, seasons []Season, monthly []MonthlyRate, req QuoteRequest, day time.Time, q *Quote) QuoteNight {
 	n := QuoteNight{Date: FormatDay(day)}
+	if m, ok := MonthlyOn(monthly, day, req.RoomType); ok && (m.Sell > 0 || m.Net > 0) {
+		rooms := int64(req.Rooms)
+		n.Priced = true
+		n.SeasonName, n.SeasonKind = "", ""
+		n.Net = m.Net * rooms
+		n.Gross = m.Sell * rooms
+		if req.ExtraBed {
+			n.Net += h.ChildPolicy.ExtraBedAdult * rooms
+			n.Gross += h.ChildPolicy.ExtraBedAdult * rooms
+		}
+		return n
+	}
 	season, ok := SeasonOn(seasons, day)
 	if !ok {
 		return n

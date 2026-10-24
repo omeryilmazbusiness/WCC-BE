@@ -29,6 +29,7 @@ type HotelInput struct {
 	Cancellation *domain.CancellationPolicy
 	Notes        string
 	IsActive     *bool
+	Monthly      []domain.MonthlyRate
 }
 
 type SeasonInput struct {
@@ -109,7 +110,11 @@ func (s *Service) detail(ctx context.Context, h *domain.Hotel) (*domain.Detail, 
 	if err != nil {
 		return nil, err
 	}
-	return &domain.Detail{Hotel: *h, Seasons: seasons, Allotments: allotments, StopSales: stops}, nil
+	monthly, err := s.repo.ListMonthlyRates(ctx, h.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &domain.Detail{Hotel: *h, Seasons: seasons, Monthly: monthly, Allotments: allotments, StopSales: stops}, nil
 }
 
 // Today is the business day the service evaluates releases against.
@@ -144,16 +149,38 @@ func (s *Service) Create(ctx context.Context, branchID uuid.UUID, in HotelInput)
 	if err := h.Normalize(); err != nil {
 		return nil, err
 	}
+	byYear := map[int][]domain.MonthlyRate{}
+	for _, r := range in.Monthly {
+		year := r.Year
+		if year == 0 {
+			year = now.Year()
+		}
+		byYear[year] = append(byYear[year], r)
+	}
+	var monthly []domain.MonthlyRate
 	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		if err := s.repo.Create(ctx, h); err != nil {
 			return err
+		}
+		for year, rates := range byYear {
+			clean, err := domain.NormalizeYearSheet(h, year, rates)
+			if err != nil {
+				return err
+			}
+			if err := s.repo.ReplaceMonthlyRates(ctx, h.ID, year, clean); err != nil {
+				return err
+			}
+			monthly = append(monthly, clean...)
 		}
 		return s.record(ctx, "hotel.created", h, nil, snapshot(h), nil)
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &domain.Detail{Hotel: *h, Seasons: []domain.Season{}, Allotments: []domain.Allotment{}, StopSales: []domain.StopSale{}}, nil
+	if monthly == nil {
+		monthly = []domain.MonthlyRate{}
+	}
+	return &domain.Detail{Hotel: *h, Seasons: []domain.Season{}, Monthly: monthly, Allotments: []domain.Allotment{}, StopSales: []domain.StopSale{}}, nil
 }
 
 // Update replaces the profile. Room types and meal plans still used by a
@@ -400,7 +427,32 @@ func (s *Service) Quote(ctx context.Context, hotelID uuid.UUID, req domain.Quote
 		return nil, err
 	}
 	req.Today = s.today()
-	return domain.Price(&d.Hotel, d.Seasons, d.Allotments, d.StopSales, req)
+	return domain.Price(&d.Hotel, d.Seasons, d.Allotments, d.StopSales, req, d.Monthly)
+}
+
+// ReplaceMonthlyRates writes one calendar year's firma/satış sheet.
+func (s *Service) ReplaceMonthlyRates(ctx context.Context, hotelID uuid.UUID, year int, rates []domain.MonthlyRate) (*domain.Detail, error) {
+	var out *domain.Detail
+	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		h, err := s.repo.FindForUpdate(ctx, hotelID)
+		if err != nil {
+			return err
+		}
+		clean, err := domain.NormalizeYearSheet(h, year, rates)
+		if err != nil {
+			return err
+		}
+		if err := s.repo.ReplaceMonthlyRates(ctx, hotelID, year, clean); err != nil {
+			return err
+		}
+		d, err := s.detail(ctx, h)
+		if err != nil {
+			return err
+		}
+		out = d
+		return s.record(ctx, "hotel.monthly_rates_replaced", h, nil, map[string]any{"year": year, "cells": len(clean)}, nil)
+	})
+	return out, err
 }
 
 func (s *Service) record(ctx context.Context, action string, h *domain.Hotel, before, after, extra map[string]any) error {

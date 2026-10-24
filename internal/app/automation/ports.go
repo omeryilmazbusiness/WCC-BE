@@ -13,6 +13,7 @@ import (
 	documentdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/document"
 	notificationdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/notification"
 	taskdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/task"
+	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
 
 // Branch is an active branch and the zone its local schedules run in.
@@ -117,8 +118,8 @@ type Checklists interface {
 }
 
 var (
-	managerRoles     = []string{"manager", "gm"}
-	operationsRoles  = []string{"operations", "manager"}
+	managerRoles     = []string{string(platformauth.RoleGM)}
+	operationsRoles  = []string{string(platformauth.RoleGM)}
 	financeRoles     = []string{"finance", "manager"}
 	integrationRoles = []string{"gm", "manager", "admin"}
 )

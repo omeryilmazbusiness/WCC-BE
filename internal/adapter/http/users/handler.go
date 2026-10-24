@@ -221,7 +221,7 @@ func (h Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 
 func (h Handler) PermissionsMatrix(w http.ResponseWriter, _ *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]any{
-		"roles":       platformauth.AllRoles(),
+		"roles":       platformauth.CompanyRoles(),
 		"permissions": platformauth.RolePermissionMatrix(),
 	})
 }

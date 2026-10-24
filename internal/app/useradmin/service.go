@@ -167,6 +167,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*identity.User, e
 	if email == "" || in.FullName == "" {
 		return nil, shared.NewValidation("email and full_name are required")
 	}
+	in.Role = platformauth.CanonicalRole(in.Role)
 	if !platformauth.ValidRole(in.Role) {
 		return nil, shared.NewValidation("invalid role")
 	}
@@ -246,13 +247,14 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*identity.User, e
 		u.FullName = strings.TrimSpace(*in.FullName)
 	}
 	if in.Role != nil {
-		if !platformauth.ValidRole(*in.Role) {
+		next := platformauth.CanonicalRole(*in.Role)
+		if !platformauth.ValidRole(next) {
 			return nil, shared.NewValidation("invalid role")
 		}
-		if platformOperator(ctx) && *in.Role != platformauth.RoleGM {
+		if platformOperator(ctx) && next != platformauth.RoleGM {
 			return nil, errGMOnly()
 		}
-		u.Role = *in.Role
+		u.Role = next
 	}
 	if in.BranchID != nil {
 		u.BranchID = *in.BranchID

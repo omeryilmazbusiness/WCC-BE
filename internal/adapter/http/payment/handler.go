@@ -142,7 +142,7 @@ func (h Handler) Record(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	if claims.Role == platformauth.RoleEmployee {
+	if platformauth.CanonicalRole(claims.Role) == platformauth.RoleAgent {
 		response.Error(w, shared.NewForbidden("employees cannot record payments"))
 		return
 	}

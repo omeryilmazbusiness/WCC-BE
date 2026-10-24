@@ -16,7 +16,13 @@ import (
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/hotel"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/hotel"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
+	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
+
+func seesCost(r *http.Request) bool {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	return ok && platformauth.HasPermission(claims.Role, platformauth.PermHotelsPricing)
+}
 
 type Handler struct {
 	Svc *appsvc.Service
@@ -62,6 +68,26 @@ func dayRange(start, end string) (time.Time, time.Time, error) {
 	return s, e, err
 }
 
+type monthlyWire struct {
+	Year     int    `json:"year"`
+	Month    int    `json:"month"`
+	RoomType string `json:"room_type"`
+	Net      int64  `json:"net"`
+	Sell     int64  `json:"sell"`
+}
+
+func (w monthlyWire) rate() domain.MonthlyRate {
+	return domain.MonthlyRate{Year: w.Year, Month: w.Month, RoomType: w.RoomType, Net: w.Net, Sell: w.Sell}
+}
+
+func asMonthly(rows []monthlyWire) []domain.MonthlyRate {
+	out := make([]domain.MonthlyRate, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.rate())
+	}
+	return out
+}
+
 type hotelRequest struct {
 	Name         string                     `json:"name"`
 	NameAr       string                     `json:"name_ar"`
@@ -76,6 +102,7 @@ type hotelRequest struct {
 	Cancellation *domain.CancellationPolicy `json:"cancellation"`
 	Notes        string                     `json:"notes"`
 	IsActive     *bool                      `json:"is_active"`
+	Monthly      []monthlyWire              `json:"monthly_rates"`
 }
 
 func (req hotelRequest) input() appsvc.HotelInput {
@@ -83,17 +110,32 @@ func (req hotelRequest) input() appsvc.HotelInput {
 		Name: req.Name, NameAr: req.NameAr, Stars: req.Stars, Location: req.Location, Contact: req.Contact,
 		RoomTypes: req.RoomTypes, MealPlans: req.MealPlans, Currency: req.Currency, Markup: req.Markup,
 		ChildPolicy: req.ChildPolicy, Cancellation: req.Cancellation, Notes: req.Notes, IsActive: req.IsActive,
+		Monthly: asMonthly(req.Monthly),
 	}
 }
 
-func mapHotel(h *domain.Hotel) map[string]any {
-	return map[string]any{
+func mapHotel(h *domain.Hotel, cost bool) map[string]any {
+	row := map[string]any{
 		"id": h.ID, "branch_id": h.BranchID, "name": h.Name, "name_ar": h.NameAr, "stars": h.Stars,
 		"location": h.Location, "contact": h.Contact, "room_types": nonNil(h.RoomTypes), "meal_plans": nonNil(h.MealPlans),
-		"currency": h.Currency, "markup": h.Markup, "child_policy": h.ChildPolicy, "cancellation": h.Cancellation,
+		"currency": h.Currency, "child_policy": h.ChildPolicy, "cancellation": h.Cancellation,
 		"notes": h.Notes, "is_active": h.IsActive,
 		"created_at": h.CreatedAt.UTC().Format(time.RFC3339), "updated_at": h.UpdatedAt.UTC().Format(time.RFC3339),
 	}
+	if cost {
+		row["markup"] = h.Markup
+	}
+	return row
+}
+
+func mapMonthly(m domain.MonthlyRate, cost bool) map[string]any {
+	row := map[string]any{
+		"year": m.Year, "month": m.Month, "room_type": m.RoomType, "sell": m.Sell,
+	}
+	if cost {
+		row["net"] = m.Net
+	}
+	return row
 }
 
 func nonNil(xs []string) []string {
@@ -103,16 +145,32 @@ func nonNil(xs []string) []string {
 	return xs
 }
 
-func mapSeason(s *domain.Season) map[string]any {
+func mapSeason(s *domain.Season, h *domain.Hotel, cost bool) map[string]any {
 	rates := s.Rates
 	if rates == nil {
 		rates = []domain.Rate{}
 	}
-	return map[string]any{
+	if !cost {
+		m := s.MarkupFor(h)
+		out := make([]domain.Rate, len(rates))
+		for i, r := range rates {
+			out[i] = domain.Rate{
+				RoomType: r.RoomType, MealPlan: r.MealPlan,
+				Single: m.Apply(r.Single, 1), Double: m.Apply(r.Double, 1),
+				Triple: m.Apply(r.Triple, 1), Quad: m.Apply(r.Quad, 1),
+			}
+		}
+		rates = out
+	}
+	row := map[string]any{
 		"id": s.ID, "hotel_id": s.HotelID, "name": s.Name, "kind": s.Kind,
 		"start_date": domain.FormatDay(s.Start), "end_date": domain.FormatDay(s.End),
-		"markup": s.Markup, "rates": rates,
+		"rates": rates,
 	}
+	if cost {
+		row["markup"] = s.Markup
+	}
+	return row
 }
 
 func mapAllotment(a *domain.Allotment, today time.Time) map[string]any {
@@ -131,11 +189,21 @@ func mapStopSale(s *domain.StopSale) map[string]any {
 	}
 }
 
-func (h Handler) mapDetail(d *domain.Detail) map[string]any {
+func (h Handler) mapDetail(d *domain.Detail, cost bool) map[string]any {
 	today := h.Svc.Today()
 	seasons := make([]map[string]any, 0, len(d.Seasons))
 	for i := range d.Seasons {
-		seasons = append(seasons, mapSeason(&d.Seasons[i]))
+		seasons = append(seasons, mapSeason(&d.Seasons[i], &d.Hotel, cost))
+	}
+	if !cost {
+		domain.RedactCost(&d.Hotel)
+		for i := range d.Monthly {
+			domain.RedactMonthly(&d.Monthly[i])
+		}
+	}
+	monthly := make([]map[string]any, 0, len(d.Monthly))
+	for _, m := range d.Monthly {
+		monthly = append(monthly, mapMonthly(m, cost))
 	}
 	allotments := make([]map[string]any, 0, len(d.Allotments))
 	for i := range d.Allotments {
@@ -146,8 +214,8 @@ func (h Handler) mapDetail(d *domain.Detail) map[string]any {
 		stops = append(stops, mapStopSale(&d.StopSales[i]))
 	}
 	return map[string]any{
-		"hotel": mapHotel(&d.Hotel), "seasons": seasons, "allotments": allotments, "stop_sales": stops,
-		"today": domain.FormatDay(today),
+		"hotel": mapHotel(&d.Hotel, cost), "seasons": seasons, "monthly_rates": monthly,
+		"allotments": allotments, "stop_sales": stops, "today": domain.FormatDay(today),
 	}
 }
 
@@ -166,16 +234,24 @@ func (h Handler) List(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	cost := seesCost(r)
 	out := make([]map[string]any, 0, len(items))
 	for i := range items {
 		s := &items[i]
-		row := mapHotel(&s.Hotel)
-		row["summary"] = map[string]any{
-			"season_name": s.SeasonName, "season_kind": s.SeasonKind, "from_net": s.FromNet,
+		if !cost {
+			domain.RedactSummary(s)
+		}
+		row := mapHotel(&s.Hotel, cost)
+		sum := map[string]any{
+			"season_name": s.SeasonName, "season_kind": s.SeasonKind, "from_sell": s.FromSell,
 			"rooms_total": s.RoomsTotal, "rooms_sold": s.RoomsSold, "next_release": dayPtr(s.NextRelease),
 			"stop_sale_today": s.StopSaleToday, "contract_files": s.ContractFiles,
 			"seasons_count": s.SeasonsCount, "allotment_count": s.AllotmentCount,
 		}
+		if cost {
+			sum["from_net"] = s.FromNet
+		}
+		row["summary"] = sum
 		out = append(out, row)
 	}
 	response.JSON(w, http.StatusOK, out)
@@ -198,12 +274,15 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &req) {
 		return
 	}
+	if !seesCost(r) {
+		req.Monthly = nil
+	}
 	d, err := h.Svc.Create(r.Context(), branchID, req.input())
 	if err != nil {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusCreated, h.mapDetail(d))
+	response.JSON(w, http.StatusCreated, h.mapDetail(d, true))
 }
 
 func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +295,7 @@ func (h Handler) Get(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, h.mapDetail(d))
+	response.JSON(w, http.StatusOK, h.mapDetail(d, seesCost(r)))
 }
 
 func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +312,27 @@ func (h Handler) Update(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, h.mapDetail(d))
+	response.JSON(w, http.StatusOK, h.mapDetail(d, true))
+}
+
+func (h Handler) ReplaceMonthlyRates(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		Year  int           `json:"year"`
+		Rates []monthlyWire `json:"rates"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	d, err := h.Svc.ReplaceMonthlyRates(r.Context(), id, req.Year, asMonthly(req.Rates))
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, h.mapDetail(d, true))
 }
 
 type seasonRequest struct {
@@ -270,7 +369,7 @@ func (h Handler) saveSeason(w http.ResponseWriter, r *http.Request, seasonID *uu
 	if seasonID == nil {
 		status = http.StatusCreated
 	}
-	response.JSON(w, status, mapSeason(s))
+	response.JSON(w, status, mapSeason(s, nil, true))
 }
 
 func (h Handler) CreateSeason(w http.ResponseWriter, r *http.Request) { h.saveSeason(w, r, nil) }
@@ -476,6 +575,9 @@ func (h Handler) Quote(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.Error(w, err)
 		return
+	}
+	if !seesCost(r) {
+		domain.RedactQuote(q)
 	}
 	response.JSON(w, http.StatusOK, q)
 }

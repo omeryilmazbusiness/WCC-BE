@@ -19,6 +19,7 @@ type memRepo struct {
 	seasons    map[uuid.UUID]domain.Season
 	allotments map[uuid.UUID]domain.Allotment
 	stops      map[uuid.UUID]domain.StopSale
+	monthly    []domain.MonthlyRate
 }
 
 func newMemRepo() *memRepo {
@@ -97,6 +98,25 @@ func (m *memRepo) DeleteStopSale(_ context.Context, _, id uuid.UUID) error {
 	delete(m.stops, id)
 	return nil
 }
+func (m *memRepo) ListMonthlyRates(_ context.Context, hotelID uuid.UUID) ([]domain.MonthlyRate, error) {
+	out := []domain.MonthlyRate{}
+	for _, r := range m.monthly {
+		if r.HotelID == hotelID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+func (m *memRepo) ReplaceMonthlyRates(_ context.Context, hotelID uuid.UUID, year int, rates []domain.MonthlyRate) error {
+	kept := m.monthly[:0]
+	for _, r := range m.monthly {
+		if r.HotelID != hotelID || r.Year != year {
+			kept = append(kept, r)
+		}
+	}
+	m.monthly = append(kept, rates...)
+	return nil
+}
 
 type memAudit struct{ actions []string }
 
@@ -113,7 +133,7 @@ func fixture(t *testing.T) (*Service, *memAudit, uuid.UUID) {
 	svc.now = func() time.Time { return time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC) }
 	d, err := svc.Create(context.Background(), uuid.New(), HotelInput{
 		Name: "Makkah Hilton Convention", Stars: 5, Currency: "SAR",
-		Location:  domain.Location{City: "Makkah", Country: "SA", Landmark: domain.LandmarkHaram, DistanceM: 150},
+		Location: domain.Location{City: "Makkah", Country: "Saudi Arabia"},
 		RoomTypes: []string{"standard", "quad"}, MealPlans: []string{"bb"},
 		Markup: domain.Markup{Kind: domain.MarkupPercent, Value: 1000},
 	})
@@ -229,4 +249,50 @@ func TestQuoteUsesBusinessToday(t *testing.T) {
 	if q.Availability != domain.AvailStopSale {
 		t.Fatalf("stop sale ignored: %s", q.Availability)
 	}
+}
+
+func TestCreatePersistsMonthlyRates(t *testing.T) {
+	svc := NewService(newMemRepo(), tx.Nop{})
+	d, err := svc.Create(context.Background(), uuid.New(), HotelInput{
+		Name: "Makkah Hilton Convention", Stars: 5, Currency: "SAR",
+		Location:  domain.Location{City: "Makkah", Country: "Saudi Arabia"},
+		RoomTypes: []string{"standard"}, MealPlans: []string{"bb"},
+		Markup: domain.Markup{Kind: domain.MarkupPercent, Value: 1500},
+		Monthly: []domain.MonthlyRate{
+			{Year: 2026, Month: 10, RoomType: "standard", Net: 300_00, Sell: 420_00},
+		},
+	})
+	if err != nil || len(d.Monthly) != 1 || d.Monthly[0].Sell != 420_00 {
+		t.Fatalf("create sheet %+v err=%v", d, err)
+	}
+}
+
+func TestReplaceMonthlyRatesAndQuote(t *testing.T) {
+	svc, rec, id := fixture(t)
+	ctx := context.Background()
+	d, err := svc.ReplaceMonthlyRates(ctx, id, 2026, []domain.MonthlyRate{
+		{Month: 12, RoomType: "standard", Net: 300_00, Sell: 420_00},
+	})
+	if err != nil || len(d.Monthly) != 1 || d.Monthly[0].Sell != 420_00 {
+		t.Fatalf("sheet %+v err=%v", d, err)
+	}
+	if !slicesContains(rec.actions, "hotel.monthly_rates_replaced") {
+		t.Fatalf("audit %v", rec.actions)
+	}
+	q, err := svc.Quote(ctx, id, domain.QuoteRequest{CheckIn: day("2026-12-10"), CheckOut: day("2026-12-12"), RoomType: "standard", MealPlan: "bb", Adults: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.NetTotal != 600_00 || q.GrossTotal != 840_00 {
+		t.Fatalf("monthly quote %d %d", q.NetTotal, q.GrossTotal)
+	}
+}
+
+func slicesContains(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
 }

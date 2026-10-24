@@ -411,7 +411,7 @@ func (t targetRecompute) RecomputeTargets(ctx context.Context, branchID uuid.UUI
 }
 
 // reportRoles may receive scheduled report exports (reports.export holders).
-var reportRoles = []string{string(platformauth.RoleGM), string(platformauth.RoleManager), string(platformauth.RoleAdmin)}
+var reportRoles = []string{string(platformauth.RoleGM), string(platformauth.RoleAdmin)}
 
 // reportRecipients adapts the user directory to report.Recipients.
 type reportRecipients struct {

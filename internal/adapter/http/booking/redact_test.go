@@ -13,7 +13,7 @@ func TestFieldAccessForRole(t *testing.T) {
 		financials bool
 	}{
 		{platformauth.RoleGM, true},
-		{platformauth.RoleEmployee, false},
+		{platformauth.RoleAgent, false},
 	}
 	for _, tc := range cases {
 		fa := fieldAccessForRole(tc.role)
@@ -48,7 +48,7 @@ func TestMapBookingRedactsFinancials(t *testing.T) {
 func TestFieldAccessOverrideAndDiscount(t *testing.T) {
 	for _, r := range platformauth.AllRoles() {
 		fa := fieldAccessForRole(r)
-		want := r == platformauth.RoleGM || r == platformauth.RoleManager
+		want := r == platformauth.RoleGM
 		if fa.override != want || fa.discount != want {
 			t.Fatalf("%s: %+v", r, fa)
 		}

@@ -291,7 +291,7 @@ func (s *Service) issueTokens(ctx context.Context, user *identity.User, sid uuid
 		teamID = *user.TeamID
 	}
 	at, err := s.tokens.IssueAccess(platformauth.AccessSubject{
-		UserID: user.ID, Email: user.Email, Role: user.Role, BranchID: user.BranchID, TeamID: teamID,
+		UserID: user.ID, Email: user.Email, Role: platformauth.CanonicalRole(user.Role), BranchID: user.BranchID, TeamID: teamID,
 		SessionID: sid, TokenVersion: user.TokenVersion,
 	})
 	if err != nil {

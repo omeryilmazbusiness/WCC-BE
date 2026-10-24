@@ -14,15 +14,13 @@ func TestAIPermissionLeakage(t *testing.T) {
 		perm auth.Permission
 		want bool
 	}{
-		{auth.RoleEmployee, auth.PermAISetup, false},
+		{auth.RoleAgent, auth.PermAISetup, false},
 		{auth.RoleFinance, auth.PermAISetup, false},
 		{auth.RoleFinance, auth.PermAIWrite, false},
-		{auth.RoleOperations, auth.PermAISetup, false},
 		{auth.RoleGM, auth.PermAISetup, true},
-		{auth.RoleManager, auth.PermAISetup, true},
 		{auth.RoleAdmin, auth.PermAISetup, false},
-		{auth.RoleEmployee, auth.PermAIRead, true},
-		{auth.RoleEmployee, auth.PermAIWrite, true},
+		{auth.RoleAgent, auth.PermAIRead, true},
+		{auth.RoleAgent, auth.PermAIWrite, true},
 		{auth.RoleFinance, auth.PermAIRead, true},
 	}
 	for _, tc := range cases {
@@ -56,8 +54,8 @@ func TestRolePermissionMatrixCoverage(t *testing.T) {
 		auth.PermNotificationsManage,
 	}
 	for _, p := range denied {
-		if auth.HasPermission(auth.RoleEmployee, p) {
-			t.Fatalf("employee must not have %s", p)
+		if auth.HasPermission(auth.RoleAgent, p) {
+			t.Fatalf("agent must not have %s", p)
 		}
 	}
 }

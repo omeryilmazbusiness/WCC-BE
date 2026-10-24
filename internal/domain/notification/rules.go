@@ -8,7 +8,7 @@ type Rule struct {
 	Kind            string
 	Severity        Severity
 	EscalateAfter   time.Duration
-	EscalateToRoles []string // manager / gm / operations / finance
+	EscalateToRoles []string // gm / finance / agent
 	Groupable       bool
 	DefaultTitle    string
 	DefaultHref     string
@@ -20,55 +20,55 @@ func DefaultRules() []Rule {
 	return []Rule{
 		{
 			Kind: KindMessageSLA, Severity: SeverityCritical,
-			EscalateAfter: 15 * time.Minute, EscalateToRoles: []string{"manager", "gm"},
+			EscalateAfter: 15 * time.Minute, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Conversation SLA breached",
 			DefaultHref: "/inbox", EntityType: "conversation",
 		},
 		{
 			Kind: KindLeadNoFollowUp, Severity: SeverityWarning,
-			EscalateAfter: 24 * time.Hour, EscalateToRoles: []string{"manager"},
+			EscalateAfter: 24 * time.Hour, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Lead without follow-up",
 			DefaultHref: "/pipeline", EntityType: "lead",
 		},
 		{
 			Kind: KindTaskOverdue, Severity: SeverityWarning,
-			EscalateAfter: 2 * time.Hour, EscalateToRoles: []string{"manager"},
+			EscalateAfter: 2 * time.Hour, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Task overdue",
 			DefaultHref: "/tasks", EntityType: "task",
 		},
 		{
 			Kind: KindTaskEscalated, Severity: SeverityCritical,
-			EscalateAfter: 0, EscalateToRoles: []string{"manager", "gm"},
+			EscalateAfter: 0, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Task escalated",
 			DefaultHref: "/tasks", EntityType: "task",
 		},
 		{
 			Kind: KindPaymentOverdue, Severity: SeverityCritical,
-			EscalateAfter: 12 * time.Hour, EscalateToRoles: []string{"finance", "manager"},
+			EscalateAfter: 12 * time.Hour, EscalateToRoles: []string{"finance", "gm"},
 			Groupable: true, DefaultTitle: "Payment overdue",
 			DefaultHref: "/finance", EntityType: "booking",
 		},
 		{
 			Kind: KindDocumentMissing, Severity: SeverityWarning,
-			EscalateAfter: 24 * time.Hour, EscalateToRoles: []string{"operations", "manager"},
+			EscalateAfter: 24 * time.Hour, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Missing document",
 			DefaultHref: "/missing-docs", EntityType: "booking",
 		},
 		{
 			Kind: KindDocumentExpiring, Severity: SeverityWarning,
-			EscalateAfter: 48 * time.Hour, EscalateToRoles: []string{"operations"},
+			EscalateAfter: 48 * time.Hour, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Document expiring",
 			DefaultHref: "/missing-docs", EntityType: "document",
 		},
 		{
 			Kind: KindTargetBehind, Severity: SeverityWarning,
-			EscalateAfter: 24 * time.Hour, EscalateToRoles: []string{"manager", "gm"},
+			EscalateAfter: 24 * time.Hour, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Revenue target behind pace",
 			DefaultHref: "/targets", EntityType: "target",
 		},
 		{
 			Kind: KindIntegrationDown, Severity: SeverityCritical,
-			EscalateAfter: 30 * time.Minute, EscalateToRoles: []string{"gm", "manager"},
+			EscalateAfter: 30 * time.Minute, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Integration unhealthy",
 			DefaultHref: "/inbox", EntityType: "integration",
 		},
@@ -80,19 +80,19 @@ func DefaultRules() []Rule {
 		},
 		{
 			Kind: KindSupplierUnconfirmed, Severity: SeverityWarning,
-			EscalateAfter: 24 * time.Hour, EscalateToRoles: []string{"operations", "manager"},
+			EscalateAfter: 24 * time.Hour, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Supplier unconfirmed",
 			DefaultHref: "/suppliers", EntityType: "supplier",
 		},
 		{
 			Kind: KindSupplierLowBalance, Severity: SeverityWarning,
-			EscalateAfter: 12 * time.Hour, EscalateToRoles: []string{"manager", "gm"},
+			EscalateAfter: 12 * time.Hour, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Supplier balance low",
 			DefaultHref: "/suppliers", EntityType: "supplier",
 		},
 		{
 			Kind: KindSupplierContract, Severity: SeverityWarning,
-			EscalateAfter: 72 * time.Hour, EscalateToRoles: []string{"manager"},
+			EscalateAfter: 72 * time.Hour, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Supplier contract ending",
 			DefaultHref: "/suppliers", EntityType: "supplier",
 		},
@@ -110,13 +110,13 @@ func DefaultRules() []Rule {
 		},
 		{
 			Kind: KindPassportExpiring, Severity: SeverityWarning,
-			EscalateAfter: 72 * time.Hour, EscalateToRoles: []string{"operations"},
+			EscalateAfter: 72 * time.Hour, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Passport expiring",
 			DefaultHref: "/customers", EntityType: "customer",
 		},
 		{
 			Kind: KindVisaFollowUp, Severity: SeverityWarning,
-			EscalateAfter: 48 * time.Hour, EscalateToRoles: []string{"operations", "manager"},
+			EscalateAfter: 48 * time.Hour, EscalateToRoles: []string{"gm"},
 			Groupable: true, DefaultTitle: "Visa awaiting decision",
 			DefaultHref: "/bookings", EntityType: "visa_application",
 		},

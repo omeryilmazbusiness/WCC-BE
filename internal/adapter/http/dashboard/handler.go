@@ -53,7 +53,7 @@ func (h Handler) KPIs(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	if claims.Role == platformauth.RoleEmployee {
+	if platformauth.CanonicalRole(claims.Role) == platformauth.RoleAgent {
 		response.Error(w, shared.NewForbidden("manager dashboard only"))
 		return
 	}
@@ -81,7 +81,7 @@ func (h Handler) Team(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	if claims.Role == platformauth.RoleEmployee {
+	if platformauth.CanonicalRole(claims.Role) == platformauth.RoleAgent {
 		response.Error(w, shared.NewForbidden("manager dashboard only"))
 		return
 	}
@@ -109,7 +109,7 @@ func (h Handler) Attention(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	if claims.Role == platformauth.RoleEmployee {
+	if platformauth.CanonicalRole(claims.Role) == platformauth.RoleAgent {
 		response.Error(w, shared.NewForbidden("manager dashboard only"))
 		return
 	}
@@ -134,7 +134,7 @@ func (h Handler) AttentionSummary(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewUnauthorized("unauthenticated"))
 		return
 	}
-	if claims.Role == platformauth.RoleEmployee {
+	if platformauth.CanonicalRole(claims.Role) == platformauth.RoleAgent {
 		response.Error(w, shared.NewForbidden("manager dashboard only"))
 		return
 	}
@@ -170,7 +170,7 @@ func (h Handler) MyTarget(w http.ResponseWriter, r *http.Request) {
 	ownerID := &claims.UserID
 	// Managers can request branch-level target with ?scope=branch
 	if r.URL.Query().Get("scope") == "branch" &&
-		(claims.Role == platformauth.RoleGM || claims.Role == platformauth.RoleManager) {
+		platformauth.CanonicalRole(claims.Role) == platformauth.RoleGM {
 		ownerID = nil
 	}
 	var branchID uuid.UUID

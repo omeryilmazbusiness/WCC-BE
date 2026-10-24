@@ -1,6 +1,7 @@
 package hotel
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -21,7 +22,7 @@ func day(s string) time.Time {
 func testHotel() *Hotel {
 	h := &Hotel{
 		ID: uuid.New(), Name: "Makkah Hilton Convention", Stars: 5, Currency: "sar",
-		Location:     Location{City: "Makkah", Country: "sa", Landmark: LandmarkHaram, DistanceM: 150},
+		Location: Location{City: "Makkah", Country: "  saudi  arabia  "},
 		RoomTypes:    []string{"quad", "standard", "deluxe", "nope"},
 		MealPlans:    []string{"BB", "ro", "bb"},
 		Markup:       Markup{Kind: MarkupPercent, Value: 1500},
@@ -37,8 +38,11 @@ func testHotel() *Hotel {
 
 func TestHotelNormalize(t *testing.T) {
 	h := testHotel()
-	if h.Currency != "SAR" || h.Location.Country != "SA" {
-		t.Fatalf("not upper-cased: %s %s", h.Currency, h.Location.Country)
+	if h.Currency != "SAR" || h.Location.Country != "saudi arabia" {
+		t.Fatalf("currency/country: %s %q", h.Currency, h.Location.Country)
+	}
+	if h.Location.Landmark != "" || h.Location.DistanceM != 0 || h.Location.Latitude != nil {
+		t.Fatal("geo leftovers must be cleared")
 	}
 	if got := h.RoomTypes; len(got) != 3 || got[0] != RoomStandard || got[2] != RoomQuad {
 		t.Fatalf("room types not cleaned and ordered: %v", got)
@@ -47,17 +51,52 @@ func TestHotelNormalize(t *testing.T) {
 		t.Fatalf("meal plans not cleaned: %v", got)
 	}
 
-	bad := &Hotel{Name: "X", Currency: "riyal", Stars: 7, Location: Location{DistanceM: -1, Latitude: ptr(10.0)},
+	bad := &Hotel{Name: "X", Currency: "riyal", Stars: 7, Location: Location{},
 		Contact: Contact{SalesEmail: "nope", SalesPhone: "abc"}}
 	err := bad.Normalize()
 	var app *shared.AppError
 	if !errors.As(err, &app) {
 		t.Fatalf("want validation error, got %v", err)
 	}
-	for _, k := range []string{"name", "currency", "stars", "city", "distance_m", "latitude", "sales_email", "sales_phone", "room_types", "meal_plans"} {
+	for _, k := range []string{"name", "currency", "stars", "city", "sales_email", "sales_phone", "room_types", "meal_plans"} {
 		if _, ok := app.Details[k]; !ok {
 			t.Errorf("missing field error %q in %v", k, app.Details)
 		}
+	}
+}
+
+func TestMonthlyRateJSONUsesSnakeCase(t *testing.T) {
+	var r MonthlyRate
+	if err := json.Unmarshal([]byte(`{"year":2026,"month":3,"room_type":"deluxe","net":40000,"sell":52000}`), &r); err != nil {
+		t.Fatal(err)
+	}
+	if r.Year != 2026 || r.Month != 3 || r.RoomType != "deluxe" || r.Net != 40000 || r.Sell != 52000 {
+		t.Fatalf("wire %+v", r)
+	}
+}
+
+func TestMonthlyRateAndQuote(t *testing.T) {
+	h := testHotel()
+	sheet, err := NormalizeYearSheet(h, 2026, []MonthlyRate{
+		{Month: 12, RoomType: "standard", Net: 400_00, Sell: 520_00},
+		{Month: 12, RoomType: "deluxe", Net: 0, Sell: 0},
+	})
+	if err != nil || len(sheet) != 1 || sheet[0].Sell != 520_00 {
+		t.Fatalf("sheet %+v err=%v", sheet, err)
+	}
+	q, err := Price(h, nil, nil, nil, QuoteRequest{
+		CheckIn: day("2026-12-10"), CheckOut: day("2026-12-12"), RoomType: "standard", MealPlan: "bb",
+		Rooms: 2, Adults: 2, Today: day("2026-11-01"),
+	}, sheet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.NetTotal != 400_00*2*2 || q.GrossTotal != 520_00*2*2 || q.Profit != 480_00 {
+		t.Fatalf("monthly totals %d %d %d", q.NetTotal, q.GrossTotal, q.Profit)
+	}
+	RedactQuote(q)
+	if q.NetTotal != 0 || q.Profit != 0 || q.GrossTotal != 520_00*2*2 || q.NightsDetail[0].Net != 0 {
+		t.Fatalf("redact leaked cost %+v", q)
 	}
 }
 
@@ -238,7 +277,7 @@ func TestPriceAcrossSeasons(t *testing.T) {
 	q, err := Price(h, seasons, allot, nil, QuoteRequest{
 		CheckIn: day("2026-12-19"), CheckOut: day("2026-12-22"), RoomType: "standard", MealPlan: "bb",
 		Rooms: 2, Adults: 2, Children: []Child{{Age: 4}, {Age: 13}}, Today: day("2026-11-01"),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +301,7 @@ func TestPriceDoubleWithMarkupOverrideAndAvailability(t *testing.T) {
 	h, seasons, allot, _ := quoteFixture()
 	req := QuoteRequest{CheckIn: day("2026-12-21"), CheckOut: day("2026-12-23"), RoomType: "standard", MealPlan: "bb",
 		Rooms: 2, Adults: 2, ExtraBed: true, Today: day("2026-11-01")}
-	q, err := Price(h, seasons, allot, nil, req)
+	q, err := Price(h, seasons, allot, nil, req, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,14 +320,14 @@ func TestPriceDoubleWithMarkupOverrideAndAvailability(t *testing.T) {
 	}
 
 	req.Rooms = 4
-	q, _ = Price(h, seasons, allot, nil, req)
+	q, _ = Price(h, seasons, allot, nil, req, nil)
 	if q.Availability != AvailOnRequest {
 		t.Fatalf("beyond the allotment it is on request, got %s", q.Availability)
 	}
 
 	req.Rooms = 1
 	req.Today = day("2026-12-15")
-	q, _ = Price(h, seasons, allot, nil, req)
+	q, _ = Price(h, seasons, allot, nil, req, nil)
 	if q.Availability != AvailOnRequest || q.AllotmentLeft != 0 {
 		t.Fatalf("released block: %s %d", q.Availability, q.AllotmentLeft)
 	}
@@ -297,7 +336,7 @@ func TestPriceDoubleWithMarkupOverrideAndAvailability(t *testing.T) {
 	}
 
 	stops := []StopSale{{Start: day("2026-12-22"), End: day("2026-12-22")}}
-	q, _ = Price(h, seasons, allot, stops, req)
+	q, _ = Price(h, seasons, allot, stops, req, nil)
 	if q.Availability != AvailStopSale || q.Bookable || len(q.StopSaleDates) != 1 {
 		t.Fatalf("stop sale %+v", q)
 	}
@@ -306,23 +345,23 @@ func TestPriceDoubleWithMarkupOverrideAndAvailability(t *testing.T) {
 func TestPriceRejectsBadRequests(t *testing.T) {
 	h, seasons, allot, _ := quoteFixture()
 	base := QuoteRequest{CheckIn: day("2026-12-21"), CheckOut: day("2026-12-21"), RoomType: "standard", MealPlan: "bb", Adults: 2}
-	if _, err := Price(h, seasons, allot, nil, base); err == nil {
+	if _, err := Price(h, seasons, allot, nil, base, nil); err == nil {
 		t.Fatal("zero nights accepted")
 	}
 	base.CheckOut = day("2026-12-22")
 	base.MealPlan = "ai"
-	if _, err := Price(h, seasons, allot, nil, base); err == nil {
+	if _, err := Price(h, seasons, allot, nil, base, nil); err == nil {
 		t.Fatal("unsupported meal plan accepted")
 	}
 	base.MealPlan = "bb"
 	base.Adults = 4
 	base.Children = []Child{{Age: 15}}
-	if _, err := Price(h, seasons, allot, nil, base); err == nil {
+	if _, err := Price(h, seasons, allot, nil, base, nil); err == nil {
 		t.Fatal("five adults accepted")
 	}
 	h.IsActive = false
 	base.Children = nil
-	if _, err := Price(h, seasons, allot, nil, base); err == nil {
+	if _, err := Price(h, seasons, allot, nil, base, nil); err == nil {
 		t.Fatal("inactive hotel quoted")
 	}
 }

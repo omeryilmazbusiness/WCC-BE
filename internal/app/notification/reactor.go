@@ -11,6 +11,7 @@ import (
 	inboxdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/notification"
 	taskdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/task"
+	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
 )
 
@@ -49,7 +50,7 @@ func (r *Reactor) onSLABreached(ctx context.Context, ev events.Event) error {
 		in.RecipientUserID = *c.OwnerID
 		_, _ = r.svc.Emit(ctx, in)
 	}
-	_, _ = r.svc.EmitToRoles(ctx, c.BranchID, []string{"manager", "gm"}, in)
+	_, _ = r.svc.EmitToRoles(ctx, c.BranchID, []string{string(platformauth.RoleGM)}, in)
 	return nil
 }
 
@@ -105,7 +106,7 @@ func (r *Reactor) onTaskEscalated(ctx context.Context, ev events.Event) error {
 		in.RecipientUserID = t.AssigneeID
 		_, _ = r.svc.Emit(ctx, in)
 	}
-	_, err := r.svc.EmitToRoles(ctx, t.BranchID, []string{"manager", "gm"}, in)
+	_, err := r.svc.EmitToRoles(ctx, t.BranchID, []string{string(platformauth.RoleGM)}, in)
 	return err
 }
 

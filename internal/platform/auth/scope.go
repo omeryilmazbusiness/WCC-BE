@@ -6,24 +6,18 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 )
 
-// ScopeLevelFor maps a role to its data-visibility breadth (PDF §3):
+// ScopeLevelFor maps a role to its data-visibility breadth:
 // GMs see every branch of their company, the platform Admin every company,
-// Finance/Operations the whole branch, Managers their team (branch when
-// unassigned to a team), Employees their own records.
+// Finance the whole branch, Agents their own records.
 func ScopeLevelFor(role Role, teamID uuid.UUID) access.Level {
-	switch role {
+	switch CanonicalRole(role) {
 	case RoleGM:
 		return access.LevelCompany
 	case RoleAdmin:
 		return access.LevelGlobal
-	case RoleFinance, RoleOperations:
+	case RoleFinance:
 		return access.LevelBranch
-	case RoleManager:
-		if teamID == uuid.Nil {
-			return access.LevelBranch
-		}
-		return access.LevelTeam
-	case RoleEmployee:
+	case RoleAgent:
 		return access.LevelOwn
 	default:
 		return access.LevelNone

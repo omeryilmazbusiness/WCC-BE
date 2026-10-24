@@ -53,13 +53,13 @@ const (
 var Landmarks = []string{LandmarkHaram, LandmarkNabawi, LandmarkCenter, LandmarkAirport}
 
 const (
-	MaxNameLen  = 160
-	MaxNotesLen = 4000
-	MaxDistance = 100_000
+	MaxNameLen    = 160
+	MaxNotesLen   = 4000
+	MaxCountryLen = 80
+	MaxDistance   = 100_000
 )
 
 var (
-	countryPattern  = regexp.MustCompile(`^[A-Z]{2}$`)
 	currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 	phonePattern    = regexp.MustCompile(`^\+?[0-9][0-9 ()-]{5,19}$`)
 )
@@ -72,15 +72,16 @@ type Contact struct {
 	ReservationsEmail string `json:"reservations_email"`
 }
 
-// Location places the hotel and its walking distance to a landmark.
+// Location is city, country name and optional district. Landmark, walking
+// distance and coordinates are no longer collected; leftover columns stay empty.
 type Location struct {
 	City      string   `json:"city"`
 	Country   string   `json:"country"`
 	District  string   `json:"district"`
-	Latitude  *float64 `json:"latitude"`
-	Longitude *float64 `json:"longitude"`
-	Landmark  string   `json:"landmark"`
-	DistanceM int      `json:"distance_m"`
+	Latitude  *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
+	Landmark  string   `json:"landmark,omitempty"`
+	DistanceM int      `json:"distance_m,omitempty"`
 }
 
 // Hotel is the contracted property and its standing terms.
@@ -153,28 +154,13 @@ func (h *Hotel) normalizeLocation(f fields) {
 	l := &h.Location
 	l.City = clip(l.City, 80)
 	l.District = clip(l.District, 120)
-	l.Country = strings.ToUpper(strings.TrimSpace(l.Country))
-	l.Landmark = strings.ToLower(strings.TrimSpace(l.Landmark))
+	l.Country = clip(strings.Join(strings.Fields(l.Country), " "), MaxCountryLen)
+	l.Landmark = ""
+	l.DistanceM = 0
+	l.Latitude = nil
+	l.Longitude = nil
 	if l.City == "" {
 		f.add("city", "required")
-	}
-	if l.Country != "" && !countryPattern.MatchString(l.Country) {
-		f.add("country", "ISO 3166 alpha-2 code")
-	}
-	if l.Landmark != "" && !slices.Contains(Landmarks, l.Landmark) {
-		f.add("landmark", "unknown landmark")
-	}
-	if l.DistanceM < 0 || l.DistanceM > MaxDistance {
-		f.add("distance_m", "0-100000 metres")
-	}
-	if (l.Latitude == nil) != (l.Longitude == nil) {
-		f.add("latitude", "latitude and longitude go together")
-	}
-	if l.Latitude != nil && (*l.Latitude < -90 || *l.Latitude > 90) {
-		f.add("latitude", "-90..90")
-	}
-	if l.Longitude != nil && (*l.Longitude < -180 || *l.Longitude > 180) {
-		f.add("longitude", "-180..180")
 	}
 }
 
@@ -206,6 +192,7 @@ type Summary struct {
 	SeasonName     string
 	SeasonKind     string
 	FromNet        int64
+	FromSell       int64
 	RoomsTotal     int
 	RoomsSold      int
 	NextRelease    *time.Time
@@ -219,6 +206,7 @@ type Summary struct {
 type Detail struct {
 	Hotel      Hotel
 	Seasons    []Season
+	Monthly    []MonthlyRate
 	Allotments []Allotment
 	StopSales  []StopSale
 }
@@ -254,6 +242,9 @@ type Repository interface {
 	ListStopSales(ctx context.Context, hotelID uuid.UUID) ([]StopSale, error)
 	CreateStopSale(ctx context.Context, s *StopSale) error
 	DeleteStopSale(ctx context.Context, hotelID, id uuid.UUID) error
+
+	ListMonthlyRates(ctx context.Context, hotelID uuid.UUID) ([]MonthlyRate, error)
+	ReplaceMonthlyRates(ctx context.Context, hotelID uuid.UUID, year int, rates []MonthlyRate) error
 }
 
 type fields map[string]any

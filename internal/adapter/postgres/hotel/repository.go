@@ -173,7 +173,7 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Su
 	}
 	rows, err := tx.QuerierFrom(ctx, r.pool).Query(ctx, `
 		SELECT `+hotelColumns+`,
-			COALESCE(s.name, ''), COALESCE(s.kind, ''), COALESCE(s.from_net, 0),
+			COALESCE(s.name, ''), COALESCE(s.kind, ''), COALESCE(s.from_net, 0), COALESCE(m.from_sell, 0),
 			COALESCE(a.rooms, 0), COALESCE(a.sold, 0), a.next_release,
 			EXISTS (SELECT 1 FROM hotel_stop_sales ss WHERE ss.hotel_id=h.id AND $2::date BETWEEN ss.start_date AND ss.end_date),
 			(SELECT COUNT(*) FROM documents d WHERE d.related_type='hotel' AND d.related_id=h.id),
@@ -188,6 +188,13 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Su
 			WHERE hs.hotel_id=h.id AND $2::date BETWEEN hs.start_date AND hs.end_date
 			ORDER BY hs.start_date LIMIT 1
 		) s ON TRUE
+		LEFT JOIN LATERAL (
+			SELECT MIN(NULLIF(mr.sell, 0)) AS from_sell
+			FROM hotel_monthly_rates mr
+			WHERE mr.hotel_id=h.id
+			  AND mr.year = EXTRACT(YEAR FROM $2::date)::int
+			  AND mr.month = EXTRACT(MONTH FROM $2::date)::int
+		) m ON TRUE
 		LEFT JOIN LATERAL (
 			SELECT SUM(ha.rooms) AS rooms, SUM(ha.sold) AS sold, COUNT(*) AS blocks,
 				MIN(ha.start_date - ha.release_days) FILTER (
@@ -206,7 +213,7 @@ func (r *Repository) List(ctx context.Context, f domain.ListFilter) ([]domain.Su
 	for rows.Next() {
 		var s domain.Summary
 		var nextRelease *time.Time
-		h, err := scanHotel(rows, &s.SeasonName, &s.SeasonKind, &s.FromNet, &s.RoomsTotal, &s.RoomsSold, &nextRelease,
+		h, err := scanHotel(rows, &s.SeasonName, &s.SeasonKind, &s.FromNet, &s.FromSell, &s.RoomsTotal, &s.RoomsSold, &nextRelease,
 			&s.StopSaleToday, &s.ContractFiles, &s.SeasonsCount, &s.AllotmentCount)
 		if err != nil {
 			return nil, err
@@ -407,4 +414,46 @@ func (r *Repository) CreateStopSale(ctx context.Context, s *domain.StopSale) err
 
 func (r *Repository) DeleteStopSale(ctx context.Context, hotelID, id uuid.UUID) error {
 	return r.deleteChild(ctx, "hotel_stop_sales", "stop sale", hotelID, id)
+}
+
+func (r *Repository) ListMonthlyRates(ctx context.Context, hotelID uuid.UUID) ([]domain.MonthlyRate, error) {
+	if err := r.requireHotel(ctx, hotelID); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QuerierFrom(ctx, r.pool).Query(ctx, `
+		SELECT hotel_id, year, month, room_type, net, sell
+		FROM hotel_monthly_rates WHERE hotel_id=$1
+		ORDER BY year, month, room_type`, hotelID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.MonthlyRate{}
+	for rows.Next() {
+		var m domain.MonthlyRate
+		if err := rows.Scan(&m.HotelID, &m.Year, &m.Month, &m.RoomType, &m.Net, &m.Sell); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) ReplaceMonthlyRates(ctx context.Context, hotelID uuid.UUID, year int, rates []domain.MonthlyRate) error {
+	if err := r.requireHotel(ctx, hotelID); err != nil {
+		return err
+	}
+	q := tx.QuerierFrom(ctx, r.pool)
+	if _, err := q.Exec(ctx, `DELETE FROM hotel_monthly_rates WHERE hotel_id=$1 AND year=$2`, hotelID, year); err != nil {
+		return err
+	}
+	for _, m := range rates {
+		if _, err := q.Exec(ctx, `
+			INSERT INTO hotel_monthly_rates (hotel_id, year, month, room_type, net, sell)
+			VALUES ($1,$2,$3,$4,$5,$6)`,
+			hotelID, year, m.Month, m.RoomType, m.Net, m.Sell); err != nil {
+			return err
+		}
+	}
+	return nil
 }

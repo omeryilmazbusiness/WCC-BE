@@ -34,6 +34,7 @@ const (
 	PermSuppliersFinance    Permission = "suppliers.finance"
 	PermHotelsRead          Permission = "hotels.read"
 	PermHotelsWrite         Permission = "hotels.write"
+	PermHotelsPricing       Permission = "hotels.pricing"
 	PermBusesRead           Permission = "buses.read"
 	PermBusesWrite          Permission = "buses.write"
 	PermOpsRead             Permission = "ops.read"
@@ -76,38 +77,56 @@ const (
 )
 
 const (
-	RoleGM         Role = "gm"
+	RoleGM      Role = "gm"
+	RoleFinance Role = "finance"
+	RoleAgent   Role = "agent"
+	RoleAdmin   Role = "admin"
+
+	// Legacy company titles accepted on read and stored as agent.
 	RoleManager    Role = "manager"
 	RoleEmployee   Role = "employee"
-	RoleFinance    Role = "finance"
 	RoleOperations Role = "operations"
-	RoleAdmin      Role = "admin"
 )
 
-// AllRoles is the canonical role catalog (PDF §3).
+// CanonicalRole maps a stored or JWT role onto the live catalog.
+func CanonicalRole(r Role) Role {
+	switch r {
+	case RoleManager, RoleEmployee, RoleOperations:
+		return RoleAgent
+	default:
+		return r
+	}
+}
+
+// CompanyRoles are the titles a company can assign. Admin is the platform operator.
+func CompanyRoles() []Role {
+	return []Role{RoleGM, RoleFinance, RoleAgent}
+}
+
+// AllRoles is the live catalog, including the platform operator.
 func AllRoles() []Role {
-	return []Role{RoleGM, RoleManager, RoleEmployee, RoleFinance, RoleOperations, RoleAdmin}
+	return []Role{RoleGM, RoleFinance, RoleAgent, RoleAdmin}
 }
 
 func ValidRole(r Role) bool {
-	for _, x := range AllRoles() {
-		if x == r {
-			return true
-		}
+	switch CanonicalRole(r) {
+	case RoleGM, RoleFinance, RoleAgent, RoleAdmin:
+		return true
+	default:
+		return false
 	}
-	return false
 }
 
 // PermissionsFor returns the static RBAC matrix for a role.
 func PermissionsFor(role Role) []Permission {
-	switch role {
+	switch CanonicalRole(role) {
 	case RoleGM:
 		return []Permission{
 			PermUsersRead, PermUsersWrite, PermRolesRead, PermAuditRead, PermBranchesRead,
 			PermCustomersRead, PermCustomersWrite, PermPIIRead, PermUsersUnlock, PermLeadsRead, PermLeadsWrite, PermLeadsDelete, PermBookingsRead, PermBookingsWrite,
 			PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove,
 			PermDocsRead, PermDocsWrite, PermDocsReview, PermVisaRead, PermVisaWrite,
-			PermSuppliersRead, PermSuppliersWrite, PermSuppliersFinance, PermOpsRead, PermHotelsRead, PermHotelsWrite,
+			PermSuppliersRead, PermSuppliersWrite, PermSuppliersFinance, PermOpsRead, PermHotelsRead, PermHotelsWrite, PermHotelsPricing,
 			PermBusesRead, PermBusesWrite,
 			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
 			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermIntegrationsWrite,
@@ -131,26 +150,7 @@ func PermissionsFor(role Role) []Permission {
 			PermUsersRead, PermUsersWrite, PermUsersUnlock, PermAuditRead, PermOpsRead,
 			PermSupportManage,
 		}
-	case RoleManager:
-		return []Permission{
-			PermUsersRead, PermRolesRead, PermBranchesRead, PermAuditRead,
-			PermCustomersRead, PermCustomersWrite, PermPIIRead, PermLeadsRead, PermLeadsWrite, PermLeadsDelete, PermBookingsRead, PermBookingsWrite,
-			PermPaymentsRead, PermPaymentsWrite, PermPaymentsApprove,
-			PermDocsRead, PermDocsWrite, PermDocsReview, PermVisaRead, PermVisaWrite,
-			PermSuppliersRead, PermSuppliersWrite, PermSuppliersFinance, PermHotelsRead, PermHotelsWrite,
-			PermBusesRead, PermBusesWrite,
-			PermDashboardRead, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
-			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermIntegrationsWrite,
-			PermTargetsRead, PermTargetsWrite, PermImportsRead, PermImportsWrite,
-			PermNotificationsRead, PermNotificationsWrite, PermNotificationsManage,
-			PermReportsRead, PermReportsExport,
-			PermAIRead, PermAIWrite, PermAISetup,
-			PermSettingsRead, PermSettingsWrite,
-			PermBookingsOverride, PermBookingsDiscount,
-			PermFlightsSearch,
-			PermSupportWrite,
-		}
-	case RoleEmployee:
+	case RoleAgent:
 		return []Permission{
 			PermBranchesRead, PermCustomersRead, PermCustomersWrite, PermLeadsRead, PermLeadsWrite, PermBookingsRead, PermBookingsWrite,
 			PermDocsRead, PermDocsWrite, PermVisaRead, PermVisaWrite, PermSuppliersRead, PermHotelsRead, PermBusesRead,
@@ -172,20 +172,6 @@ func PermissionsFor(role Role) []Permission {
 			PermAIRead,
 			PermSettingsRead,
 			PermFXManage,
-			PermSupportWrite,
-		}
-	case RoleOperations:
-		return []Permission{
-			PermBranchesRead, PermCustomersRead, PermCustomersWrite, PermPIIRead,
-			PermDocsRead, PermDocsWrite, PermDocsReview, PermVisaRead, PermVisaWrite,
-			PermSuppliersRead, PermSuppliersWrite, PermHotelsRead, PermHotelsWrite, PermBusesRead, PermBusesWrite,
-			PermBookingsRead, PermBookingsWrite, PermPackagesRead, PermPackagesWrite, PermTasksRead, PermTasksWrite,
-			PermInboxRead, PermInboxWrite, PermIntegrationsRead, PermImportsRead, PermImportsWrite,
-			PermNotificationsRead, PermNotificationsWrite,
-			PermReportsRead, PermReportsExport,
-			PermAIRead, PermAIWrite,
-			PermSettingsRead,
-			PermFlightsSearch,
 			PermSupportWrite,
 		}
 	default:
