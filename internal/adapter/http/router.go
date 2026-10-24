@@ -15,6 +15,7 @@ import (
 	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
 	brandinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/branding"
+	bushttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/bus"
 	companyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/company"
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
@@ -83,6 +84,7 @@ type Handlers struct {
 	AdminConfig  adminconfighttp.Handler
 	Rooming      roominghttp.Handler
 	Hotel        hotelhttp.Handler
+	Bus          bushttp.Handler
 	Search       searchhttp.Handler
 	Flight       flighthttp.Handler
 	Setup        setuphttp.Handler
@@ -530,6 +532,15 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.With(write).Delete("/{id}/allotments/{allotmentId}", h.Hotel.DeleteAllotment)
 				r.With(write).Post("/{id}/stop-sales", h.Hotel.CreateStopSale)
 				r.With(write).Delete("/{id}/stop-sales/{stopSaleId}", h.Hotel.DeleteStopSale)
+			})
+
+			r.Route("/buses", func(r chi.Router) {
+				read := middleware.RequirePermission(platformauth.PermBusesRead)
+				write := middleware.RequirePermission(platformauth.PermBusesWrite)
+				r.With(read).Get("/", h.Bus.List)
+				r.With(write).Post("/", h.Bus.Create)
+				r.With(read).Get("/{id}", h.Bus.Get)
+				r.With(write).Put("/{id}", h.Bus.Update)
 			})
 
 			r.Route("/packages", func(r chi.Router) {

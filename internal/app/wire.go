@@ -21,6 +21,7 @@ import (
 	authhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/auth"
 	bookinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/booking"
 	brandinghttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/branding"
+	bushttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/bus"
 	companyhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/company"
 	customerhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/customer"
 	dashboardhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/dashboard"
@@ -147,6 +148,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		AdminConfig:  adminconfighttp.Handler{Svc: m.adminConfig},
 		Rooming:      roominghttp.Handler{Svc: m.rooming},
 		Hotel:        hotelhttp.Handler{Svc: m.hotels},
+		Bus:          bushttp.Handler{Svc: m.buses},
 		Search:       searchhttp.Handler{Svc: m.search},
 		Flight:       flighthttp.Handler{Svc: m.flights},
 		Setup:        setuphttp.Handler{Svc: m.tenancy.setup},

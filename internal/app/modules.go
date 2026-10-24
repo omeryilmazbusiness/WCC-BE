@@ -24,6 +24,7 @@ import (
 	pgaudit "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/audit"
 	pgautomation "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/automation"
 	pgbooking "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/booking"
+	pgbus "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/bus"
 	pgcompany "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/company"
 	pgcustomer "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/customer"
 	pgdocument "github.com/wodi-crm/wodi-crm-be/internal/adapter/postgres/document"
@@ -59,6 +60,7 @@ import (
 	appauth "github.com/wodi-crm/wodi-crm-be/internal/app/auth"
 	"github.com/wodi-crm/wodi-crm-be/internal/app/automation"
 	appbooking "github.com/wodi-crm/wodi-crm-be/internal/app/booking"
+	appbus "github.com/wodi-crm/wodi-crm-be/internal/app/bus"
 	appcustomer "github.com/wodi-crm/wodi-crm-be/internal/app/customer"
 	appdashboard "github.com/wodi-crm/wodi-crm-be/internal/app/dashboard"
 	"github.com/wodi-crm/wodi-crm-be/internal/app/dataprotection"
@@ -149,6 +151,7 @@ type modules struct {
 	adminConfig  *appadminconfig.Service
 	rooming      *approoming.Service
 	hotels       *apphotel.Service
+	buses        *appbus.Service
 	search       *appsearch.Service
 	flights      *appflight.Service
 	tenancy      tenancyModule
@@ -355,6 +358,8 @@ func (m *modules) build() error {
 	m.hotels = apphotel.NewService(pghotel.NewRepository(pool), txm)
 	m.hotels.SetAuditor(m.audit)
 	m.hotels.SetTimeZone(loc)
+	m.buses = appbus.NewService(pgbus.NewRepository(pool), txm)
+	m.buses.SetAuditor(m.audit)
 	m.search = appsearch.NewService(pgsearch.NewRepository(pool, passports))
 	m.flights = newFlightService(cfg.Flights, log)
 	m.tenancy = newTenancyModule(pool, m.users, m.ai, m.inbox, txm, m.audit)

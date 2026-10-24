@@ -149,6 +149,23 @@ func TestPlatformAdminHoldsPlatformPermissionsOnly(t *testing.T) {
 	}
 }
 
+func TestBusesPermissions(t *testing.T) {
+	for _, r := range []Role{RoleGM, RoleManager, RoleOperations} {
+		if !HasPermission(r, PermBusesRead) || !HasPermission(r, PermBusesWrite) {
+			t.Fatalf("%s must read and write buses", r)
+		}
+	}
+	if !HasPermission(RoleEmployee, PermBusesRead) || HasPermission(RoleEmployee, PermBusesWrite) {
+		t.Fatal("employee buses.read only")
+	}
+	if !HasPermission(RoleFinance, PermBusesRead) || HasPermission(RoleFinance, PermBusesWrite) {
+		t.Fatal("finance buses.read only")
+	}
+	if HasPermission(RoleAdmin, PermBusesRead) {
+		t.Fatal("platform admin has no company bus catalogue")
+	}
+}
+
 // Every company user can ask for help; only the platform team works the inbox.
 func TestSupportPermissions(t *testing.T) {
 	for _, r := range AllRoles() {

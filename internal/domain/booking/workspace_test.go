@@ -21,6 +21,10 @@ func TestProfileNormalize(t *testing.T) {
 	if p.ServiceType != ServicePackage || p.Channel != ChannelAgent {
 		t.Fatalf("defaults: %+v", p)
 	}
+	bus, err := Profile{ServiceType: ServiceBus}.Normalize()
+	if err != nil || bus.ServiceType != ServiceBus {
+		t.Fatalf("bus: %+v %v", bus, err)
+	}
 	bad := []Profile{
 		{PNR: "AB 12"},
 		{PNR: "-ABC"},

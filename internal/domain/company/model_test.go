@@ -44,7 +44,7 @@ func TestCompanySlugRules(t *testing.T) {
 			t.Errorf("%q must be valid", s)
 		}
 	}
-	for _, s := range []string{"", "a", "-x", "x-", "a--b", "Upper", "setup", "api", "manager", "en"} {
+	for _, s := range []string{"", "a", "-x", "x-", "a--b", "Upper", "setup", "api", "manager", "en", "buses"} {
 		if ValidCompanySlug(s) {
 			t.Errorf("%q must be rejected", s)
 		}

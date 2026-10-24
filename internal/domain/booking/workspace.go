@@ -14,6 +14,7 @@ import (
 // Service types classify what a booking primarily sells.
 const (
 	ServiceFlight   = "flight"
+	ServiceBus      = "bus"
 	ServiceHotel    = "hotel"
 	ServicePackage  = "package"
 	ServiceTransfer = "transfer"
@@ -22,7 +23,7 @@ const (
 )
 
 func ServiceTypes() []string {
-	return []string{ServiceFlight, ServiceHotel, ServicePackage, ServiceTransfer, ServiceVisa, ServiceTour}
+	return []string{ServiceFlight, ServiceBus, ServiceHotel, ServicePackage, ServiceTransfer, ServiceVisa, ServiceTour}
 }
 
 // Supplier sources name where inventory was sourced; empty means not recorded.
