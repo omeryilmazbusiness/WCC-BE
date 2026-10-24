@@ -388,6 +388,43 @@ func TestCreateDraftSeedsChecklistAndLineRecalc(t *testing.T) {
 	}
 }
 
+func TestCreateDraftWithPartyAndLines(t *testing.T) {
+	f := newFixture(40)
+	dob := time.Date(1990, 5, 1, 0, 0, 0, 0, time.UTC)
+	b, err := f.svc.CreateDraft(sysCtx(), appbooking.CreateInput{
+		BranchID: uuid.New(), CustomerID: uuid.New(), DepartureID: f.dep.ID, OwnerID: uuid.New(),
+		PaxCount: 99, Currency: "SAR", CanDiscount: true, DiscountAmt: 100,
+		Profile: domain.Profile{ServiceType: "package", Channel: "agent", Summary: "Family Umrah"},
+		Participants: []appbooking.AddParticipantInput{
+			{FullName: "Ali", Gender: "male", Nationality: "SA", DateOfBirth: &dob, HealthOK: true},
+			{FullName: "Fatima", Gender: "female", Nationality: "SA"},
+		},
+		Lines: []appbooking.LineItemInput{
+			{Kind: domain.KindItem, Category: domain.LinePackage, Label: "Umrah — Ali, Fatima", Quantity: 2, UnitPrice: 4000, UnitCost: 3000},
+			{Kind: domain.KindItem, Category: domain.LineExtras, Label: "Visa — Ali", Quantity: 1, UnitPrice: 500, UnitCost: 400},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.PaxCount != 2 || b.ServiceType != "package" || b.Summary != "Family Umrah" {
+		t.Fatalf("header: %+v", b)
+	}
+	parts, err := f.svc.ListParticipants(sysCtx(), b.ID)
+	if err != nil || len(parts) != 2 || parts[0].FullName != "Ali" || parts[1].FullName != "Fatima" {
+		t.Fatalf("party: %v %+v", err, parts)
+	}
+	if b.TotalAmount != 8400 || b.CostAmt != 6400 || b.DiscountAmt != 100 {
+		t.Fatalf("totals total=%d cost=%d disc=%d", b.TotalAmount, b.CostAmt, b.DiscountAmt)
+	}
+	if _, err := f.svc.CreateDraft(sysCtx(), appbooking.CreateInput{
+		BranchID: uuid.New(), CustomerID: uuid.New(), DepartureID: f.dep.ID, OwnerID: uuid.New(),
+		Participants: []appbooking.AddParticipantInput{{FullName: ""}},
+	}); err == nil {
+		t.Fatal("blank traveller must be rejected")
+	}
+}
+
 func TestDiscountRequiresPermissionAndSubtotal(t *testing.T) {
 	f := newFixture(40)
 	if _, err := f.svc.CreateDraft(sysCtx(), appbooking.CreateInput{

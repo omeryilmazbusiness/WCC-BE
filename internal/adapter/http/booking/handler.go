@@ -23,14 +23,23 @@ type Handler struct {
 }
 
 type createRequest struct {
-	CustomerID  uuid.UUID  `json:"customer_id"`
-	DepartureID uuid.UUID  `json:"departure_id"`
-	LeadID      *uuid.UUID `json:"lead_id"`
-	PaxCount    int        `json:"pax_count"`
-	TotalAmount int64      `json:"total_amount"`
-	DiscountAmt int64      `json:"discount_amt"`
-	Currency    string     `json:"currency"`
-	Notes       string     `json:"notes"`
+	CustomerID   uuid.UUID            `json:"customer_id"`
+	DepartureID  uuid.UUID            `json:"departure_id"`
+	LeadID       *uuid.UUID           `json:"lead_id"`
+	PaxCount     int                  `json:"pax_count"`
+	TotalAmount  int64                `json:"total_amount"`
+	DiscountAmt  int64                `json:"discount_amt"`
+	Currency     string               `json:"currency"`
+	Notes        string               `json:"notes"`
+	Participants []participantRequest `json:"participants"`
+	Items        []struct {
+		Kind      string `json:"kind"`
+		Category  string `json:"category"`
+		Label     string `json:"label"`
+		Quantity  int    `json:"quantity"`
+		UnitPrice int64  `json:"unit_price"`
+		UnitCost  int64  `json:"unit_cost"`
+	} `json:"items"`
 	profileRequest
 }
 
@@ -262,11 +271,35 @@ func (h Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fa := fieldAccessFor(r)
+	party := make([]appsvc.AddParticipantInput, 0, len(req.Participants))
+	for _, p := range req.Participants {
+		dob, err := parseDOB(p.DateOfBirth)
+		if err != nil {
+			response.Error(w, shared.NewValidation("invalid date_of_birth"))
+			return
+		}
+		nid := ""
+		if p.NationalID != nil {
+			nid = *p.NationalID
+		}
+		party = append(party, appsvc.AddParticipantInput{
+			FullName: p.FullName, PassportNo: newPassport(p.PassportNo), Nationality: p.Nationality,
+			DateOfBirth: dob, Gender: p.Gender, NationalID: nid, HealthOK: p.HealthOK,
+		})
+	}
+	lines := make([]appsvc.LineItemInput, 0, len(req.Items))
+	for _, it := range req.Items {
+		lines = append(lines, appsvc.LineItemInput{
+			Kind: it.Kind, Category: it.Category, Label: it.Label,
+			Quantity: it.Quantity, UnitPrice: it.UnitPrice, UnitCost: it.UnitCost,
+		})
+	}
 	b, err := h.Svc.CreateDraft(r.Context(), appsvc.CreateInput{
 		CustomerID: req.CustomerID, DepartureID: req.DepartureID,
 		LeadID: req.LeadID, PaxCount: req.PaxCount, TotalAmount: req.TotalAmount,
 		DiscountAmt: req.DiscountAmt, Currency: req.Currency, Notes: req.Notes,
 		CanDiscount: fa.discount, Profile: req.profile(),
+		Participants: party, Lines: lines,
 	})
 	if err != nil {
 		response.Error(w, err)

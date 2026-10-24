@@ -31,6 +31,10 @@ type CreateInput struct {
 	CanDiscount bool
 	// Profile is optional; blanks take the defaults (package, agent).
 	Profile domain.Profile
+	// Participants, when set, become the party and set PaxCount.
+	Participants []AddParticipantInput
+	// Lines, when set, become the commercial items in the same transaction.
+	Lines []LineItemInput
 }
 
 type UpdateInput struct {
@@ -194,6 +198,9 @@ func errDiscountForbidden() error {
 }
 
 func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Booking, error) {
+	if len(in.Participants) > 0 {
+		in.PaxCount = len(in.Participants)
+	}
 	if in.PaxCount <= 0 {
 		return nil, shared.NewValidation("pax_count must be > 0")
 	}
@@ -258,6 +265,20 @@ func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Book
 	}
 	b.RecomputeBalance()
 
+	party, err := prepareParticipants(b.ID, in.Participants, s.now())
+	if err != nil {
+		return nil, err
+	}
+	lines, err := prepareLines(b.ID, in.Lines, s.now())
+	if err != nil {
+		return nil, err
+	}
+	if len(lines) > 0 {
+		if err := b.RecalculateFromLines(lines, now); err != nil {
+			return nil, err
+		}
+	}
+
 	checklist := domain.DefaultChecklist(b.ID)
 	if err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		if err := s.repo.Create(ctx, b); err != nil {
@@ -266,7 +287,22 @@ func (s *Service) CreateDraft(ctx context.Context, in CreateInput) (*domain.Book
 		if err := s.repo.SeedChecklist(ctx, checklist); err != nil {
 			return err
 		}
-		return s.recordBooking(ctx, "booking.created", b, nil, bookingSnapshot(b), nil)
+		for i := range party {
+			if err := s.repo.AddParticipant(ctx, &party[i]); err != nil {
+				return err
+			}
+		}
+		if len(lines) > 0 {
+			if err := s.repo.ReplaceLineItems(ctx, b.ID, lines); err != nil {
+				return err
+			}
+			if err := s.repo.Update(ctx, b); err != nil {
+				return err
+			}
+		}
+		return s.recordBooking(ctx, "booking.created", b, nil, bookingSnapshot(b), map[string]any{
+			"participants": len(party), "line_items": len(lines),
+		})
 	}); err != nil {
 		return nil, err
 	}
@@ -509,6 +545,56 @@ func (s *Service) ListParticipants(ctx context.Context, bookingID uuid.UUID) ([]
 		return nil, shared.NewNotFound("booking")
 	}
 	return s.repo.ListParticipants(ctx, bookingID)
+}
+
+func prepareParticipants(bookingID uuid.UUID, in []AddParticipantInput, now time.Time) ([]domain.Participant, error) {
+	out := make([]domain.Participant, 0, len(in))
+	for _, p := range in {
+		name := strings.TrimSpace(p.FullName)
+		if name == "" {
+			return nil, shared.NewValidation("full_name is required")
+		}
+		gender, nid, err := participantExtras(p.Gender, &p.NationalID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, domain.Participant{
+			ID: uuid.New(), BookingID: bookingID, FullName: name,
+			PassportNo: strings.TrimSpace(p.PassportNo), Nationality: strings.TrimSpace(p.Nationality),
+			DateOfBirth: p.DateOfBirth, Gender: gender, NationalID: nid, HealthOK: p.HealthOK, CreatedAt: now,
+		})
+	}
+	return out, nil
+}
+
+func prepareLines(bookingID uuid.UUID, items []LineItemInput, now time.Time) ([]domain.LineItem, error) {
+	lines := make([]domain.LineItem, 0, len(items))
+	for i, it := range items {
+		kind, category, err := normalizeLine(it)
+		if err != nil {
+			return nil, err
+		}
+		qty := it.Quantity
+		if qty <= 0 {
+			qty = 1
+		}
+		label := strings.TrimSpace(it.Label)
+		if label == "" {
+			label = category
+			if label == "" {
+				label = kind
+			}
+		}
+		if it.UnitPrice < 0 || it.UnitCost < 0 {
+			return nil, shared.NewValidation("unit_price and unit_cost must be >= 0")
+		}
+		lines = append(lines, domain.LineItem{
+			ID: uuid.New(), BookingID: bookingID, Kind: kind, Category: category, Label: label,
+			Quantity: qty, UnitPrice: it.UnitPrice, UnitCost: it.UnitCost, SortOrder: i,
+			CreatedAt: now, UpdatedAt: now,
+		})
+	}
+	return lines, nil
 }
 
 // normalizeLine accepts the legacy request shape where kind carried the
