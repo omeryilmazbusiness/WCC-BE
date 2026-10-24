@@ -14,11 +14,17 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
 
-// CompanyStore reads and saves the company profile.
+// CompanyStore reads and saves the company profile and desk-lock policy.
 type CompanyStore interface {
 	GetCompany(ctx context.Context, id uuid.UUID) (*company.Company, error)
 	UpdateCompany(ctx context.Context, c *company.Company, actor uuid.UUID) error
+	UpdateIdleLogout(ctx context.Context, companyID uuid.UUID, minutes int, actor uuid.UUID) error
 	ListBranches(ctx context.Context, companyID uuid.UUID) ([]company.Branch, error)
+}
+
+// Security is the GM-configurable desk lock for the company.
+type Security struct {
+	IdleLogoutMinutes int
 }
 
 // StaffCounter counts active staff (everyone but GMs and platform admins)
@@ -213,6 +219,50 @@ func (s *Service) SaveCompany(ctx context.Context, a Actor, c company.Company) (
 		s.caches.Invalidate(a.CompanyID)
 	}
 	return o, err
+}
+
+// Security returns the company desk-lock policy.
+func (s *Service) Security(ctx context.Context, a Actor) (Security, error) {
+	c, err := s.companies.GetCompany(ctx, a.CompanyID)
+	if err != nil {
+		return Security{}, err
+	}
+	return Security{IdleLogoutMinutes: c.IdleLogoutMinutes}, nil
+}
+
+// SaveSecurity stores the desk lock and drops the tenant cache so /auth/me
+// sees the new minutes on the next request.
+func (s *Service) SaveSecurity(ctx context.Context, a Actor, minutes int) (Security, error) {
+	normalized, err := company.NormalizeIdleLogout(minutes)
+	if err != nil {
+		return Security{}, err
+	}
+	current, err := s.companies.GetCompany(ctx, a.CompanyID)
+	if err != nil {
+		return Security{}, err
+	}
+	out := Security{IdleLogoutMinutes: normalized}
+	if current.IdleLogoutMinutes == normalized {
+		return out, nil
+	}
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.companies.UpdateIdleLogout(ctx, a.CompanyID, normalized, a.UserID); err != nil {
+			return err
+		}
+		companyID, branchID := a.CompanyID, a.BranchID
+		return s.audit.Record(ctx, audit.RecordInput{
+			ActorID: a.UserID, Action: "setup.security_saved", EntityType: "company_security",
+			EntityID: &companyID, BranchID: &branchID,
+			Before: map[string]any{"idle_logout_minutes": current.IdleLogoutMinutes},
+			After:  map[string]any{"idle_logout_minutes": normalized},
+			IP:     a.IP, UserAgent: a.UserAgent,
+		})
+	})
+	if err != nil {
+		return Security{}, err
+	}
+	s.caches.Invalidate(a.CompanyID)
+	return out, nil
 }
 
 func followNameSlug(current *company.Company, nameEN string) string {

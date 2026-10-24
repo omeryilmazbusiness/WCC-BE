@@ -60,11 +60,11 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 }
 
 const companyColumns = `id, slug, name_en, name_ar, legal_name, phone, email, website, country, city,
-	address, currency, timezone, is_active, created_at, updated_at`
+	address, currency, timezone, idle_logout_minutes, is_active, created_at, updated_at`
 
 func scanCompany(row pgx.Row, c *domain.Company) error {
 	return row.Scan(&c.ID, &c.Slug, &c.NameEN, &c.NameAR, &c.LegalName, &c.Phone, &c.Email, &c.Website,
-		&c.Country, &c.City, &c.Address, &c.Currency, &c.Timezone, &c.IsActive, &c.CreatedAt, &c.UpdatedAt)
+		&c.Country, &c.City, &c.Address, &c.Currency, &c.Timezone, &c.IdleLogoutMinutes, &c.IsActive, &c.CreatedAt, &c.UpdatedAt)
 }
 
 // CreateCompany is a platform operation (global scope only).
@@ -129,6 +129,23 @@ func (r *Repository) UpdateCompany(ctx context.Context, c *domain.Company, actor
 			c.ID, oldTZ, c.Timezone)
 	}
 	return err
+}
+
+// UpdateIdleLogout writes the desk lock only. Profile saves must not touch this column.
+func (r *Repository) UpdateIdleLogout(ctx context.Context, companyID uuid.UUID, minutes int, actor uuid.UUID) error {
+	if err := ensureCompany(ctx, companyID); err != nil {
+		return err
+	}
+	tag, err := tx.QuerierFrom(ctx, r.pool).Exec(ctx, `
+		UPDATE companies SET idle_logout_minutes=$2, updated_by=$3, updated_at=NOW()
+		WHERE id=$1`, companyID, minutes, actor)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("company")
+	}
+	return nil
 }
 
 func (r *Repository) ListCompanies(ctx context.Context, query string, limit, offset int) (domain.Page, error) {
@@ -255,7 +272,7 @@ func (r *Repository) WorkspaceOf(ctx context.Context, branchID uuid.UUID) (*doma
 	var w domain.Workspace
 	err := scanCompany(tx.QuerierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT c.id, c.slug, c.name_en, c.name_ar, c.legal_name, c.phone, c.email, c.website, c.country, c.city,
-		       c.address, c.currency, c.timezone, c.is_active, c.created_at, c.updated_at
+		       c.address, c.currency, c.timezone, c.idle_logout_minutes, c.is_active, c.created_at, c.updated_at
 		FROM branches b JOIN companies c ON c.id = b.company_id
 		WHERE b.id = $1`, branchID), &w.Company)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -261,6 +261,8 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			r.Route("/setup", func(r chi.Router) {
 				r.Use(middleware.RequirePermission(platformauth.PermSetupManage))
 				r.Get("/", h.Setup.Get)
+				r.Get("/security", h.Setup.GetSecurity)
+				r.Put("/security", h.Setup.SaveSecurity)
 				r.Put("/company", h.Setup.SaveCompany)
 				r.Put("/company/logo", h.Branding.UploadLogo)
 				r.Delete("/company/logo", h.Branding.DeleteLogo)

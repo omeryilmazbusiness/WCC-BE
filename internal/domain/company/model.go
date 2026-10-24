@@ -103,9 +103,12 @@ type Company struct {
 	Address   string
 	Currency  string
 	Timezone  string
-	IsActive  bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// IdleLogoutMinutes is the company desk lock (0 = off). Written only by
+	// UpdateIdleLogout so the profile wizard cannot clear it.
+	IdleLogoutMinutes int
+	IsActive          bool
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // ProfileLevel selects how strict Normalize is: registration needs a name,

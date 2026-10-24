@@ -169,3 +169,48 @@ func (h Handler) Dismiss(w http.ResponseWriter, r *http.Request) {
 	o, err := h.Svc.Dismiss(r.Context(), a)
 	h.write(w, o, err)
 }
+
+func mapSecurity(s appsvc.Security) map[string]any {
+	return map[string]any{"idle_logout_minutes": s.IdleLogoutMinutes}
+}
+
+func (h Handler) GetSecurity(w http.ResponseWriter, r *http.Request) {
+	a, err := actor(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	s, err := h.Svc.Security(r.Context(), a)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, mapSecurity(s))
+}
+
+func (h Handler) SaveSecurity(w http.ResponseWriter, r *http.Request) {
+	a, err := actor(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	var body struct {
+		IdleLogoutMinutes *int `json:"idle_logout_minutes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, shared.NewValidation("invalid json"))
+		return
+	}
+	if body.IdleLogoutMinutes == nil {
+		err := shared.NewValidation("idle_logout_minutes is required")
+		err.Details = map[string]any{"idle_logout_minutes": "required"}
+		response.Error(w, err)
+		return
+	}
+	s, err := h.Svc.SaveSecurity(r.Context(), a, *body.IdleLogoutMinutes)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, mapSecurity(s))
+}

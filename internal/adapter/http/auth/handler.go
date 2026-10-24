@@ -310,6 +310,7 @@ func (h Handler) Me(w http.ResponseWriter, r *http.Request) {
 func addWorkspace(payload map[string]any, ws *company.Workspace, scope access.Scope, home uuid.UUID) {
 	payload["company"] = map[string]any{
 		"id": ws.Company.ID, "slug": ws.Company.Slug, "name_en": ws.Company.NameEN, "name_ar": ws.Company.NameAR,
+		"idle_logout_minutes": ws.Company.IdleLogoutMinutes,
 	}
 	payload["home_branch_id"] = home
 	active := home

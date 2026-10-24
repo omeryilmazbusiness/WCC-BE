@@ -49,7 +49,23 @@ func (m *memCompanies) UpdateCompany(_ context.Context, c *company.Company, _ uu
 	if m.failSave {
 		return errors.New("db down")
 	}
+	if prev, ok := m.companies[c.ID]; ok {
+		c.IdleLogoutMinutes = prev.IdleLogoutMinutes
+	}
 	m.companies[c.ID] = *c
+	return nil
+}
+
+func (m *memCompanies) UpdateIdleLogout(_ context.Context, id uuid.UUID, minutes int, _ uuid.UUID) error {
+	if m.failSave {
+		return errors.New("db down")
+	}
+	c, ok := m.companies[id]
+	if !ok {
+		return shared.NewNotFound("company")
+	}
+	c.IdleLogoutMinutes = minutes
+	m.companies[id] = c
 	return nil
 }
 
@@ -220,6 +236,38 @@ func TestDismissAndCompleteGuards(t *testing.T) {
 	o, err := f.svc.Dismiss(ctx, f.actor)
 	if err != nil || o.Progress.Required {
 		t.Fatalf("dismiss: %v %+v", err, o)
+	}
+}
+
+func TestSaveSecurity(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+
+	got, err := f.svc.Security(ctx, f.actor)
+	if err != nil || got.IdleLogoutMinutes != 0 {
+		t.Fatalf("fresh security: %+v %v", got, err)
+	}
+	saved, err := f.svc.SaveSecurity(ctx, f.actor, 15)
+	if err != nil || saved.IdleLogoutMinutes != 15 {
+		t.Fatalf("save: %+v %v", saved, err)
+	}
+	if f.companies.companies[f.actor.CompanyID].IdleLogoutMinutes != 15 {
+		t.Fatal("minutes must persist")
+	}
+	if len(f.cache.invalidated) != 1 || f.audit.actions[0] != "setup.security_saved" {
+		t.Fatalf("cache/audit: %v %v", f.cache.invalidated, f.audit.actions)
+	}
+
+	again, err := f.svc.SaveSecurity(ctx, f.actor, 15)
+	if err != nil || again.IdleLogoutMinutes != 15 || len(f.audit.actions) != 1 {
+		t.Fatalf("no-op must not re-audit: %+v %v %v", again, err, f.audit.actions)
+	}
+
+	if _, err = f.svc.SaveSecurity(ctx, f.actor, 3); err == nil {
+		t.Fatal("3 minutes must be rejected")
+	}
+	if f.companies.companies[f.actor.CompanyID].IdleLogoutMinutes != 15 {
+		t.Fatal("rejected value must not be stored")
 	}
 }
 

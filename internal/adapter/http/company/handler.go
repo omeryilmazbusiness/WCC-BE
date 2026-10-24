@@ -25,7 +25,8 @@ func MapCompany(c *domain.Company) map[string]any {
 	return map[string]any{
 		"id": c.ID, "slug": c.Slug, "name_en": c.NameEN, "name_ar": c.NameAR, "legal_name": c.LegalName,
 		"phone": c.Phone, "email": c.Email, "website": c.Website, "country": c.Country, "city": c.City,
-		"address": c.Address, "currency": c.Currency, "timezone": c.Timezone, "is_active": c.IsActive,
+		"address": c.Address, "currency": c.Currency, "timezone": c.Timezone,
+		"idle_logout_minutes": c.IdleLogoutMinutes, "is_active": c.IsActive,
 		"created_at": c.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at": c.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
