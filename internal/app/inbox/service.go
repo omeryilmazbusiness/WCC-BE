@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/app/planlimit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/events"
@@ -53,6 +54,7 @@ type Service struct {
 	outbox      events.Outbox
 	secrets     *accountSecrets
 	now         func() time.Time
+	plans       *planlimit.Guard
 }
 
 // SetOutbox enables durable conversation and integration events.
@@ -67,6 +69,7 @@ func NewService(repo domain.Repository, providers domain.Registry, txm tx.Runner
 
 func (s *Service) SetCustomerMatcher(m CustomerMatcher)   { s.customers = m }
 func (s *Service) SetLeadShellCreator(l LeadShellCreator) { s.leads = l }
+func (s *Service) SetPlanGuard(g *planlimit.Guard)        { s.plans = g }
 
 func (s *Service) List(ctx context.Context, f domain.ListFilter) ([]domain.Conversation, int64, error) {
 	if f.Limit <= 0 || f.Limit > 100 {

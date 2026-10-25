@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -31,6 +32,12 @@ func (m *memRepo) CreateCompany(_ context.Context, c *domain.Company) error {
 			err.Details = map[string]any{"slug": "taken"}
 			return err
 		}
+	}
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = time.Now().UTC()
+	}
+	if c.PlanStartedAt.IsZero() {
+		c.PlanStartedAt = c.CreatedAt
 	}
 	m.companies[c.ID] = *c
 	return nil
@@ -100,6 +107,30 @@ func (m *memRepo) WorkspaceOf(context.Context, uuid.UUID) (*domain.Workspace, er
 
 func (m *memRepo) LockCompany(context.Context, uuid.UUID) error { return nil }
 
+func (m *memRepo) UpdatePlan(_ context.Context, id uuid.UUID, plan domain.Plan, _ uuid.UUID) error {
+	c, ok := m.companies[id]
+	if !ok {
+		return shared.NewNotFound("company")
+	}
+	c.Plan = plan
+	c.PlanStartedAt = time.Now().UTC()
+	m.companies[id] = c
+	return nil
+}
+
+func (m *memRepo) CountUsage(_ context.Context, id uuid.UUID, kind domain.LimitKind) (int, error) {
+	if kind == domain.LimitBranches {
+		n := 0
+		for _, b := range m.branches {
+			if b.CompanyID == id {
+				n++
+			}
+		}
+		return n, nil
+	}
+	return 0, nil
+}
+
 func (m *memRepo) mainCenters(companyID uuid.UUID) int {
 	n := 0
 	for _, b := range m.branches {
@@ -133,7 +164,7 @@ func (c *memCache) Invalidate(uuid.UUID) { c.n++ }
 
 func registration() RegisterInput {
 	return RegisterInput{
-		Company: domain.Company{NameEN: "Al Noor Travel"},
+		Company: domain.Company{NameEN: "Al Noor Travel", Plan: domain.PlanUltimate},
 		GM:      GMAccount{FullName: "Sara GM", Email: "Sara@AlNoor.test", Password: "Str0ngPassw0rd!"},
 	}
 }
@@ -237,10 +268,64 @@ func TestBranchLifecycleKeepsExactlyOneMainCenter(t *testing.T) {
 	}
 }
 
+func TestStandardPlanRefusesASecondBranch(t *testing.T) {
+	repo := newMemRepo()
+	svc := NewService(repo, &memUsers{}, tx.Nop{}, nopAudit{}, &memCache{})
+	in := registration()
+	in.Company.Plan = domain.PlanStandard
+	reg, err := svc.Register(platformCtx(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateBranch(companyCtx(reg.Company.ID, reg.MainCenter.ID), BranchInput{NameEN: "Jeddah"}); err == nil {
+		t.Fatal("standard is one branch")
+	}
+}
+
 func TestBranchCallsNeedCompanyScope(t *testing.T) {
 	svc := NewService(newMemRepo(), &memUsers{}, tx.Nop{}, nopAudit{}, &memCache{})
 	ctx := access.WithScope(context.Background(), access.Scope{Level: access.LevelBranch, BranchID: uuid.New()})
 	if _, err := svc.CreateBranch(ctx, BranchInput{NameEN: "X"}); !errors.Is(err, shared.ErrForbidden) {
 		t.Fatalf("want forbidden without a company, got %v", err)
+	}
+}
+
+func TestPlatformSaveKeepsThePackageYear(t *testing.T) {
+	repo := newMemRepo()
+	svc := NewService(repo, &memUsers{}, tx.Nop{}, nopAudit{}, &memCache{})
+	reg, err := svc.Register(platformCtx(), registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	c := repo.companies[reg.Company.ID]
+	c.Plan, c.PlanStartedAt = domain.PlanPremium, started
+	repo.companies[c.ID] = c
+
+	got, err := svc.SaveCompany(platformCtx(), c.ID, domain.Company{NameEN: "Al Noor Desk"}, Actor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NameEN != "Al Noor Desk" || got.Plan != domain.PlanPremium || !got.PlanStartedAt.Equal(started) {
+		t.Fatalf("rename must not reset the year: %+v", got)
+	}
+}
+
+func TestUpdatePlanOpensANewYear(t *testing.T) {
+	repo := newMemRepo()
+	svc := NewService(repo, &memUsers{}, tx.Nop{}, nopAudit{}, &memCache{})
+	reg, err := svc.Register(platformCtx(), registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := repo.companies[reg.Company.ID]
+	c.PlanStartedAt = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	repo.companies[c.ID] = c
+	if _, err := svc.UpdatePlan(platformCtx(), c.ID, domain.PlanPremium, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	next := repo.companies[c.ID]
+	if next.Plan != domain.PlanPremium || next.PlanStartedAt.Before(time.Now().UTC().Add(-time.Minute)) {
+		t.Fatalf("new year: %+v", next)
 	}
 }

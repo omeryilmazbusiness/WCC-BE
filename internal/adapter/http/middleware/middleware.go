@@ -176,7 +176,11 @@ func RequirePermission(p platformauth.Permission) func(http.Handler) http.Handle
 				response.Error(w, shared.NewUnauthorized("unauthenticated"))
 				return
 			}
-			if !platformauth.HasPermission(claims.Role, p) {
+			plan := ""
+			if ws, ok := WorkspaceFrom(r.Context()); ok {
+				plan = string(ws.Company.Plan)
+			}
+			if !platformauth.EffectiveHas(claims.Role, plan, p) {
 				response.Error(w, shared.NewForbidden("missing permission: "+string(p)))
 				return
 			}

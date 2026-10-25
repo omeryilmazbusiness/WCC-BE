@@ -150,6 +150,11 @@ func DefaultRules() []Rule {
 			Groupable: true, DefaultTitle: "New note on a task",
 			DefaultHref: "/tasks", EntityType: "task",
 		},
+		{
+			Kind: KindPlanUpgrade, Severity: SeverityInfo,
+			Groupable: true, DefaultTitle: "Plan upgrade requested",
+			DefaultHref: "/admin/settings/supportInbox", EntityType: "company",
+		},
 	}
 }
 

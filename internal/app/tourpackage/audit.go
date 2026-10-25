@@ -5,11 +5,14 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/app/planlimit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/tourpackage"
 )
 
 func (s *Service) SetAuditor(a audit.Recorder) { s.audit = a }
+
+func (s *Service) SetPlanGuard(g *planlimit.Guard) { s.plans = g }
 
 // recordDeparture runs inside the caller's transaction so capacity changes
 // fail closed when the audit insert fails.

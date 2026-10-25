@@ -8,6 +8,27 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 )
 
+func TestEffectiveHasCutsRoleByPlan(t *testing.T) {
+	if !EffectiveHas(RoleGM, "standard", PermInboxWrite) || !EffectiveHas(RoleGM, "standard", PermAIWrite) {
+		t.Fatal("standard gm keeps the starter desk")
+	}
+	if EffectiveHas(RoleGM, "standard", PermDashboardRead) || EffectiveHas(RoleGM, "standard", PermHotelsPricing) {
+		t.Fatal("standard must hide dashboard and hotel cost")
+	}
+	if !EffectiveHas(RoleGM, "premium", PermPaymentsRead) || EffectiveHas(RoleGM, "premium", PermAISetup) {
+		t.Fatal("premium adds money but not AI setup")
+	}
+	if !EffectiveHas(RoleGM, "ultimate", PermAISetup) || EffectiveHas(RoleGM, "ultimate", PermCompaniesManage) {
+		t.Fatal("ultimate is full company, never platform")
+	}
+	if EffectiveHas(RoleGM, "", PermDashboardRead) {
+		t.Fatal("unknown plan falls back to standard")
+	}
+	if !EffectiveHas(RoleAdmin, "standard", PermCompaniesManage) {
+		t.Fatal("platform admin is not on a plan")
+	}
+}
+
 func TestHasPermission(t *testing.T) {
 	if !HasPermission(RoleGM, PermUsersWrite) {
 		t.Fatal("gm should write users")
@@ -133,7 +154,7 @@ func TestFXManagePermission(t *testing.T) {
 func TestPlatformAdminHoldsPlatformPermissionsOnly(t *testing.T) {
 	want := map[Permission]bool{
 		PermCompaniesManage: true, PermUsersRead: true, PermUsersWrite: true, PermUsersUnlock: true,
-		PermAuditRead: true, PermOpsRead: true, PermSupportManage: true,
+		PermAuditRead: true, PermOpsRead: true, PermSupportManage: true, PermNotificationsRead: true,
 	}
 	got := PermissionsFor(RoleAdmin)
 	if len(got) != len(want) {

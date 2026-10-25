@@ -296,12 +296,14 @@ func (h Handler) Me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	payload := mapUser(user)
-	payload["permissions"] = platformauth.PermissionsFor(user.Role)
 	scope := access.From(r.Context())
 	payload["scope"] = scope.Level.String()
+	plan := ""
 	if ws, ok := middleware.WorkspaceFrom(r.Context()); ok {
+		plan = string(ws.Company.Plan)
 		addWorkspace(payload, ws, scope, user.BranchID)
 	}
+	payload["permissions"] = platformauth.EffectivePermissions(user.Role, plan)
 	response.JSON(w, http.StatusOK, payload)
 }
 
@@ -310,7 +312,8 @@ func (h Handler) Me(w http.ResponseWriter, r *http.Request) {
 func addWorkspace(payload map[string]any, ws *company.Workspace, scope access.Scope, home uuid.UUID) {
 	payload["company"] = map[string]any{
 		"id": ws.Company.ID, "slug": ws.Company.Slug, "name_en": ws.Company.NameEN, "name_ar": ws.Company.NameAR,
-		"idle_logout_minutes": ws.Company.IdleLogoutMinutes,
+		"plan": ws.Company.Plan, "idle_logout_minutes": ws.Company.IdleLogoutMinutes,
+		"plan_limits": mapPlanLimits(ws.Company.Plan),
 	}
 	payload["home_branch_id"] = home
 	active := home
@@ -329,6 +332,14 @@ func addWorkspace(payload map[string]any, ws *company.Workspace, scope access.Sc
 		})
 	}
 	payload["branches"] = branches
+}
+
+func mapPlanLimits(p company.Plan) map[string]int {
+	l := company.Of(p).Limits
+	return map[string]int{
+		"users": l.Users, "branches": l.Branches, "packages": l.Packages,
+		"hotels": l.Hotels, "buses": l.Buses, "inbox": l.Inbox, "ai_per_day": l.AIPerDay,
+	}
 }
 
 // MFAEnroll starts TOTP enrollment for the signed-in user.

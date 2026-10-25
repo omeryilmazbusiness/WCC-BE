@@ -285,6 +285,26 @@ func (r *Repository) SetAvatar(ctx context.Context, userID uuid.UUID, a identity
 	return err
 }
 
+// ListPlatformAdmins is unscoped: upgrade pings have to reach operators who
+// belong to no company.
+func (r *Repository) ListPlatformAdmins(ctx context.Context) ([]identity.User, error) {
+	rows, err := tx.QuerierFrom(ctx, r.pool).Query(ctx, `
+		SELECT `+userColumns+` FROM users WHERE role = 'admin' AND is_active = TRUE ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []identity.User
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *u)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) DeleteAvatar(ctx context.Context, userID uuid.UUID) error {
 	q := tx.QuerierFrom(ctx, r.pool)
 	_, err := q.Exec(ctx, `DELETE FROM user_avatars WHERE user_id = $1`, userID)

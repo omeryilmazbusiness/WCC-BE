@@ -103,6 +103,10 @@ type Company struct {
 	Address   string
 	Currency  string
 	Timezone  string
+	// Plan is the commercial WCC package (standard|premium|ultimate).
+	Plan Plan
+	// PlanStartedAt is the start of the current 1-year package window.
+	PlanStartedAt time.Time
 	// IdleLogoutMinutes is the company desk lock (0 = off). Written only by
 	// UpdateIdleLogout so the profile wizard cannot clear it.
 	IdleLogoutMinutes int
@@ -145,8 +149,14 @@ func (c *Company) Normalize(level ProfileLevel) error {
 	if c.Timezone == "" {
 		c.Timezone = DefaultTimezone
 	}
+	if c.Plan == "" {
+		c.Plan = PlanStandard
+	}
 
 	fields := map[string]any{}
+	if !ValidPlan(c.Plan) {
+		fields["plan"] = "standard, premium or ultimate"
+	}
 	if n := utf8.RuneCountInString(c.NameEN); n < 2 || n > 120 {
 		fields["name_en"] = "2-120 characters"
 	}
@@ -403,8 +413,12 @@ type Repository interface {
 	CreateCompany(ctx context.Context, c *Company) error
 	GetCompany(ctx context.Context, id uuid.UUID) (*Company, error)
 	// UpdateCompany saves the profile; branches still on the old company
-	// timezone follow a timezone change.
+	// timezone follow a timezone change. Plan is not written here.
 	UpdateCompany(ctx context.Context, c *Company, actor uuid.UUID) error
+	// UpdatePlan is a platform-only commercial change.
+	UpdatePlan(ctx context.Context, companyID uuid.UUID, plan Plan, actor uuid.UUID) error
+	// CountUsage is how many of one limited resource the company already has.
+	CountUsage(ctx context.Context, companyID uuid.UUID, kind LimitKind) (int, error)
 	ListCompanies(ctx context.Context, query string, limit, offset int) (Page, error)
 
 	CreateBranch(ctx context.Context, b *Branch) error

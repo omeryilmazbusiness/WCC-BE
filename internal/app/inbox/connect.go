@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/app/secretcfg"
+	domaincompany "github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/inbox"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -50,6 +51,9 @@ func (s *Service) Connect(ctx context.Context, in ConnectInput) (*ConnectResult,
 	}
 	if in.BranchID == uuid.Nil {
 		return nil, shared.NewValidation("branch_id is required")
+	}
+	if err := s.plans.Refuse(ctx, domaincompany.LimitInbox); err != nil {
+		return nil, err
 	}
 	if err := validateConnect(in); err != nil {
 		return nil, err

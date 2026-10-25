@@ -165,6 +165,104 @@ func (s *Service) ListCompanies(ctx context.Context, query string, limit, offset
 	return s.repo.ListCompanies(ctx, query, limit, offset)
 }
 
+func requirePlatform(ctx context.Context) error {
+	if access.From(ctx).Level != access.LevelGlobal {
+		return shared.NewForbidden("platform scope required")
+	}
+	return nil
+}
+
+// GetCompany loads one tenant. The repository already hides companies
+// outside the caller's scope (platform sees all, a desk sees only its own).
+func (s *Service) GetCompany(ctx context.Context, id uuid.UUID) (*domain.Company, error) {
+	return s.repo.GetCompany(ctx, id)
+}
+
+// SaveCompany writes the profile from the platform console. Plan changes
+// go through UpdatePlan so a rename never resets the package year.
+func (s *Service) SaveCompany(ctx context.Context, id uuid.UUID, in domain.Company, actor Actor) (*domain.Company, error) {
+	if err := requirePlatform(ctx); err != nil {
+		return nil, err
+	}
+	current, err := s.repo.GetCompany(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	in.ID = id
+	in.Plan = current.Plan
+	in.PlanStartedAt = current.PlanStartedAt
+	in.IdleLogoutMinutes = current.IdleLogoutMinutes
+	in.IsActive = current.IsActive
+	if in.LegalName == "" {
+		in.LegalName = current.LegalName
+	}
+	if in.Phone == "" {
+		in.Phone = current.Phone
+	}
+	if in.Email == "" {
+		in.Email = current.Email
+	}
+	if in.Website == "" {
+		in.Website = current.Website
+	}
+	if in.Currency == "" {
+		in.Currency = current.Currency
+	}
+	if in.Timezone == "" {
+		in.Timezone = current.Timezone
+	}
+	if in.Slug == "" {
+		in.Slug = current.Slug
+	}
+	if err := in.Normalize(domain.ProfileBasic); err != nil {
+		return nil, err
+	}
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.repo.UpdateCompany(ctx, &in, actor.UserID); err != nil {
+			return err
+		}
+		s.caches.Invalidate(id)
+		return s.audit.Record(ctx, audit.RecordInput{
+			ActorID: actor.UserID, Action: "company.updated", EntityType: "company",
+			EntityID: &id, After: map[string]any{"slug": in.Slug, "name_en": in.NameEN},
+			IP: actor.IP, UserAgent: actor.UserAgent,
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.GetCompany(ctx, id)
+}
+
+// UpdatePlan changes the commercial package of a tenant (platform only)
+// and opens a new 1-year term.
+func (s *Service) UpdatePlan(ctx context.Context, companyID uuid.UUID, plan domain.Plan, actor Actor) (*domain.Company, error) {
+	if err := requirePlatform(ctx); err != nil {
+		return nil, err
+	}
+	if !domain.ValidPlan(plan) {
+		err := shared.NewValidation("invalid plan")
+		err.Details = map[string]any{"plan": "standard, premium or ultimate"}
+		return nil, err
+	}
+	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.repo.UpdatePlan(ctx, companyID, plan, actor.UserID); err != nil {
+			return err
+		}
+		s.caches.Invalidate(companyID)
+		return s.audit.Record(ctx, audit.RecordInput{
+			ActorID: actor.UserID, Action: "company.plan_changed", EntityType: "company",
+			EntityID: &companyID,
+			After:    map[string]any{"plan": plan},
+			IP:       actor.IP, UserAgent: actor.UserAgent,
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.GetCompany(ctx, companyID)
+}
+
 func companyOf(ctx context.Context) (uuid.UUID, error) {
 	sc, err := access.Require(ctx)
 	if err != nil {
@@ -212,6 +310,13 @@ func (s *Service) CreateBranch(ctx context.Context, in BranchInput) (*domain.Bra
 		}
 		c, err := s.repo.GetCompany(ctx, companyID)
 		if err != nil {
+			return err
+		}
+		used, err := s.repo.CountUsage(ctx, companyID, domain.LimitBranches)
+		if err != nil {
+			return err
+		}
+		if err := domain.Refuse(c.Plan, domain.LimitBranches, used); err != nil {
 			return err
 		}
 		if b.Timezone == "" {

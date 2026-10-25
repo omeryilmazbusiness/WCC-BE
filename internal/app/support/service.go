@@ -40,6 +40,7 @@ type Repository interface {
 	ListByRequester(ctx context.Context, requesterID uuid.UUID, limit int) ([]domain.Request, error)
 	ListInbound(ctx context.Context, f Filter) ([]Inbound, int, error)
 	CountByStatus(ctx context.Context) (map[domain.Status]int, error)
+	FindOpenByCompanyPage(ctx context.Context, companyID uuid.UUID, page string) (*domain.Request, error)
 }
 
 // RateWindow counts recent events per key (platform/ratelimit satisfies it).
@@ -107,6 +108,11 @@ func (s *Service) Submit(ctx context.Context, a Actor, d domain.Draft) (*domain.
 // Mine lists the caller's own requests, newest first.
 func (s *Service) Mine(ctx context.Context, userID uuid.UUID) ([]domain.Request, error) {
 	return s.repo.ListByRequester(ctx, userID, mineLimit)
+}
+
+// FindOpenByCompanyPage is the open/in-progress ticket for one upgrade page.
+func (s *Service) FindOpenByCompanyPage(ctx context.Context, companyID uuid.UUID, page string) (*domain.Request, error) {
+	return s.repo.FindOpenByCompanyPage(ctx, companyID, page)
 }
 
 // Inbox is one page of requests plus counts per status for the platform team.

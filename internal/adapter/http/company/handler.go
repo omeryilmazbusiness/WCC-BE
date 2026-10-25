@@ -12,12 +12,14 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/request"
 	"github.com/wodi-crm/wodi-crm-be/internal/adapter/http/response"
 	appcompany "github.com/wodi-crm/wodi-crm-be/internal/app/company"
+	"github.com/wodi-crm/wodi-crm-be/internal/app/planupgrade"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
 type Handler struct {
-	Svc *appcompany.Service
+	Svc      *appcompany.Service
+	Upgrades *planupgrade.Service
 }
 
 // MapCompany renders a company profile.
@@ -26,9 +28,19 @@ func MapCompany(c *domain.Company) map[string]any {
 		"id": c.ID, "slug": c.Slug, "name_en": c.NameEN, "name_ar": c.NameAR, "legal_name": c.LegalName,
 		"phone": c.Phone, "email": c.Email, "website": c.Website, "country": c.Country, "city": c.City,
 		"address": c.Address, "currency": c.Currency, "timezone": c.Timezone,
-		"idle_logout_minutes": c.IdleLogoutMinutes, "is_active": c.IsActive,
+		"plan": c.Plan, "idle_logout_minutes": c.IdleLogoutMinutes, "is_active": c.IsActive,
 		"created_at": c.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at": c.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		"term":       MapTerm(c),
+	}
+}
+
+func MapTerm(c *domain.Company) map[string]any {
+	t := c.TermAt(time.Now())
+	return map[string]any{
+		"plan": t.Plan, "years": t.Years, "status": t.Status, "days_left": t.DaysLeft,
+		"started_at": t.StartedAt.UTC().Format(time.RFC3339Nano),
+		"ends_at":    t.EndsAt.UTC().Format(time.RFC3339Nano),
 	}
 }
 
@@ -179,6 +191,7 @@ type registerRequest struct {
 	Address   string `json:"address"`
 	Currency  string `json:"currency"`
 	Timezone  string `json:"timezone"`
+	Plan      string `json:"plan"`
 	GM        struct {
 		FullName string `json:"full_name"`
 		Email    string `json:"email"`
@@ -198,11 +211,19 @@ func (h Handler) Register(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
+	plan, ok := domain.ParsePlan(body.Plan)
+	if !ok {
+		err := shared.NewValidation("invalid company registration")
+		err.Details = map[string]any{"plan": "standard, premium or ultimate"}
+		response.Error(w, err)
+		return
+	}
 	out, err := h.Svc.Register(r.Context(), appcompany.RegisterInput{
 		Company: domain.Company{
 			Slug: body.Slug, NameEN: body.NameEN, NameAR: body.NameAR, LegalName: body.LegalName,
 			Phone: body.Phone, Email: body.Email, Website: body.Website, Country: body.Country,
 			City: body.City, Address: body.Address, Currency: body.Currency, Timezone: body.Timezone,
+			Plan: plan,
 		},
 		GM:    appcompany.GMAccount{FullName: body.GM.FullName, Email: body.GM.Email, Password: body.GM.Password},
 		Actor: a,
@@ -241,5 +262,164 @@ func (h Handler) ListCompanies(w http.ResponseWriter, r *http.Request) {
 	meta := shared.NewPageMeta(int64(res.Total), page)
 	response.JSONMeta(w, http.StatusOK, out, map[string]any{
 		"total": meta.Total, "limit": meta.Limit, "offset": meta.Offset, "page": meta.Page, "total_pages": meta.TotalPages,
+	})
+}
+
+// ListPlans is the published WCC catalog for the platform console.
+func (h Handler) ListPlans(w http.ResponseWriter, r *http.Request) {
+	out := make([]map[string]any, 0, 3)
+	for _, p := range domain.AllPlans() {
+		spec := domain.Of(p)
+		out = append(out, map[string]any{
+			"plan":        spec.Plan,
+			"permissions": spec.Permissions,
+			"limits": map[string]int{
+				"users": spec.Limits.Users, "branches": spec.Limits.Branches, "packages": spec.Limits.Packages,
+				"hotels": spec.Limits.Hotels, "buses": spec.Limits.Buses, "inbox": spec.Limits.Inbox,
+				"ai_per_day": spec.Limits.AIPerDay,
+			},
+		})
+	}
+	response.JSON(w, http.StatusOK, out)
+}
+
+type updatePlanRequest struct {
+	Plan string `json:"plan"`
+}
+
+// UpdatePlan changes a tenant package (platform admin).
+func (h Handler) UpdatePlan(w http.ResponseWriter, r *http.Request) {
+	a, err := actor(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid company id"))
+		return
+	}
+	var body updatePlanRequest
+	if err := decode(r, &body); err != nil {
+		response.Error(w, err)
+		return
+	}
+	plan, ok := domain.ParsePlan(body.Plan)
+	if !ok {
+		err := shared.NewValidation("invalid plan")
+		err.Details = map[string]any{"plan": "standard, premium or ultimate"}
+		response.Error(w, err)
+		return
+	}
+	c, err := h.Svc.UpdatePlan(r.Context(), id, plan, a)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, MapCompany(c))
+}
+
+// GetCompany is the platform edit card.
+func (h Handler) GetCompany(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid company id"))
+		return
+	}
+	c, err := h.Svc.GetCompany(r.Context(), id)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, MapCompany(c))
+}
+
+type saveCompanyRequest struct {
+	NameEN    string `json:"name_en"`
+	NameAR    string `json:"name_ar"`
+	Slug      string `json:"slug"`
+	LegalName string `json:"legal_name"`
+	Phone     string `json:"phone"`
+	Email     string `json:"email"`
+	Website   string `json:"website"`
+	Country   string `json:"country"`
+	City      string `json:"city"`
+	Address   string `json:"address"`
+	Currency  string `json:"currency"`
+	Timezone  string `json:"timezone"`
+}
+
+// SaveCompany updates the tenant profile from the platform console.
+func (h Handler) SaveCompany(w http.ResponseWriter, r *http.Request) {
+	a, err := actor(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid company id"))
+		return
+	}
+	var body saveCompanyRequest
+	if err := decode(r, &body); err != nil {
+		response.Error(w, err)
+		return
+	}
+	c, err := h.Svc.SaveCompany(r.Context(), id, domain.Company{
+		NameEN: body.NameEN, NameAR: body.NameAR, Slug: body.Slug, LegalName: body.LegalName,
+		Phone: body.Phone, Email: body.Email, Website: body.Website, Country: body.Country,
+		City: body.City, Address: body.Address, Currency: body.Currency, Timezone: body.Timezone,
+	}, a)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	response.JSON(w, http.StatusOK, MapCompany(c))
+}
+
+type upgradeRequestBody struct {
+	Target  string `json:"target"`
+	Feature string `json:"feature"`
+	Locale  string `json:"locale"`
+}
+
+// RequestUpgrade asks the platform team to move the caller to a higher plan.
+func (h Handler) RequestUpgrade(w http.ResponseWriter, r *http.Request) {
+	if h.Upgrades == nil {
+		response.Error(w, shared.NewUnavailable("upgrade requests are not configured", 30*time.Second))
+		return
+	}
+	a, err := actor(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	claims, _ := middleware.ClaimsFrom(r.Context())
+	var body upgradeRequestBody
+	if err := decode(r, &body); err != nil {
+		response.Error(w, err)
+		return
+	}
+	target, ok := domain.ParsePlan(body.Target)
+	if !ok {
+		err := shared.NewValidation("invalid plan")
+		err.Details = map[string]any{"target": "premium or ultimate"}
+		response.Error(w, err)
+		return
+	}
+	out, err := h.Upgrades.Request(r.Context(), planupgrade.Actor{
+		UserID: a.UserID, BranchID: claims.BranchID, IP: a.IP, UserAgent: a.UserAgent,
+	}, planupgrade.Input{Target: target, Feature: body.Feature, Locale: body.Locale})
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	status := http.StatusCreated
+	if out.Duplicate {
+		status = http.StatusOK
+	}
+	response.JSON(w, status, map[string]any{
+		"id": out.RequestID, "number": out.Number, "target": out.Target, "duplicate": out.Duplicate,
 	})
 }

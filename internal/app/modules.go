@@ -74,6 +74,8 @@ import (
 	appnotification "github.com/wodi-crm/wodi-crm-be/internal/app/notification"
 	appoutbox "github.com/wodi-crm/wodi-crm-be/internal/app/outbox"
 	apppayment "github.com/wodi-crm/wodi-crm-be/internal/app/payment"
+	"github.com/wodi-crm/wodi-crm-be/internal/app/planlimit"
+	"github.com/wodi-crm/wodi-crm-be/internal/app/planupgrade"
 	apppreference "github.com/wodi-crm/wodi-crm-be/internal/app/preference"
 	appprivacy "github.com/wodi-crm/wodi-crm-be/internal/app/privacy"
 	appprofile "github.com/wodi-crm/wodi-crm-be/internal/app/profile"
@@ -142,6 +144,7 @@ type modules struct {
 	preferences  *apppreference.Service
 	profile      *appprofile.Service
 	support      *appsupport.Service
+	planUpgrade  *planupgrade.Service
 	reports      *appreport.Service
 	schedules    *appreport.Scheduler
 	ai           *appai.Service
@@ -360,9 +363,17 @@ func (m *modules) build() error {
 	m.hotels.SetTimeZone(loc)
 	m.buses = appbus.NewService(pgbus.NewRepository(pool), txm)
 	m.buses.SetAuditor(m.audit)
+	plans := planlimit.New(pgcompany.NewRepository(pool))
+	m.users.SetPlanGuard(plans)
+	m.packages.SetPlanGuard(plans)
+	m.hotels.SetPlanGuard(plans)
+	m.buses.SetPlanGuard(plans)
+	m.inbox.SetPlanGuard(plans)
+	m.assistant.SetPlanGuard(plans)
 	m.search = appsearch.NewService(pgsearch.NewRepository(pool, passports))
 	m.flights = newFlightService(cfg.Flights, log)
 	m.tenancy = newTenancyModule(pool, m.users, m.ai, m.inbox, txm, m.audit)
+	m.planUpgrade = planupgrade.New(pgcompany.NewRepository(pool), m.support, identityRepo, m.notify, log)
 	m.imports = appimportexport.NewService(pgimportexport.NewRepository(pool, passports), customerRepo, txm)
 	m.imports.SetEnqueuer(m.queue)
 	m.imports.SetQueueMode(m.queue)

@@ -58,6 +58,16 @@ func (m *memRepo) ListInbound(_ context.Context, f Filter) ([]Inbound, int, erro
 	}
 	return out, len(out), nil
 }
+func (m *memRepo) FindOpenByCompanyPage(_ context.Context, companyID uuid.UUID, page string) (*domain.Request, error) {
+	for _, r := range m.rows {
+		if r.CompanyID != nil && *r.CompanyID == companyID && r.Page == page && (r.Status == domain.StatusOpen || r.Status == domain.StatusInProgress) {
+			cp := *r
+			return &cp, nil
+		}
+	}
+	return nil, nil
+}
+
 func (m *memRepo) CountByStatus(context.Context) (map[domain.Status]int, error) {
 	c := map[domain.Status]int{}
 	for _, r := range m.rows {

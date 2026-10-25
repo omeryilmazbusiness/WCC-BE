@@ -235,6 +235,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			r.With(middleware.RequirePermission(platformauth.PermBranchesRead)).Get("/branches", h.Company.ListBranches)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Post("/branches", h.Company.CreateBranch)
 			r.With(middleware.RequirePermission(platformauth.PermBranchesManage)).Patch("/branches/{id}", h.Company.UpdateBranch)
+			r.With(middleware.RequirePermission(platformauth.PermSupportWrite)).Post("/plan/upgrade-requests", h.Company.RequestUpgrade)
 			r.Route("/support/requests", func(r chi.Router) {
 				r.Use(middleware.RequirePermission(platformauth.PermSupportWrite))
 				r.Post("/", h.Support.Submit)
@@ -248,7 +249,11 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 			r.Route("/platform/companies", func(r chi.Router) {
 				r.Use(middleware.RequirePermission(platformauth.PermCompaniesManage))
 				r.Get("/", h.Company.ListCompanies)
+				r.Get("/plans", h.Company.ListPlans)
 				r.Post("/", h.Company.Register)
+				r.Get("/{id}", h.Company.GetCompany)
+				r.Patch("/{id}", h.Company.SaveCompany)
+				r.Put("/{id}/plan", h.Company.UpdatePlan)
 				r.Put("/{id}/logo", h.Branding.PlatformUploadLogo)
 				r.Delete("/{id}/logo", h.Branding.PlatformDeleteLogo)
 			})

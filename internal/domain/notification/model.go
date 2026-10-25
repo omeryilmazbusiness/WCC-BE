@@ -73,6 +73,7 @@ const (
 	KindTaskNote            = "task.note"
 	KindSupplierLowBalance  = "supplier.low_balance"
 	KindSupplierContract    = "supplier.contract_expiring"
+	KindPlanUpgrade         = "plan.upgrade_requested"
 )
 
 // metaEscalatedFrom marks a notification produced by escalation; escalated

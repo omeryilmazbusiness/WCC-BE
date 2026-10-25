@@ -7,8 +7,10 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/app/planlimit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/bus"
+	domaincompany "github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
 )
@@ -35,6 +37,7 @@ type Service struct {
 	tx    tx.Runner
 	audit audit.Recorder
 	now   func() time.Time
+	plans *planlimit.Guard
 }
 
 func NewService(repo domain.Repository, txm tx.Runner) *Service {
@@ -42,6 +45,8 @@ func NewService(repo domain.Repository, txm tx.Runner) *Service {
 }
 
 func (s *Service) SetAuditor(a audit.Recorder) { s.audit = a }
+
+func (s *Service) SetPlanGuard(g *planlimit.Guard) { s.plans = g }
 
 func (in CompanyInput) apply(c *domain.Company) {
 	c.Name, c.Phone, c.Email, c.Website = in.Name, in.Phone, in.Email, in.Website
@@ -67,6 +72,9 @@ func (s *Service) Get(ctx context.Context, id uuid.UUID) (*domain.Company, error
 func (s *Service) Create(ctx context.Context, branchID uuid.UUID, in CompanyInput) (*domain.Company, error) {
 	if branchID == uuid.Nil {
 		return nil, shared.NewValidation("branch_id is required")
+	}
+	if err := s.plans.Refuse(ctx, domaincompany.LimitBuses); err != nil {
+		return nil, err
 	}
 	now := s.now()
 	c := &domain.Company{ID: uuid.New(), BranchID: branchID, IsActive: true, CreatedAt: now, UpdatedAt: now}

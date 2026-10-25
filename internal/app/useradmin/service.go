@@ -8,8 +8,10 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/app/planlimit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
+	domaincompany "github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/identity"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
@@ -28,11 +30,14 @@ type Service struct {
 	audit    audit.Recorder
 	tx       *tx.Manager
 	sessions SessionInvalidator
+	plans    *planlimit.Guard
 }
 
 func NewService(users identity.Repository, auditRec audit.Recorder, txm *tx.Manager, sessions SessionInvalidator) *Service {
 	return &Service{users: users, audit: auditRec, tx: txm, sessions: sessions}
 }
+
+func (s *Service) SetPlanGuard(g *planlimit.Guard) { s.plans = g }
 
 type CreateInput struct {
 	Email     string
@@ -187,6 +192,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*identity.User, e
 		if err := s.checkTeam(ctx, *in.TeamID, in.BranchID); err != nil {
 			return nil, err
 		}
+	}
+	if err := s.plans.Refuse(ctx, domaincompany.LimitUsers); err != nil {
+		return nil, err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
 	if err != nil {

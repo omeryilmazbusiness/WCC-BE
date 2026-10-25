@@ -152,7 +152,7 @@ func New(ctx context.Context, cfg config.Config, log *slog.Logger) (*Application
 		Search:       searchhttp.Handler{Svc: m.search},
 		Flight:       flighthttp.Handler{Svc: m.flights},
 		Setup:        setuphttp.Handler{Svc: m.tenancy.setup},
-		Company:      companyhttp.Handler{Svc: m.tenancy.companies},
+		Company:      companyhttp.Handler{Svc: m.tenancy.companies, Upgrades: m.planUpgrade},
 		Privacy:      privacyhttp.Handler{Svc: m.privacy},
 		Webhook:      newWebhookHandler(cfg, m.webhooks, m.limiter),
 		Stream:       streamhttp.Handler{Hub: hub, Heartbeat: streamHeartbeat, Closing: streamsClosing},

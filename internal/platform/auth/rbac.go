@@ -1,5 +1,9 @@
 package auth
 
+import (
+	domaincompany "github.com/wodi-crm/wodi-crm-be/internal/domain/company"
+)
+
 // Permission is a fine-grained capability enforced at the API boundary.
 type Permission string
 
@@ -148,7 +152,7 @@ func PermissionsFor(role Role) []Permission {
 			// data and configuration belong to each company's GM.
 			PermCompaniesManage,
 			PermUsersRead, PermUsersWrite, PermUsersUnlock, PermAuditRead, PermOpsRead,
-			PermSupportManage,
+			PermSupportManage, PermNotificationsRead,
 		}
 	case RoleAgent:
 		return []Permission{
@@ -186,6 +190,40 @@ func HasPermission(role Role, p Permission) bool {
 		}
 	}
 	return false
+}
+
+// EffectivePermissions is the role matrix cut down to the company plan.
+// Platform admins are not on a plan.
+func EffectivePermissions(role Role, plan string) []Permission {
+	if CanonicalRole(role) == RoleAdmin {
+		return PermissionsFor(role)
+	}
+	p, ok := domaincompany.ParsePlan(plan)
+	if !ok {
+		p = domaincompany.PlanStandard
+	}
+	out := make([]Permission, 0, 32)
+	for _, perm := range PermissionsFor(role) {
+		if domaincompany.Allows(p, string(perm)) {
+			out = append(out, perm)
+		}
+	}
+	return out
+}
+
+// EffectiveHas is HasPermission after the company plan is applied.
+func EffectiveHas(role Role, plan string, p Permission) bool {
+	if CanonicalRole(role) == RoleAdmin {
+		return HasPermission(role, p)
+	}
+	if !HasPermission(role, p) {
+		return false
+	}
+	parsed, ok := domaincompany.ParsePlan(plan)
+	if !ok {
+		parsed = domaincompany.PlanStandard
+	}
+	return domaincompany.Allows(parsed, string(p))
 }
 
 // RolePermissionMatrix is the payload for the admin matrix UI.

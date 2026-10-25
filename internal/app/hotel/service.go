@@ -8,7 +8,9 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/app/planlimit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
+	domaincompany "github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/hotel"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
@@ -64,6 +66,7 @@ type Service struct {
 	audit audit.Recorder
 	loc   *time.Location
 	now   func() time.Time
+	plans *planlimit.Guard
 }
 
 func NewService(repo domain.Repository, txm tx.Runner) *Service {
@@ -71,6 +74,8 @@ func NewService(repo domain.Repository, txm tx.Runner) *Service {
 }
 
 func (s *Service) SetAuditor(a audit.Recorder) { s.audit = a }
+
+func (s *Service) SetPlanGuard(g *planlimit.Guard) { s.plans = g }
 
 // SetTimeZone sets the business day used for "today" (releases, seasons).
 func (s *Service) SetTimeZone(loc *time.Location) {
@@ -139,6 +144,9 @@ func (in HotelInput) apply(h *domain.Hotel) {
 func (s *Service) Create(ctx context.Context, branchID uuid.UUID, in HotelInput) (*domain.Detail, error) {
 	if branchID == uuid.Nil {
 		return nil, shared.NewValidation("branch_id is required")
+	}
+	if err := s.plans.Refuse(ctx, domaincompany.LimitHotels); err != nil {
+		return nil, err
 	}
 	now := s.now()
 	h := &domain.Hotel{

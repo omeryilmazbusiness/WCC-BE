@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/app/planlimit"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/audit"
 	bookingdomain "github.com/wodi-crm/wodi-crm-be/internal/domain/booking"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/company"
@@ -115,6 +116,7 @@ type Service struct {
 	audit    audit.Recorder
 	brand    BrochureBrand
 	brochure domain.BrochureRenderer
+	plans    *planlimit.Guard
 }
 
 func NewService(repo domain.Repository, txm tx.Runner) *Service {
@@ -176,6 +178,9 @@ func (s *Service) CreatePackage(ctx context.Context, in CreatePackageInput) (*do
 	name := strings.TrimSpace(in.NameEN)
 	if code == "" || name == "" {
 		return nil, shared.NewValidation("code and name_en are required")
+	}
+	if err := s.plans.Refuse(ctx, company.LimitPackages); err != nil {
+		return nil, err
 	}
 	header := in.Header
 	if err := domain.NormalizeHeader(&header); err != nil {

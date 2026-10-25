@@ -60,11 +60,11 @@ func NewRepository(pool *pgxpool.Pool) *Repository {
 }
 
 const companyColumns = `id, slug, name_en, name_ar, legal_name, phone, email, website, country, city,
-	address, currency, timezone, idle_logout_minutes, is_active, created_at, updated_at`
+	address, currency, timezone, plan, plan_started_at, idle_logout_minutes, is_active, created_at, updated_at`
 
 func scanCompany(row pgx.Row, c *domain.Company) error {
 	return row.Scan(&c.ID, &c.Slug, &c.NameEN, &c.NameAR, &c.LegalName, &c.Phone, &c.Email, &c.Website,
-		&c.Country, &c.City, &c.Address, &c.Currency, &c.Timezone, &c.IdleLogoutMinutes, &c.IsActive, &c.CreatedAt, &c.UpdatedAt)
+		&c.Country, &c.City, &c.Address, &c.Currency, &c.Timezone, &c.Plan, &c.PlanStartedAt, &c.IdleLogoutMinutes, &c.IsActive, &c.CreatedAt, &c.UpdatedAt)
 }
 
 // CreateCompany is a platform operation (global scope only).
@@ -74,12 +74,12 @@ func (r *Repository) CreateCompany(ctx context.Context, c *domain.Company) error
 	}
 	err := tx.QuerierFrom(ctx, r.pool).QueryRow(ctx, `
 		INSERT INTO companies (id, slug, name_en, name_ar, legal_name, phone, email, website, country, city,
-			address, currency, timezone, is_active)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,TRUE)
-		RETURNING is_active, created_at, updated_at`,
+			address, currency, timezone, plan, is_active)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE)
+		RETURNING is_active, created_at, updated_at, plan_started_at`,
 		c.ID, c.Slug, c.NameEN, c.NameAR, c.LegalName, c.Phone, c.Email, c.Website, c.Country, c.City,
-		c.Address, c.Currency, c.Timezone,
-	).Scan(&c.IsActive, &c.CreatedAt, &c.UpdatedAt)
+		c.Address, c.Currency, c.Timezone, c.Plan,
+	).Scan(&c.IsActive, &c.CreatedAt, &c.UpdatedAt, &c.PlanStartedAt)
 	return mapConflict(err)
 }
 
@@ -148,6 +148,51 @@ func (r *Repository) UpdateIdleLogout(ctx context.Context, companyID uuid.UUID, 
 	return nil
 }
 
+func (r *Repository) UpdatePlan(ctx context.Context, companyID uuid.UUID, plan domain.Plan, actor uuid.UUID) error {
+	if s := access.From(ctx); s.Level != access.LevelGlobal {
+		return shared.NewForbidden("changing a plan needs platform scope")
+	}
+	if !domain.ValidPlan(plan) {
+		err := shared.NewValidation("invalid plan")
+		err.Details = map[string]any{"plan": "standard, premium or ultimate"}
+		return err
+	}
+	tag, err := tx.QuerierFrom(ctx, r.pool).Exec(ctx, `
+		UPDATE companies SET plan=$2, plan_started_at=NOW(), updated_by=$3, updated_at=NOW() WHERE id=$1`, companyID, plan, actor)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("company")
+	}
+	return nil
+}
+
+func (r *Repository) CountUsage(ctx context.Context, companyID uuid.UUID, kind domain.LimitKind) (int, error) {
+	if err := ensureCompany(ctx, companyID); err != nil {
+		return 0, err
+	}
+	q := `SELECT count(*) FROM branches b WHERE b.company_id=$1`
+	switch kind {
+	case domain.LimitUsers:
+		q = `SELECT count(*) FROM users u JOIN branches b ON b.id=u.branch_id WHERE b.company_id=$1`
+	case domain.LimitPackages:
+		q = `SELECT count(*) FROM packages p JOIN branches b ON b.id=p.branch_id WHERE b.company_id=$1`
+	case domain.LimitHotels:
+		q = `SELECT count(*) FROM hotels h JOIN branches b ON b.id=h.branch_id WHERE b.company_id=$1`
+	case domain.LimitBuses:
+		q = `SELECT count(*) FROM bus_companies x JOIN branches b ON b.id=x.branch_id WHERE b.company_id=$1`
+	case domain.LimitInbox:
+		q = `SELECT count(*) FROM integration_accounts a JOIN branches b ON b.id=a.branch_id WHERE b.company_id=$1`
+	case domain.LimitBranches:
+	default:
+		return 0, shared.NewValidation("unknown plan limit")
+	}
+	var n int
+	err := tx.QuerierFrom(ctx, r.pool).QueryRow(ctx, q, companyID).Scan(&n)
+	return n, err
+}
+
 func (r *Repository) ListCompanies(ctx context.Context, query string, limit, offset int) (domain.Page, error) {
 	if s := access.From(ctx); s.Level != access.LevelGlobal {
 		return domain.Page{}, shared.NewForbidden("listing companies needs platform scope")
@@ -156,7 +201,7 @@ func (r *Repository) ListCompanies(ctx context.Context, query string, limit, off
 	pattern := "%" + strings.ToLower(strings.TrimSpace(query)) + "%"
 	rows, err := q.Query(ctx, `
 		SELECT c.id, c.slug, c.name_en, c.name_ar, c.legal_name, c.phone, c.email, c.website, c.country, c.city,
-		       c.address, c.currency, c.timezone, c.is_active, c.created_at, c.updated_at,
+		       c.address, c.currency, c.timezone, c.plan, c.plan_started_at, c.is_active, c.created_at, c.updated_at,
 		       (SELECT count(*) FROM branches b WHERE b.company_id = c.id),
 		       (SELECT count(*) FROM users u JOIN branches b ON b.id = u.branch_id WHERE b.company_id = c.id),
 		       COALESCE((SELECT u.email FROM users u JOIN branches b ON b.id = u.branch_id
@@ -176,7 +221,7 @@ func (r *Repository) ListCompanies(ctx context.Context, query string, limit, off
 		var s domain.Summary
 		c := &s.Company
 		if err := rows.Scan(&c.ID, &c.Slug, &c.NameEN, &c.NameAR, &c.LegalName, &c.Phone, &c.Email, &c.Website,
-			&c.Country, &c.City, &c.Address, &c.Currency, &c.Timezone, &c.IsActive, &c.CreatedAt, &c.UpdatedAt,
+			&c.Country, &c.City, &c.Address, &c.Currency, &c.Timezone, &c.Plan, &c.PlanStartedAt, &c.IsActive, &c.CreatedAt, &c.UpdatedAt,
 			&s.BranchCount, &s.UserCount, &s.GMEmail, &s.LogoUpdatedAt, &page.Total); err != nil {
 			return domain.Page{}, err
 		}
@@ -272,7 +317,7 @@ func (r *Repository) WorkspaceOf(ctx context.Context, branchID uuid.UUID) (*doma
 	var w domain.Workspace
 	err := scanCompany(tx.QuerierFrom(ctx, r.pool).QueryRow(ctx, `
 		SELECT c.id, c.slug, c.name_en, c.name_ar, c.legal_name, c.phone, c.email, c.website, c.country, c.city,
-		       c.address, c.currency, c.timezone, c.idle_logout_minutes, c.is_active, c.created_at, c.updated_at
+		       c.address, c.currency, c.timezone, c.plan, c.plan_started_at, c.idle_logout_minutes, c.is_active, c.created_at, c.updated_at
 		FROM branches b JOIN companies c ON c.id = b.company_id
 		WHERE b.id = $1`, branchID), &w.Company)
 	if errors.Is(err, pgx.ErrNoRows) {

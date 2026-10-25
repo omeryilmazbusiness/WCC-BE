@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/wodi-crm/wodi-crm-be/internal/app/planlimit"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/assistant"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
@@ -77,10 +78,13 @@ type Service struct {
 	cache      AnswerCache
 	burst      RateWindow
 	cfg        Config
+	plans      *planlimit.Guard
 	factsMemo  *memo[*domain.Facts]
 	configMemo *memo[bool]
 	breaker    *breaker
 }
+
+func (s *Service) SetPlanGuard(g *planlimit.Guard) { s.plans = g }
 
 func NewService(facts FactsReader, completer Completer, usage UsageStore, cache AnswerCache, cfg Config) *Service {
 	if cfg.Now == nil {
@@ -280,7 +284,11 @@ func (s *Service) quota(ctx context.Context, userID uuid.UUID) (domain.Quota, er
 	if err != nil {
 		return domain.Quota{}, err
 	}
-	return domain.Quota{Limit: s.cfg.DailyQuota, Used: used, ResetsAt: domain.NextReset(now, s.cfg.Location)}, nil
+	limit := s.cfg.DailyQuota
+	if cap := s.plans.DailyAI(ctx); cap > 0 && (limit <= 0 || cap < limit) {
+		limit = cap
+	}
+	return domain.Quota{Limit: limit, Used: used, ResetsAt: domain.NextReset(now, s.cfg.Location)}, nil
 }
 
 // validate returns the question (last message, from the user) and the turns before it.

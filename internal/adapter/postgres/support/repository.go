@@ -73,6 +73,23 @@ func (r *Repository) Update(ctx context.Context, req *domain.Request) error {
 	return nil
 }
 
+func (r *Repository) FindOpenByCompanyPage(ctx context.Context, companyID uuid.UUID, page string) (*domain.Request, error) {
+	if companyID == uuid.Nil || strings.TrimSpace(page) == "" {
+		return nil, nil
+	}
+	req, err := scanRequest(tx.QuerierFrom(ctx, r.pool).QueryRow(ctx, `
+		SELECT `+columns+` FROM support_requests r
+		WHERE r.company_id = $1 AND r.page = $2 AND r.status IN ('open', 'in_progress')
+		ORDER BY r.created_at DESC LIMIT 1`, companyID, page))
+	if err != nil {
+		if errors.Is(err, shared.ErrNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return req, nil
+}
+
 func (r *Repository) ListByRequester(ctx context.Context, requesterID uuid.UUID, limit int) ([]domain.Request, error) {
 	rows, err := tx.QuerierFrom(ctx, r.pool).Query(ctx,
 		`SELECT `+columns+` FROM support_requests r WHERE r.requester_id = $1 ORDER BY r.created_at DESC LIMIT $2`,
