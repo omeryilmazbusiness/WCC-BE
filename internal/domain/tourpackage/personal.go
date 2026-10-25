@@ -6,7 +6,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
-// CategoryPersonal is a one-customer product sheet (Umrah, Hajj or other).
+// CategoryPersonal is a one-customer product sheet (Umrah, Hajj, other or visa).
 const CategoryPersonal = "personal"
 
 // IsPersonal reports a sheet built for one assigned customer, not the catalogue.

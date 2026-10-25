@@ -174,6 +174,11 @@ func BuildBrochure(p Package, tiers []PricingTier, brand BrochureBrand, lang Bro
 	if from <= 0 {
 		from, fromCur = cheapestRoom(tiers, currency)
 	}
+	if from <= 0 {
+		if sell, ok := CheapestVisaSell(p.Spec.VisaOffers); ok {
+			from, fromCur = sell, currency
+		}
+	}
 
 	doc := Brochure{
 		Lang:        lang,
@@ -200,7 +205,11 @@ func BuildBrochure(p Package, tiers []PricingTier, brand BrochureBrand, lang Bro
 	doc.Travel = brochureTravel(p, cp)
 	doc.Services, doc.Programme = brochureOffer(p, cp)
 	doc.Itinerary = brochureDays(p.Spec.Itinerary)
-	doc.Prices = brochurePrices(tiers, currency)
+	if IsVisa(p.Kind) {
+		doc.Prices = brochureVisaPrices(p.Spec.VisaOffers, currency, cp)
+	} else {
+		doc.Prices = brochurePrices(tiers, currency)
+	}
 	doc.Prepare = brochurePrepare(p, cp)
 	doc.Chapters = brochureChapters(p, cp)
 	doc.Features = brochureFeatures(p, cp)
@@ -329,10 +338,29 @@ func brochureTravel(p Package, cp brochureCopy) []BrochureFact {
 	if IsPilgrimage(p.Kind) && p.Spec.Visa.Type != "" {
 		out = append(out, BrochureFact{Icon: "stamp", Label: cp.Visa, Value: cp.visa(p.Spec.Visa.Type)})
 	}
+	if IsVisa(p.Kind) {
+		for _, o := range p.Spec.VisaOffers {
+			out = append(out, BrochureFact{Icon: "stamp", Label: cp.visa(o.Type), Value: formatBrochureMoney(o.Sell, p.BaseCurrency)})
+		}
+	}
 	return out
 }
 
 func brochureOffer(p Package, cp brochureCopy) (services, programme []BrochureItem) {
+	if IsVisa(p.Kind) {
+		for _, o := range p.Spec.VisaOffers {
+			details := o.Notes
+			if o.ProcessingDays > 0 {
+				if details != "" {
+					details = cp.days(o.ProcessingDays) + " · " + details
+				} else {
+					details = cp.days(o.ProcessingDays)
+				}
+			}
+			services = append(services, BrochureItem{Title: cp.visa(o.Type), Details: details})
+		}
+		return services, programme
+	}
 	if IsPilgrimage(p.Kind) {
 		if p.Spec.Visa.HealthInsurance {
 			services = append(services, BrochureItem{Title: cp.Insurance})
@@ -529,6 +557,17 @@ func brochurePrices(tiers []PricingTier, currency string) []BrochurePrice {
 			label = t.Code
 		}
 		out = append(out, BrochurePrice{Label: label, Amount: formatBrochureMoney(t.Amount, cur)})
+	}
+	return out
+}
+
+func brochureVisaPrices(offers []VisaOffer, currency string, cp brochureCopy) []BrochurePrice {
+	out := make([]BrochurePrice, 0, len(offers))
+	for _, o := range offers {
+		if o.Sell <= 0 {
+			continue
+		}
+		out = append(out, BrochurePrice{Label: cp.visa(o.Type), Amount: formatBrochureMoney(o.Sell, currency)})
 	}
 	return out
 }

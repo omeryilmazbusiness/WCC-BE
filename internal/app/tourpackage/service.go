@@ -217,9 +217,11 @@ func (s *Service) CreatePackage(ctx context.Context, in CreatePackageInput) (*do
 			return err
 		}
 		if tiers != nil {
-			return s.repo.ReplacePackageTiers(ctx, p.ID, tiers)
+			if err := s.repo.ReplacePackageTiers(ctx, p.ID, tiers); err != nil {
+				return err
+			}
 		}
-		return nil
+		return s.seedVisaSlot(ctx, p, now)
 	}); err != nil {
 		return nil, err
 	}
@@ -358,7 +360,10 @@ func (s *Service) ClonePackage(ctx context.Context, in ClonePackageInput) (*doma
 		if err != nil {
 			return err
 		}
-		return s.repo.ReplacePackageTiers(ctx, p.ID, tiers)
+		if err := s.repo.ReplacePackageTiers(ctx, p.ID, tiers); err != nil {
+			return err
+		}
+		return s.seedVisaSlot(ctx, p, now)
 	})
 	if err != nil {
 		return nil, err
@@ -690,4 +695,11 @@ func normalizeTiers(inputs []TierInput) ([]domain.PricingTier, error) {
 		})
 	}
 	return out, nil
+}
+
+func (s *Service) seedVisaSlot(ctx context.Context, p *domain.Package, now time.Time) error {
+	if !domain.IsVisa(p.Kind) {
+		return nil
+	}
+	return s.repo.CreateDeparture(ctx, domain.StandingVisaDeparture(p.ID, p.CapacityTotal, p.BaseCurrency, p.DurationDays, now))
 }

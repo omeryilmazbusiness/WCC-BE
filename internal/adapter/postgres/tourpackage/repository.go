@@ -105,6 +105,14 @@ func scanPackage(row rowScanner) (*domain.Package, error) {
 			return nil, fmt.Errorf("package %s spec: %w", p.ID, err)
 		}
 	}
+	if domain.IsVisa(p.Kind) {
+		if sell, ok := domain.CheapestVisaSell(p.Spec.VisaOffers); ok {
+			p.Stats.FromPrice = sell
+			if p.Stats.FromCurrency == "" {
+				p.Stats.FromCurrency = p.BaseCurrency
+			}
+		}
+	}
 	return &p, nil
 }
 

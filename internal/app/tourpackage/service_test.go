@@ -272,6 +272,38 @@ func TestCreatePackageWithSpecAndPricingMatrix(t *testing.T) {
 	}
 }
 
+func TestVisaPackageNeedsPricedType(t *testing.T) {
+	svc := apppkg.NewService(newMemPkg(), tx.Nop{})
+	ctx := context.Background()
+	header := domain.Header{Kind: domain.KindVisa, Category: "standard", DurationDays: 14, TransportMode: "road", BaseCurrency: "SAR"}
+	if _, err := svc.CreatePackage(ctx, apppkg.CreatePackageInput{
+		BranchID: uuid.New(), Code: "VIS-2026-STD-01", NameEN: "Visa desk",
+		Header: header,
+	}); err == nil {
+		t.Fatal("visa sheet without types")
+	}
+	repo := newMemPkg()
+	svc = apppkg.NewService(repo, tx.Nop{})
+	p, err := svc.CreatePackage(ctx, apppkg.CreatePackageInput{
+		BranchID: uuid.New(), Code: "VIS-2026-STD-01", NameEN: "Visa desk",
+		Header: header,
+		Spec: &domain.Spec{VisaOffers: []domain.VisaOffer{
+			{Type: "UMRAH_VISA", Net: 40000, Sell: 65000, ProcessingDays: 7},
+			{Type: "HAJJ_VISA", Net: 90000, Sell: 140000, ProcessingDays: 21},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Spec.VisaOffers) != 2 || p.Spec.Visa.Type != "UMRAH_VISA" {
+		t.Fatalf("offers=%+v visa=%+v", p.Spec.VisaOffers, p.Spec.Visa)
+	}
+	deps, err := repo.ListDepartures(ctx, p.ID)
+	if err != nil || len(deps) != 1 || deps[0].Code != domain.VisaOpenCode {
+		t.Fatalf("standing slot: %v %+v", err, deps)
+	}
+}
+
 func TestPersonalPackageNeedsCustomer(t *testing.T) {
 	svc := apppkg.NewService(newMemPkg(), tx.Nop{})
 	ctx := context.Background()

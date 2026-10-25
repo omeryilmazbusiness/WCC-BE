@@ -47,7 +47,7 @@ func TestNormalizeHeaderPersonal(t *testing.T) {
 	if h.Category != domain.CategoryPersonal {
 		t.Fatalf("category=%s", h.Category)
 	}
-	for _, kind := range []string{domain.KindUmrah, domain.KindHajj, domain.KindOther} {
+	for _, kind := range []string{domain.KindUmrah, domain.KindHajj, domain.KindOther, domain.KindVisa} {
 		h := domain.Header{Kind: kind, Category: domain.CategoryPersonal}
 		if err := domain.NormalizeHeader(&h); err != nil {
 			t.Fatalf("%s personal: %v", kind, err)

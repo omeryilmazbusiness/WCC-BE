@@ -13,11 +13,12 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
-// Package kinds. Other is a custom tour to a free-text destination.
+// Package kinds. Other is a custom tour; visa is a priced visa desk sheet.
 const (
 	KindUmrah = "umrah"
 	KindHajj  = "hajj"
 	KindOther = "other"
+	// KindVisa is declared in visa.go.
 )
 
 // PackageTiers are the only categories offered on a new package (all kinds).
@@ -28,6 +29,7 @@ var legacyCategoriesByKind = map[string][]string{
 	KindUmrah: {"boutique", "ramadan_first15", "ramadan_last15", "ramadan_full", "semester"},
 	KindHajj:  {"short", "long", "special_mujamala", "special_commercial"},
 	KindOther: {},
+	KindVisa:  {},
 }
 
 var (
@@ -66,6 +68,7 @@ type Spec struct {
 	Transfers    Transfers      `json:"transfers"`
 	Guidance     Guidance       `json:"guidance"`
 	Visa         Visa           `json:"visa"`
+	VisaOffers   []VisaOffer    `json:"visa_offers"`
 	Kit          []string       `json:"kit"`
 	Ziyarat      Ziyarat        `json:"ziyarat"`
 	Destination  Destination    `json:"destination"`
@@ -239,7 +242,7 @@ type Header struct {
 
 // ValidKind reports whether kind is a supported package type.
 func ValidKind(kind string) bool {
-	return kind == KindUmrah || kind == KindHajj || kind == KindOther
+	return kind == KindUmrah || kind == KindHajj || kind == KindOther || kind == KindVisa
 }
 
 // ValidCategory reports whether category belongs to kind (tier or a legacy value).
@@ -266,7 +269,7 @@ func NormalizeHeader(h *Header) error {
 		h.TransportMode = "flight_scheduled"
 	}
 	if !ValidKind(h.Kind) {
-		return shared.NewValidation("kind must be umrah, hajj or other")
+		return shared.NewValidation("kind must be umrah, hajj, other or visa")
 	}
 	if h.Category == "" {
 		h.Category = "standard"
@@ -321,19 +324,36 @@ func NormalizeSpec(s *Spec, h Header) error {
 	s.Guidance.LeaderName = clip(s.Guidance.LeaderName, 120)
 	if h.Kind == KindOther {
 		s.Visa = Visa{}
+		s.VisaOffers = nil
 		s.Kit = nil
 		s.Ziyarat = Ziyarat{}
 		s.Guidance.FemaleGuide = false
 		s.Included = nil
+	} else if IsVisa(h.Kind) {
+		ApplyVisaKind(s)
 	} else {
 		s.Services = nil
 		s.Activities = nil
+		s.VisaOffers = nil
+	}
+	offers, err := NormalizeVisaOffers(s.VisaOffers)
+	if err != nil {
+		return err
+	}
+	s.VisaOffers = offers
+	if IsVisa(h.Kind) {
+		if len(s.VisaOffers) == 0 {
+			return shared.NewValidation("visa packages need at least one visa type")
+		}
+		if _, ok := CheapestVisaSell(s.VisaOffers); !ok {
+			return shared.NewValidation("visa packages need a selling price")
+		}
+		SyncVisaHeader(s)
 	}
 	s.Visa.Type = strings.ToUpper(strings.TrimSpace(s.Visa.Type))
 	if s.Visa.Type != "" && !slices.Contains(visaTypes, s.Visa.Type) {
 		return shared.NewValidation("visa.type must be one of " + strings.Join(visaTypes, ", "))
 	}
-	var err error
 	if s.Kit, err = normalizeFlexibleSet(s.Kit, kitItems, "kit"); err != nil {
 		return err
 	}
