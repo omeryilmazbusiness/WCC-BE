@@ -105,6 +105,35 @@ func ApplyVisaKind(s *Spec) {
 	s.Itinerary = nil
 }
 
+// RedactVisaCost hides firma (net) visa prices and the cost sheet from readers
+// who must only see satış. Sell prices stay.
+func RedactVisaCost(s *Spec) {
+	if s == nil {
+		return
+	}
+	for i := range s.VisaOffers {
+		s.VisaOffers[i].Net = 0
+	}
+	cur := s.Costs.Currency
+	s.Costs = Costs{Currency: cur}
+}
+
+// KeepVisaNets copies stored company prices onto an incoming sheet so an agent
+// save cannot wipe nets they are not allowed to see.
+func KeepVisaNets(stored, incoming *Spec) {
+	if stored == nil || incoming == nil {
+		return
+	}
+	byType := make(map[string]int64, len(stored.VisaOffers))
+	for _, o := range stored.VisaOffers {
+		byType[o.Type] = o.Net
+	}
+	for i := range incoming.VisaOffers {
+		incoming.VisaOffers[i].Net = byType[incoming.VisaOffers[i].Type]
+	}
+	incoming.Costs = stored.Costs
+}
+
 // SyncVisaHeader mirrors the first priced offer onto the single visa summary field.
 func SyncVisaHeader(s *Spec) {
 	if len(s.VisaOffers) == 0 {

@@ -14,7 +14,13 @@ import (
 	appsvc "github.com/wodi-crm/wodi-crm-be/internal/app/tourpackage"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/tourpackage"
+	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
 )
+
+func seesCost(r *http.Request) bool {
+	claims, ok := middleware.ClaimsFrom(r.Context())
+	return ok && platformauth.HasPermission(claims.Role, platformauth.PermHotelsPricing)
+}
 
 type Handler struct {
 	Svc *appsvc.Service
@@ -107,10 +113,24 @@ type closeSalesRequest struct {
 	Closed bool `json:"closed"`
 }
 
-func mapPackage(p *domain.Package) map[string]any {
+func mapPackage(p *domain.Package, cost bool) map[string]any {
 	var next any
 	if p.Stats.NextDepartDate != nil {
 		next = p.Stats.NextDepartDate.Format("2006-01-02")
+	}
+	spec := p.Spec
+	if !cost {
+		domain.RedactVisaCost(&spec)
+	}
+	stats := map[string]any{
+		"departures": p.Stats.Departures, "reserved": p.Stats.Reserved,
+		"departure_seats": p.Stats.DepartureSeats, "remaining": p.Remaining(),
+		"next_depart_date": next,
+		"from_price":       p.Stats.FromPrice, "from_currency": p.Stats.FromCurrency,
+	}
+	if cost {
+		stats["cost_total"] = spec.Costs.Total()
+		stats["suggested_price"] = spec.Costs.SuggestedPrice()
 	}
 	return map[string]any{
 		"id": p.ID, "branch_id": p.BranchID, "code": p.Code,
@@ -119,14 +139,8 @@ func mapPackage(p *domain.Package) map[string]any {
 		"kind": p.Kind, "category": p.Category, "duration_days": p.DurationDays,
 		"transport_mode": p.TransportMode, "capacity_total": p.CapacityTotal,
 		"customer_id": p.CustomerID, "customer_name": p.CustomerName, "customer_name_ar": p.CustomerNameAr,
-		"base_currency": p.BaseCurrency, "spec": p.Spec,
-		"stats": map[string]any{
-			"departures": p.Stats.Departures, "reserved": p.Stats.Reserved,
-			"departure_seats": p.Stats.DepartureSeats, "remaining": p.Remaining(),
-			"next_depart_date": next,
-			"from_price":       p.Stats.FromPrice, "from_currency": p.Stats.FromCurrency,
-			"cost_total": p.Spec.Costs.Total(), "suggested_price": p.Spec.Costs.SuggestedPrice(),
-		},
+		"base_currency": p.BaseCurrency, "spec": spec,
+		"stats":      stats,
 		"created_at": p.CreatedAt.UTC().Format(time.RFC3339Nano),
 		"updated_at": p.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	}
@@ -198,7 +212,7 @@ func (h Handler) ListPackages(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]map[string]any, 0, len(items))
 	for i := range items {
-		out = append(out, mapPackage(&items[i]))
+		out = append(out, mapPackage(&items[i], seesCost(r)))
 	}
 	response.JSON(w, http.StatusOK, out)
 }
@@ -232,7 +246,7 @@ func (h Handler) CreatePackage(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusCreated, mapPackage(p))
+	response.JSON(w, http.StatusCreated, mapPackage(p, seesCost(r)))
 }
 
 func (h Handler) GetPackage(w http.ResponseWriter, r *http.Request) {
@@ -246,7 +260,7 @@ func (h Handler) GetPackage(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapPackage(p))
+	response.JSON(w, http.StatusOK, mapPackage(p, seesCost(r)))
 }
 
 func (h Handler) BrochurePDF(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +292,14 @@ func (h Handler) UpdatePackage(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, shared.NewValidation("invalid json"))
 		return
 	}
+	if req.Spec != nil && !seesCost(r) {
+		cur, err := h.Svc.GetPackage(r.Context(), id)
+		if err != nil {
+			response.Error(w, err)
+			return
+		}
+		domain.KeepVisaNets(&cur.Spec, req.Spec)
+	}
 	p, err := h.Svc.UpdatePackage(r.Context(), appsvc.UpdatePackageInput{
 		ID: id, Code: req.Code, NameEN: req.NameEN, NameAR: req.NameAR,
 		Description: req.Description, IsActive: req.IsActive,
@@ -289,7 +311,7 @@ func (h Handler) UpdatePackage(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusOK, mapPackage(p))
+	response.JSON(w, http.StatusOK, mapPackage(p, seesCost(r)))
 }
 
 func (h Handler) ClonePackage(w http.ResponseWriter, r *http.Request) {
@@ -320,7 +342,7 @@ func (h Handler) ClonePackage(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, err)
 		return
 	}
-	response.JSON(w, http.StatusCreated, mapPackage(p))
+	response.JSON(w, http.StatusCreated, mapPackage(p, seesCost(r)))
 }
 
 func (h Handler) ListPackageTiers(w http.ResponseWriter, r *http.Request) {

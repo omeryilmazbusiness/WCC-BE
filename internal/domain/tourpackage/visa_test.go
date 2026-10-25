@@ -72,6 +72,27 @@ func TestNormalizeHeaderVisa(t *testing.T) {
 	}
 }
 
+func TestRedactAndKeepVisaNets(t *testing.T) {
+	s := domain.Spec{
+		VisaOffers: []domain.VisaOffer{
+			{Type: "UMRAH_VISA", Net: 40000, Sell: 65000},
+			{Type: "TOURIST_VISA", Net: 80000, Sell: 110000},
+		},
+		Costs: domain.Costs{Currency: "SAR", Visa: 40000, MarkupPct: 20},
+	}
+	domain.RedactVisaCost(&s)
+	if s.VisaOffers[0].Net != 0 || s.VisaOffers[0].Sell != 65000 || s.Costs.Visa != 0 || s.Costs.MarkupPct != 0 {
+		t.Fatalf("redact=%+v costs=%+v", s.VisaOffers, s.Costs)
+	}
+
+	stored := domain.Spec{VisaOffers: []domain.VisaOffer{{Type: "UMRAH_VISA", Net: 40000, Sell: 65000}}, Costs: domain.Costs{Currency: "SAR", Visa: 40000}}
+	incoming := domain.Spec{VisaOffers: []domain.VisaOffer{{Type: "UMRAH_VISA", Net: 0, Sell: 70000}}}
+	domain.KeepVisaNets(&stored, &incoming)
+	if incoming.VisaOffers[0].Net != 40000 || incoming.VisaOffers[0].Sell != 70000 || incoming.Costs.Visa != 40000 {
+		t.Fatalf("keep=%+v costs=%+v", incoming.VisaOffers, incoming.Costs)
+	}
+}
+
 func TestStandingVisaDeparture(t *testing.T) {
 	id := uuid.New()
 	now := time.Date(2026, 10, 25, 15, 0, 0, 0, time.UTC)
