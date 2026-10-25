@@ -177,7 +177,7 @@ func (r *Repository) CountUsage(ctx context.Context, companyID uuid.UUID, kind d
 	case domain.LimitUsers:
 		q = `SELECT count(*) FROM users u JOIN branches b ON b.id=u.branch_id WHERE b.company_id=$1`
 	case domain.LimitPackages:
-		q = `SELECT count(*) FROM packages p JOIN branches b ON b.id=p.branch_id WHERE b.company_id=$1`
+		q = `SELECT count(*) FROM packages p JOIN branches b ON b.id=p.branch_id WHERE b.company_id=$1 AND p.category <> 'personal'`
 	case domain.LimitHotels:
 		q = `SELECT count(*) FROM hotels h JOIN branches b ON b.id=h.branch_id WHERE b.company_id=$1`
 	case domain.LimitBuses:

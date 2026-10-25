@@ -63,12 +63,14 @@ func (r *Repository) ensureVisible(ctx context.Context, guard func(context.Conte
 
 const packageColumns = `p.id, p.branch_id, p.code, p.name_en, p.name_ar, p.description, p.is_active,
 	p.kind, p.category, p.duration_days, p.transport_mode, p.capacity_total, p.sales_open, p.base_currency, p.spec,
+	p.customer_id, COALESCE(c.full_name, ''), COALESCE(c.full_name_ar, ''),
 	p.created_at, p.updated_at,
 	COALESCE(ds.departures, 0), COALESCE(ds.reserved, 0), COALESCE(ds.seats, 0), ds.next_depart,
 	COALESCE(fp.amount, 0), COALESCE(fp.currency, '')`
 
 // packageJoins aggregates active departures and the cheapest active room tier per package.
 const packageJoins = `
+	LEFT JOIN customers c ON c.id = p.customer_id
 	LEFT JOIN LATERAL (
 		SELECT COUNT(*) AS departures,
 		       SUM(d.capacity_sold) AS reserved,
@@ -90,6 +92,7 @@ func scanPackage(row rowScanner) (*domain.Package, error) {
 	var next *time.Time
 	err := row.Scan(&p.ID, &p.BranchID, &p.Code, &p.NameEN, &p.NameAR, &p.Description, &p.IsActive,
 		&p.Kind, &p.Category, &p.DurationDays, &p.TransportMode, &p.CapacityTotal, &p.SalesOpen, &p.BaseCurrency, &spec,
+		&p.CustomerID, &p.CustomerName, &p.CustomerNameAr,
 		&p.CreatedAt, &p.UpdatedAt,
 		&p.Stats.Departures, &p.Stats.Reserved, &p.Stats.DepartureSeats, &next,
 		&p.Stats.FromPrice, &p.Stats.FromCurrency)
@@ -114,14 +117,17 @@ func (r *Repository) CreatePackage(ctx context.Context, p *domain.Package) error
 		return err
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
+	if err := ensurePackageCustomer(ctx, q, p); err != nil {
+		return err
+	}
 	_, err = q.Exec(ctx, `
 		INSERT INTO packages (id, branch_id, code, name_en, name_ar, description, is_active,
 			kind, category, duration_days, transport_mode, capacity_total, sales_open, base_currency, spec,
-			created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
+			customer_id, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
 		p.ID, p.BranchID, p.Code, p.NameEN, p.NameAR, p.Description, p.IsActive,
 		p.Kind, p.Category, p.DurationDays, p.TransportMode, p.CapacityTotal, p.SalesOpen, p.BaseCurrency, spec,
-		p.CreatedAt, p.UpdatedAt,
+		p.CustomerID, p.CreatedAt, p.UpdatedAt,
 	)
 	return mapUniqueCode(err)
 }
@@ -132,9 +138,13 @@ func (r *Repository) UpdatePackage(ctx context.Context, p *domain.Package) error
 		return err
 	}
 	q := tx.QuerierFrom(ctx, r.pool)
+	if err := ensurePackageCustomer(ctx, q, p); err != nil {
+		return err
+	}
 	clause, args, err := pgscope.Clause(ctx, packageScope, []any{
 		p.ID, p.Code, p.NameEN, p.NameAR, p.Description, p.IsActive, p.UpdatedAt,
 		p.Kind, p.Category, p.DurationDays, p.TransportMode, p.CapacityTotal, p.SalesOpen, p.BaseCurrency, spec,
+		p.CustomerID,
 	})
 	if err != nil {
 		return err
@@ -142,7 +152,7 @@ func (r *Repository) UpdatePackage(ctx context.Context, p *domain.Package) error
 	ct, err := q.Exec(ctx, `
 		UPDATE packages SET code=$2, name_en=$3, name_ar=$4, description=$5, is_active=$6, updated_at=$7,
 			kind=$8, category=$9, duration_days=$10, transport_mode=$11, capacity_total=$12,
-			sales_open=$13, base_currency=$14, spec=$15
+			sales_open=$13, base_currency=$14, spec=$15, customer_id=$16
 		WHERE id=$1`+clause, args...)
 	if err != nil {
 		return mapUniqueCode(err)
@@ -200,6 +210,20 @@ func mapUniqueCode(err error) error {
 		return e
 	}
 	return err
+}
+
+func ensurePackageCustomer(ctx context.Context, q tx.Querier, p *domain.Package) error {
+	if p.CustomerID == nil {
+		return nil
+	}
+	var ok bool
+	if err := q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM customers WHERE id=$1 AND branch_id=$2)`, *p.CustomerID, p.BranchID).Scan(&ok); err != nil {
+		return err
+	}
+	if !ok {
+		return shared.NewValidation("customer is not in this branch")
+	}
+	return nil
 }
 
 func (r *Repository) CreateDeparture(ctx context.Context, d *domain.Departure) error {

@@ -25,6 +25,7 @@ type CreatePackageInput struct {
 	Header      domain.Header
 	SalesOpen   *bool
 	Spec        *domain.Spec
+	CustomerID  *uuid.UUID
 	// Tiers, when set, become the package pricing matrix in the same transaction.
 	Tiers *[]TierInput
 }
@@ -44,6 +45,7 @@ type UpdatePackageInput struct {
 	BaseCurrency  *string
 	SalesOpen     *bool
 	Spec          *domain.Spec
+	CustomerID    *uuid.UUID
 	Tiers         *[]TierInput
 }
 
@@ -179,12 +181,18 @@ func (s *Service) CreatePackage(ctx context.Context, in CreatePackageInput) (*do
 	if code == "" || name == "" {
 		return nil, shared.NewValidation("code and name_en are required")
 	}
-	if err := s.plans.Refuse(ctx, company.LimitPackages); err != nil {
-		return nil, err
-	}
 	header := in.Header
 	if err := domain.NormalizeHeader(&header); err != nil {
 		return nil, err
+	}
+	owner, err := domain.NormalizeAssignment(header.Category, in.CustomerID)
+	if err != nil {
+		return nil, err
+	}
+	if !domain.IsPersonal(header.Category) {
+		if err := s.plans.Refuse(ctx, company.LimitPackages); err != nil {
+			return nil, err
+		}
 	}
 	spec := domain.Spec{Requirements: domain.DefaultRequirements()}
 	if in.Spec != nil {
@@ -202,7 +210,7 @@ func (s *Service) CreatePackage(ctx context.Context, in CreatePackageInput) (*do
 		ID: uuid.New(), BranchID: in.BranchID, Code: code, NameEN: name,
 		NameAR: strings.TrimSpace(in.NameAR), Description: strings.TrimSpace(in.Description),
 		IsActive: true, Header: header, SalesOpen: in.SalesOpen == nil || *in.SalesOpen, Spec: spec,
-		CreatedAt: now, UpdatedAt: now,
+		CustomerID: owner, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		if err := s.repo.CreatePackage(ctx, p); err != nil {
@@ -253,6 +261,14 @@ func (s *Service) UpdatePackage(ctx context.Context, in UpdatePackageInput) (*do
 	if err := domain.NormalizeHeader(&p.Header); err != nil {
 		return nil, err
 	}
+	if in.CustomerID != nil {
+		p.CustomerID = in.CustomerID
+	}
+	owner, err := domain.NormalizeAssignment(p.Category, p.CustomerID)
+	if err != nil {
+		return nil, err
+	}
+	p.CustomerID = owner
 	if in.Spec != nil {
 		p.Spec = *in.Spec
 	}
@@ -332,7 +348,7 @@ func (s *Service) ClonePackage(ctx context.Context, in ClonePackageInput) (*doma
 		ID: uuid.New(), BranchID: in.BranchID, Code: code, NameEN: name,
 		NameAR: strings.TrimSpace(in.NameAR), Description: src.Description,
 		IsActive: true, Header: src.Header, SalesOpen: true, Spec: src.Spec,
-		CreatedAt: now, UpdatedAt: now,
+		CustomerID: src.CustomerID, CreatedAt: now, UpdatedAt: now,
 	}
 	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		if err := s.repo.CreatePackage(ctx, p); err != nil {

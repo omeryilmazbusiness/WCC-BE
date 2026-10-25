@@ -21,7 +21,7 @@ const (
 )
 
 // PackageTiers are the only categories offered on a new package (all kinds).
-var PackageTiers = []string{"economy", "standard", "luxury"}
+var PackageTiers = []string{"economy", "standard", "luxury", CategoryPersonal}
 
 // Legacy categories stay valid so existing product sheets still load and save.
 var legacyCategoriesByKind = map[string][]string{

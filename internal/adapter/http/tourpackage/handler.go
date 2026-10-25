@@ -33,6 +33,7 @@ type createPackageRequest struct {
 	BaseCurrency  string       `json:"base_currency"`
 	SalesOpen     *bool        `json:"sales_open"`
 	Spec          *domain.Spec `json:"spec"`
+	CustomerID    *uuid.UUID   `json:"customer_id"`
 	Tiers         *[]tierBody  `json:"tiers"`
 }
 
@@ -50,6 +51,7 @@ type updatePackageRequest struct {
 	BaseCurrency  *string      `json:"base_currency"`
 	SalesOpen     *bool        `json:"sales_open"`
 	Spec          *domain.Spec `json:"spec"`
+	CustomerID    *uuid.UUID   `json:"customer_id"`
 	Tiers         *[]tierBody  `json:"tiers"`
 }
 
@@ -116,6 +118,7 @@ func mapPackage(p *domain.Package) map[string]any {
 		"is_active": p.IsActive, "sales_open": p.SalesOpen,
 		"kind": p.Kind, "category": p.Category, "duration_days": p.DurationDays,
 		"transport_mode": p.TransportMode, "capacity_total": p.CapacityTotal,
+		"customer_id": p.CustomerID, "customer_name": p.CustomerName, "customer_name_ar": p.CustomerNameAr,
 		"base_currency": p.BaseCurrency, "spec": p.Spec,
 		"stats": map[string]any{
 			"departures": p.Stats.Departures, "reserved": p.Stats.Reserved,
@@ -223,7 +226,7 @@ func (h Handler) CreatePackage(w http.ResponseWriter, r *http.Request) {
 			Kind: req.Kind, Category: req.Category, DurationDays: req.DurationDays,
 			TransportMode: req.TransportMode, CapacityTotal: req.CapacityTotal, BaseCurrency: req.BaseCurrency,
 		},
-		SalesOpen: req.SalesOpen, Spec: req.Spec, Tiers: tierInputs(req.Tiers),
+		SalesOpen: req.SalesOpen, Spec: req.Spec, CustomerID: req.CustomerID, Tiers: tierInputs(req.Tiers),
 	})
 	if err != nil {
 		response.Error(w, err)
@@ -280,7 +283,7 @@ func (h Handler) UpdatePackage(w http.ResponseWriter, r *http.Request) {
 		Description: req.Description, IsActive: req.IsActive,
 		Kind: req.Kind, Category: req.Category, DurationDays: req.DurationDays,
 		TransportMode: req.TransportMode, CapacityTotal: req.CapacityTotal, BaseCurrency: req.BaseCurrency,
-		SalesOpen: req.SalesOpen, Spec: req.Spec, Tiers: tierInputs(req.Tiers),
+		SalesOpen: req.SalesOpen, Spec: req.Spec, CustomerID: req.CustomerID, Tiers: tierInputs(req.Tiers),
 	})
 	if err != nil {
 		response.Error(w, err)

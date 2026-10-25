@@ -22,11 +22,16 @@ type Package struct {
 	Header
 	SalesOpen bool
 	Spec      Spec
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// CustomerID is set only on a personal sheet (exactly one owner).
+	CustomerID *uuid.UUID
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 
 	// Read-only aggregates filled by list/find queries.
 	Stats PackageStats
+	// CustomerName / CustomerNameAr come from the assigned customer join.
+	CustomerName   string
+	CustomerNameAr string
 }
 
 // PackageStats summarises departures and pricing for list cards.

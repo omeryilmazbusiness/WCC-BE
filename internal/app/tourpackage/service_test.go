@@ -272,6 +272,38 @@ func TestCreatePackageWithSpecAndPricingMatrix(t *testing.T) {
 	}
 }
 
+func TestPersonalPackageNeedsCustomer(t *testing.T) {
+	svc := apppkg.NewService(newMemPkg(), tx.Nop{})
+	ctx := context.Background()
+	if _, err := svc.CreatePackage(ctx, apppkg.CreatePackageInput{
+		BranchID: uuid.New(), Code: "UMR-2026-PER-01", NameEN: "Ahmed private Umrah",
+		Header: domain.Header{Kind: "umrah", Category: domain.CategoryPersonal, DurationDays: 10},
+	}); err == nil {
+		t.Fatal("personal without a customer")
+	}
+	owner := uuid.New()
+	p, err := svc.CreatePackage(ctx, apppkg.CreatePackageInput{
+		BranchID: uuid.New(), Code: "UMR-2026-PER-01", NameEN: "Ahmed private Umrah",
+		Header: domain.Header{Kind: "umrah", Category: domain.CategoryPersonal, DurationDays: 10, CapacityTotal: 6},
+		CustomerID: &owner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.CustomerID == nil || *p.CustomerID != owner {
+		t.Fatalf("owner=%v", p.CustomerID)
+	}
+	clone, err := svc.ClonePackage(ctx, apppkg.ClonePackageInput{SourceID: p.ID, BranchID: p.BranchID, Code: "UMR-2026-PER-02"})
+	if err != nil || clone.CustomerID == nil || *clone.CustomerID != owner {
+		t.Fatalf("clone keeps the customer: %v %+v", err, clone)
+	}
+	lux := "luxury"
+	updated, err := svc.UpdatePackage(ctx, apppkg.UpdatePackageInput{ID: p.ID, Category: &lux})
+	if err != nil || updated.CustomerID != nil {
+		t.Fatalf("catalogue drop owner: %v %+v", err, updated)
+	}
+}
+
 type stubPDF struct{ last domain.Brochure }
 
 func (s *stubPDF) Render(doc domain.Brochure) ([]byte, error) {
