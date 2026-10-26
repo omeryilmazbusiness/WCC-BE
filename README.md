@@ -10,7 +10,7 @@ Go modular monolith for the WODI Command Center (Hajj/Umrah internal CRM).
 | DB | PostgreSQL + goose migrations + pgx |
 | Auth | JWT access + refresh, RBAC |
 | Queue | Asynq/Redis (retry + archived DLQ; memory fallback) |
-| Files | S3-compatible ObjectStore port (MinIO adapter) |
+| Files | Company logo in Postgres (`company_logos`); no object store |
 | Events | In-process domain bus |
 
 ## Architecture

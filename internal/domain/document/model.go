@@ -40,7 +40,7 @@ const (
 	RelatedSupplier    = "supplier"
 )
 
-// Document stores metadata only; bytes live in S3-compatible storage.
+// Document stores metadata only. File bytes are not persisted (no object store).
 type Document struct {
 	ID            uuid.UUID
 	BranchID      uuid.UUID

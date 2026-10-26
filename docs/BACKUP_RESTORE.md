@@ -1,14 +1,14 @@
 # Backup & restore procedure (Epic 17 / T-211)
 
-Production Definition of Done requires a verified backup/restore path for PostgreSQL
-and object storage (MinIO/S3). Application secrets are **not** stored in the DB dump.
+Production Definition of Done requires a verified backup/restore path for PostgreSQL.
+Company logos are in `company_logos` (included in the dump). Application secrets are
+**not** stored in the DB dump.
 
 ## What to back up
 
 | Asset | Location | Tool |
 |-------|----------|------|
-| Primary DB | Postgres (`DATABASE_URL`) | `pg_dump` / managed snapshot |
-| Object storage | MinIO bucket for documents | `mc mirror` or S3 versioning |
+| Primary DB | Postgres (`DATABASE_URL`), including company logos | `pg_dump` / managed snapshot |
 | Migrations state | `goose_db_version` table | included in DB dump |
 | Secrets | Env / secret manager (see `docs/SECRETS.md`) | **never** in SQL dumps |
 
@@ -22,12 +22,6 @@ pg_dump "$DATABASE_URL" -Fc -f "wodi-$(date -u +%Y%m%dT%H%M%SZ).dump"
 pg_dump "$DATABASE_URL" --no-owner --no-acl -f "wodi-plain.sql"
 ```
 
-Object storage:
-
-```bash
-mc mirror myminio/wodi-docs "./backup/docs-$(date -u +%Y%m%d)"
-```
-
 Retention: keep at least **7 daily** + **4 weekly** snapshots (adjust to SLA).
 
 ## Restore (staging verification)
@@ -37,9 +31,8 @@ Retention: keep at least **7 daily** + **4 weekly** snapshots (adjust to SLA).
    ```bash
    pg_restore --clean --if-exists -d "$DATABASE_URL" wodi-YYYYMMDD.dump
    ```
-3. Re-point MinIO / restore objects.
-4. Smoke: `GET /healthz`, `GET /readyz`, login as GM, open `/manager`, `/inbox`, one booking.
-5. Record restore RTO/RPO in the ops runbook.
+3. Smoke: `GET /healthz`, `GET /readyz`, login as GM, open `/manager`, `/inbox`, one booking.
+4. Record restore RTO/RPO in the ops runbook.
 
 ## Verification checklist
 

@@ -10,7 +10,6 @@ outside SQL backups. This checklist verifies the secrets contract.
 | Postgres URL | `DATABASE_URL` | API, migrate | No |
 | JWT signing keys | `JWT_ACCESS_SECRET` + `JWT_ACCESS_KEY_ID`, retired: `JWT_PREVIOUS_ACCESS_SECRETS` | TokenSigner | No (tokens only) |
 | Redis / Asynq | queue URL | workers | No |
-| MinIO keys | storage access/secret | documents | No |
 | Field encryption keys | `ENCRYPTION_KEY` + `ENCRYPTION_KEY_ID`, retired: `ENCRYPTION_PREVIOUS_KEYS` | secrets, passports, MFA | No |
 | Blind index key | `ENCRYPTION_BLIND_INDEX_KEY` | passport dedupe/search, verify-token lookup | No |
 | AI provider key | `ai_settings.secrets_enc` (per branch) | AI adapters | **Never raw** — UI gets `key_hint` only |

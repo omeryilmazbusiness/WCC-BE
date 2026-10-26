@@ -1,7 +1,7 @@
 # Railway production
 
-WCC is three processes plus Postgres, Redis, and S3-compatible storage. Railway does
-not run that as a single service.
+WCC is three processes plus Postgres and Redis. Railway does not run that as a
+single service. Company logos live in Postgres — there is no object store.
 
 ```
 wodi (Railway project)
@@ -17,7 +17,6 @@ wodi (Railway project)
 1. [railway.app](https://railway.app) → New Project → Empty.
 2. Add **PostgreSQL**.
 3. Add **Redis**.
-4. Create a Cloudflare R2 (or AWS S3) bucket named `wodi-crm`. Railway has no object store.
 
 ## 2. API service (this repo)
 
@@ -61,13 +60,6 @@ Worker is a **second service from the same repo**:
 | `ENCRYPTION_KEY` | `openssl rand -base64 32` |
 | `ENCRYPTION_KEY_ID` | `k1` |
 | `ENCRYPTION_BLIND_INDEX_KEY` | `openssl rand -base64 32` (set once, never rotate casually) |
-| `S3_ENDPOINT` | R2/S3 endpoint, e.g. `https://<account>.r2.cloudflarestorage.com` |
-| `S3_REGION` | `auto` (R2) or the AWS region |
-| `S3_BUCKET` | `wodi-crm` |
-| `S3_ACCESS_KEY` | access key |
-| `S3_SECRET_KEY` | secret key |
-| `S3_USE_SSL` | `true` |
-| `S3_PUBLIC_URL` | public/CDN URL for downloads |
 | `SENTRY_DSN` | `wodi-crm-be` DSN |
 | `SCHEDULER_TZ` | `Asia/Riyadh` |
 

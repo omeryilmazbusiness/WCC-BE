@@ -99,7 +99,7 @@ Hedef: PDF §1–§26 %100, OWASP ASVS L2, 8 kabul senaryosu gerçek backend üz
 | T-294 | BE | P1 | Gerçek sağlık kontrolü | Token geçerlilik ping'i; stub'lar "stub" döner, yalnız dev'de yüklenir | §7 | 2 | — |
 | T-295 | FE | P1 | Kanal bağlama akışları | Meta embedded signup, Google OAuth, sağlık rozetleri, entegrasyon log ekranı | §7 | 5 | T-290 |
 | T-296 | BE | P2 | OneDrive/SharePoint gerçek adaptör | Graph OAuth, delta sync, xlsx çekme → import pipeline | §16 | 8 | T-318 |
-| T-297 | BE | P1 | Mesaj ekleri | Gelen medya → MinIO document + `message.document_id`; giden ek | §7 | 3 | T-290 |
+| T-297 | BE | P1 | Mesaj ekleri | Gelen medya metadata + `message.document_id`; giden ek (no object store) | §7 | 3 | T-290 |
 
 ## Epic 24 — Ekran tamamlama (P1/P2) · PDF §5–§20
 
@@ -152,7 +152,7 @@ Hedef: PDF §1–§26 %100, OWASP ASVS L2, 8 kabul senaryosu gerçek backend üz
 
 | ID | Katman | Öncelik | Başlık | Kabul kriterleri | PDF | SP | Bağımlı |
 |---|---|---|---|---|---|---|---|
-| T-335 | BE | P1 | Testcontainers altyapısı | Postgres + Redis + MinIO container, migration, seed factory'leri | §26 | 3 | — |
+| T-335 | BE | P1 | Testcontainers altyapısı | Postgres + Redis container, migration, seed factory'leri | §26 | 3 | — |
 | T-336 | BE | P1 | Repository entegrasyon testleri | Tüm postgres paketleri, şube kapsamı dahil | §26 | 8 | T-335, T-238 |
 | T-337 | BE | P1 | Servis unit testleri | Testsiz 13 app paketi (payment, ai, auth, audit, notification, report, visa, supplier, useradmin, extint, filesync, rooming, search) | §26 | 8 | — |
 | T-338 | BE | P0 | Uçtan uca WF-01..05 | HTTP router üzerinden: webhook → lead → convert → booking → payment → doküman → ready → hedef → rapor; PDF'teki 8 kabul senaryosu | §22, §26 | 8 | T-335, Epic 21–22 |

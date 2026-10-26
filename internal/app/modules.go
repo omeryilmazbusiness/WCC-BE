@@ -211,7 +211,7 @@ func (m *modules) build() error {
 	txm, bus := m.txm, m.bus
 	secretBox := crypto.NewSecretBox(m.keyring)
 	passports := pgpii.NewPassports(m.keyring)
-	store := storage.NewMinIO(cfg.Storage)
+	store := storage.New()
 	loc := businessLocation(cfg)
 
 	identityRepo := pgidentity.NewRepository(pool)

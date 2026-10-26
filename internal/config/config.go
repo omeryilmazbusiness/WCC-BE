@@ -19,7 +19,6 @@ type Config struct {
 	Auth      AuthConfig
 	Redis     RedisConfig
 	Webhook   WebhookConfig
-	Storage   StorageConfig
 	Log       LogConfig
 	Sentry    SentryConfig
 	FX        FXConfig
@@ -181,16 +180,6 @@ func (c Config) RequiresRedis() bool {
 	return c.App.Env == "production" || c.App.Env == "staging"
 }
 
-type StorageConfig struct {
-	Endpoint  string
-	Region    string
-	Bucket    string
-	AccessKey string
-	SecretKey string
-	UseSSL    bool
-	PublicURL string
-}
-
 type LogConfig struct {
 	Level  string // debug | info | warn | error
 	Format string // json | text
@@ -262,15 +251,6 @@ func Load() (Config, error) {
 			URL:               getEnv("REDIS_URL", "redis://localhost:6379/0"),
 			SchedulerTZ:       getEnv("SCHEDULER_TZ", "Asia/Riyadh"),
 			ScheduleOverrides: envWithPrefix("SCHEDULE_"),
-		},
-		Storage: StorageConfig{
-			Endpoint:  getEnv("S3_ENDPOINT", "http://localhost:9000"),
-			Region:    getEnv("S3_REGION", "us-east-1"),
-			Bucket:    getEnv("S3_BUCKET", "wodi-crm"),
-			AccessKey: getEnv("S3_ACCESS_KEY", "minioadmin"),
-			SecretKey: getEnv("S3_SECRET_KEY", "minioadmin"),
-			UseSSL:    getBool("S3_USE_SSL", false),
-			PublicURL: getEnv("S3_PUBLIC_URL", "http://localhost:9000"),
 		},
 		Assistant: AssistantConfig{
 			DailyQuota:     max(0, getInt("AI_ASSISTANT_DAILY_QUOTA", 40)),

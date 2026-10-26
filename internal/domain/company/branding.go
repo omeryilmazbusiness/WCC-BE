@@ -11,7 +11,8 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 )
 
-// MaxLogoBytes caps an uploaded company logo.
+// MaxLogoBytes caps an uploaded company logo. Bytes live in Postgres
+// (company_logos); there is no object store.
 const MaxLogoBytes = 512 << 10
 
 // logoTypes are the raster formats a logo may use. SVG is excluded on purpose:
