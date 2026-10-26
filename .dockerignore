@@ -1,0 +1,11 @@
+.git
+.bin
+tmp
+*.md
+.env
+.env.*
+coverage.out
+*.test
+.idea
+.vscode
+.DS_Store

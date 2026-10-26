@@ -34,6 +34,41 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+func TestListenAddrUsesRailwayPORT(t *testing.T) {
+	t.Setenv("APP_ENV", "local")
+	t.Setenv("HTTP_ADDR", "")
+	t.Setenv("PORT", "9876")
+	t.Setenv("DATABASE_URL", "postgres://wodi:wodi@localhost:5432/wodi_crm?sslmode=disable")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTP.Addr != ":9876" {
+		t.Fatalf("addr=%q", cfg.HTTP.Addr)
+	}
+}
+
+func TestRailwayDefaultsAppEnvAndVersion(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	t.Setenv("APP_VERSION", "")
+	t.Setenv("RAILWAY_ENVIRONMENT", "production")
+	t.Setenv("RAILWAY_GIT_COMMIT_SHA", "abcdef1234567890")
+	t.Setenv("DATABASE_URL", "postgres://wodi:wodi@localhost:5432/wodi_crm?sslmode=require")
+	t.Setenv("REDIS_URL", "redis://localhost:6379/0")
+	t.Setenv("JWT_ACCESS_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("ENCRYPTION_KEY", "cHJvZC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLW9rISE=")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App.Env != "production" {
+		t.Fatalf("env=%q", cfg.App.Env)
+	}
+	if cfg.App.Version != "abcdef123456" {
+		t.Fatalf("version=%q", cfg.App.Version)
+	}
+}
+
 func TestSentryTracesSampleRateOutsideLocal(t *testing.T) {
 	t.Setenv("APP_ENV", "staging")
 	t.Setenv("SENTRY_DSN", "")

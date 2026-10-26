@@ -16,4 +16,5 @@ COPY --from=build /out/api /out/migrate /out/worker /app/
 COPY migrations /app/migrations
 EXPOSE 8080
 USER nobody
-ENTRYPOINT ["/app/api"]
+# CMD (not ENTRYPOINT) so Railway can run /app/worker or /app/migrate.
+CMD ["/app/api"]

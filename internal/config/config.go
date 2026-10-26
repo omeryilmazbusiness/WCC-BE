@@ -209,17 +209,17 @@ func Load() (Config, error) {
 	cfg := Config{
 		App: AppConfig{
 			Name:    getEnv("APP_NAME", "wodi-crm-be"),
-			Env:     getEnv("APP_ENV", "local"),
-			Version: getEnv("APP_VERSION", "0.1.0"),
+			Env:     appEnv(),
+			Version: appVersion(),
 		},
 		HTTP: HTTPConfig{
-			Addr:            getEnv("HTTP_ADDR", ":8080"),
+			Addr:            listenAddr(),
 			ReadTimeout:     getDuration("HTTP_READ_TIMEOUT", 15*time.Second),
 			WriteTimeout:    getDuration("HTTP_WRITE_TIMEOUT", 30*time.Second),
 			IdleTimeout:     getDuration("HTTP_IDLE_TIMEOUT", 60*time.Second),
 			ShutdownTimeout: getDuration("HTTP_SHUTDOWN_TIMEOUT", 20*time.Second),
 			CORSOrigins:     splitCSV(getEnv("CORS_ORIGINS", "http://localhost:3000")),
-			TrustedProxies:  splitCSV(getEnv("TRUSTED_PROXIES", "127.0.0.1,::1")),
+			TrustedProxies:  trustedProxies(),
 			MaxBodyBytes:    int64(getInt("HTTP_MAX_BODY_BYTES", 2<<20)),
 		},
 		Database: DatabaseConfig{
@@ -490,6 +490,56 @@ const devEncryptionKey = "ZGV2LW9ubHktZW5jcnlwdGlvbi1rZXktMzJieXRlcyE="
 
 func (c Config) IsLocal() bool {
 	return c.App.Env == "local" || c.App.Env == "development"
+}
+
+// appEnv prefers APP_ENV. On Railway, a missing value is production so weak
+// local defaults cannot slip into a live deploy.
+func appEnv() string {
+	if v := strings.TrimSpace(os.Getenv("APP_ENV")); v != "" {
+		return v
+	}
+	if os.Getenv("RAILWAY_ENVIRONMENT") != "" {
+		return "production"
+	}
+	return "local"
+}
+
+func appVersion() string {
+	if v := strings.TrimSpace(os.Getenv("APP_VERSION")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("RAILWAY_GIT_COMMIT_SHA")); v != "" {
+		if len(v) > 12 {
+			return v[:12]
+		}
+		return v
+	}
+	return "0.1.0"
+}
+
+// listenAddr binds HTTP_ADDR, then Railway/Heroku PORT, then :8080.
+func listenAddr() string {
+	if v := strings.TrimSpace(os.Getenv("HTTP_ADDR")); v != "" {
+		return v
+	}
+	if p := strings.TrimSpace(os.Getenv("PORT")); p != "" {
+		if strings.HasPrefix(p, ":") {
+			return p
+		}
+		return ":" + p
+	}
+	return ":8080"
+}
+
+func trustedProxies() []string {
+	if os.Getenv("TRUSTED_PROXIES") != "" {
+		return splitCSV(os.Getenv("TRUSTED_PROXIES"))
+	}
+	out := []string{"127.0.0.1", "::1"}
+	if os.Getenv("RAILWAY_ENVIRONMENT") != "" {
+		out = append(out, "10.0.0.0/8", "fd12:ed46:9566::/48")
+	}
+	return out
 }
 
 func getEnv(key, fallback string) string {
