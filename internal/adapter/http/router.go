@@ -50,6 +50,7 @@ import (
 	webhookhttp "github.com/wodi-crm/wodi-crm-be/internal/adapter/http/webhook"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	platformauth "github.com/wodi-crm/wodi-crm-be/internal/platform/auth"
+	appsentry "github.com/wodi-crm/wodi-crm-be/internal/platform/sentry"
 )
 
 // Handlers aggregates all HTTP handlers for wiring.
@@ -166,11 +167,12 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 	r.Use(middleware.MaxBody(cfg.HTTP.MaxBodyBytes))
 	r.Use(chimw.Logger)
 	r.Use(middleware.Recoverer)
+	r.Use(appsentry.HTTP())
 	r.Use(middleware.Timeout(cfg.HTTP.WriteTimeout, StreamPath))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   cfg.HTTP.CORSOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", middleware.BranchHeader},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID", "sentry-trace", "baggage", "traceparent", middleware.BranchHeader},
 		ExposedHeaders:   []string{"X-Request-ID"},
 		AllowCredentials: true,
 		MaxAge:           int((12 * time.Hour).Seconds()),

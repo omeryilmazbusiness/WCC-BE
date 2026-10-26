@@ -10,10 +10,18 @@ import (
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("APP_ENV", "local")
+	t.Setenv("SENTRY_DSN", "")
+	t.Setenv("SENTRY_TRACES_SAMPLE_RATE", "")
 	t.Setenv("DATABASE_URL", "postgres://wodi:wodi@localhost:5432/wodi_crm?sslmode=disable")
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cfg.Sentry.DSN != "" {
+		t.Fatal("empty SENTRY_DSN should disable Sentry")
+	}
+	if cfg.Sentry.TracesSampleRate != 1 {
+		t.Fatalf("local traces sample rate=%v", cfg.Sentry.TracesSampleRate)
 	}
 	if cfg.App.Name != "wodi-crm-be" && os.Getenv("APP_NAME") == "" {
 		// default name
@@ -23,6 +31,23 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.HTTP.Addr == "" {
 		t.Fatal("empty http addr")
+	}
+}
+
+func TestSentryTracesSampleRateOutsideLocal(t *testing.T) {
+	t.Setenv("APP_ENV", "staging")
+	t.Setenv("SENTRY_DSN", "")
+	t.Setenv("SENTRY_TRACES_SAMPLE_RATE", "")
+	t.Setenv("DATABASE_URL", "postgres://wodi:wodi@localhost:5432/wodi_crm?sslmode=disable")
+	t.Setenv("REDIS_URL", "redis://localhost:6379/0")
+	t.Setenv("JWT_ACCESS_SECRET", "0123456789abcdef0123456789abcdef")
+	t.Setenv("ENCRYPTION_KEY", "cHJvZC1lbmNyeXB0aW9uLWtleS0zMmJ5dGVzLW9rISE=")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sentry.TracesSampleRate != 0.1 {
+		t.Fatalf("staging traces sample rate=%v", cfg.Sentry.TracesSampleRate)
 	}
 }
 

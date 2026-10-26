@@ -21,6 +21,7 @@ type Config struct {
 	Webhook   WebhookConfig
 	Storage   StorageConfig
 	Log       LogConfig
+	Sentry    SentryConfig
 	FX        FXConfig
 	Flights   FlightsConfig
 	Payments  PaymentsConfig
@@ -195,6 +196,12 @@ type LogConfig struct {
 	Format string // json | text
 }
 
+// SentryConfig sends crashes and traces to Sentry. An empty DSN disables it.
+type SentryConfig struct {
+	DSN              string
+	TracesSampleRate float64
+}
+
 // Load reads optional .env then environment variables.
 func Load() (Config, error) {
 	_ = godotenv.Load()
@@ -305,6 +312,10 @@ func Load() (Config, error) {
 	}
 
 	cfg.Auth.MFAEnforce = getBool("MFA_ENFORCE", !cfg.IsLocal())
+	cfg.Sentry = SentryConfig{
+		DSN:              strings.TrimSpace(os.Getenv("SENTRY_DSN")),
+		TracesSampleRate: sentryTracesSampleRate(cfg.IsLocal()),
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -486,6 +497,33 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func sentryTracesSampleRate(local bool) float64 {
+	fallback := 1.0
+	if !local {
+		fallback = 0.1
+	}
+	rate := getFloat("SENTRY_TRACES_SAMPLE_RATE", fallback)
+	if rate < 0 {
+		return 0
+	}
+	if rate > 1 {
+		return 1
+	}
+	return rate
+}
+
+func getFloat(key string, fallback float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 func getInt(key string, fallback int) int {

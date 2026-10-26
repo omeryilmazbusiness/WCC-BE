@@ -10,6 +10,7 @@ import (
 	"github.com/wodi-crm/wodi-crm-be/internal/app"
 	"github.com/wodi-crm/wodi-crm-be/internal/config"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/logger"
+	appsentry "github.com/wodi-crm/wodi-crm-be/internal/platform/sentry"
 )
 
 // Worker process: scheduled jobs, queued jobs and the outbox dispatcher.
@@ -19,6 +20,11 @@ func main() {
 		panic(err)
 	}
 	log := logger.New(cfg.Log.Level, cfg.Log.Format)
+	if err := appsentry.Init(cfg); err != nil {
+		log.Error("sentry init failed", "error", err)
+		os.Exit(1)
+	}
+	defer appsentry.Flush()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	w, err := app.NewWorker(ctx, cfg, log)
