@@ -15,8 +15,11 @@ func TestStandardIsACappedStarterDesk(t *testing.T) {
 	if !Allows(PlanStandard, "inbox.write") || !Allows(PlanStandard, "packages.write") || !Allows(PlanStandard, "ai.write") {
 		t.Fatal("standard must include the starter modules")
 	}
+	if !Allows(PlanStandard, "visa.read") || !Allows(PlanStandard, "visa.write") {
+		t.Fatal("every plan includes the visa desk")
+	}
 	for _, blocked := range []string{
-		"dashboard.read", "payments.read", "reports.read", "suppliers.read", "visa.read",
+		"dashboard.read", "payments.read", "reports.read", "suppliers.read",
 		"ai.setup", "hotels.pricing", "bookings.discount", "bookings.override",
 		"targets.write", "fx.manage", "privacy.manage", "companies.manage", "leads.delete",
 	} {
@@ -32,6 +35,9 @@ func TestStandardIsACappedStarterDesk(t *testing.T) {
 	}
 	if err := Refuse(PlanStandard, LimitBranches, 1); err == nil {
 		t.Fatal("second branch must be refused")
+	}
+	if err := Refuse(PlanStandard, LimitInbox, 20); err != nil {
+		t.Fatal("inbox is uncapped so every channel can connect")
 	}
 }
 
@@ -77,6 +83,9 @@ func TestUpgradeLadder(t *testing.T) {
 	}
 	if !CanUpgradeTo(PlanStandard, PlanUltimate) || CanUpgradeTo(PlanPremium, PlanStandard) {
 		t.Fatal("upgrade is strictly up")
+	}
+	if p, ok := CheapestPlanFor("visa.read"); !ok || p != PlanStandard {
+		t.Fatal("visa starts on the starter desk")
 	}
 	if p, ok := CheapestPlanFor("dashboard.read"); !ok || p != PlanPremium {
 		t.Fatal("dashboard starts at premium")

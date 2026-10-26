@@ -177,12 +177,12 @@ func Refuse(p Plan, kind LimitKind, used int) error {
 	return err
 }
 
-// Standard — 2–3 person starter desk. Core sales/ops, every module capped
-// and missing finance, reports, suppliers, visa and AI setup.
+// Standard — 2–3 person starter desk. Core sales/ops, visa and every inbox
+// channel. Other modules stay capped; money, reports and AI setup stay off.
 var standardSpec = Spec{
 	Plan: PlanStandard,
 	Limits: Limits{
-		Users: 3, Branches: 1, Packages: 8, Hotels: 8, Buses: 3, Inbox: 1, AIPerDay: 50,
+		Users: 3, Branches: 1, Packages: 8, Hotels: 8, Buses: 3, Inbox: 0, AIPerDay: 50,
 	},
 	Permissions: []string{
 		"users.read", "users.write", "branches.read",
@@ -190,6 +190,7 @@ var standardSpec = Spec{
 		"leads.read", "leads.write",
 		"bookings.read", "bookings.write",
 		"documents.read", "documents.write",
+		"visa.read", "visa.write",
 		"flights.search",
 		"packages.read", "packages.write",
 		"hotels.read", "hotels.write",
@@ -205,18 +206,18 @@ var standardSpec = Spec{
 	},
 }
 
-// Premium — growing agency. Adds money, reports, visa, suppliers, pricing,
+// Premium — growing agency. Adds money, reports, suppliers, pricing,
 // targets write, extra seats and branches. Still no AI setup / FX / override.
 var premiumSpec = Spec{
 	Plan: PlanPremium,
 	Limits: Limits{
-		Users: 12, Branches: 3, Packages: 40, Hotels: 40, Buses: 15, Inbox: 3, AIPerDay: 300,
+		Users: 12, Branches: 3, Packages: 40, Hotels: 40, Buses: 15, Inbox: 0, AIPerDay: 300,
 	},
 	Permissions: append(append([]string{}, standardSpec.Permissions...),
 		"dashboard.read", "users.unlock", "audit.read", "pii.read",
 		"bookings.discount",
 		"payments.read", "payments.write", "payments.approve",
-		"documents.review", "visa.read", "visa.write",
+		"documents.review",
 		"suppliers.read", "suppliers.write",
 		"hotels.pricing",
 		"targets.write",
