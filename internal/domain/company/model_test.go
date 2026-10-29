@@ -148,6 +148,24 @@ func TestMainCenterDefaults(t *testing.T) {
 	}
 }
 
+func TestRetiredSlugAndDeleteConfirm(t *testing.T) {
+	id := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	got := RetiredSlug(id)
+	if got != "daaaaaaaabbbbcccc" {
+		t.Fatalf("retired slug = %q", got)
+	}
+	if !ValidCompanySlug(got) {
+		t.Fatalf("%q must stay a legal slug", got)
+	}
+	c := Company{Slug: "al-noor-travel"}
+	if err := c.ConfirmDeleteSlug("AL-NOOR-TRAVEL"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ConfirmDeleteSlug("other"); !errors.Is(err, shared.ErrValidation) {
+		t.Fatalf("want validation, got %v", err)
+	}
+}
+
 func TestWorkspaceLookup(t *testing.T) {
 	a, b := uuid.New(), uuid.New()
 	w := Workspace{Branches: []Branch{{ID: a}, {ID: b}}}

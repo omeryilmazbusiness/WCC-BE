@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -11,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/access"
+	"github.com/wodi-crm/wodi-crm-be/internal/domain/authsec"
 	domain "github.com/wodi-crm/wodi-crm-be/internal/domain/company"
 	"github.com/wodi-crm/wodi-crm-be/internal/domain/shared"
 	"github.com/wodi-crm/wodi-crm-be/internal/platform/tx"
@@ -209,7 +211,7 @@ func (r *Repository) ListCompanies(ctx context.Context, query string, limit, off
 		       (SELECT l.updated_at FROM company_logos l WHERE l.company_id = c.id),
 		       count(*) OVER ()
 		FROM companies c
-		WHERE lower(c.name_en) LIKE $1 OR c.slug LIKE $1
+		WHERE c.is_active AND (lower(c.name_en) LIKE $1 OR c.slug LIKE $1)
 		ORDER BY c.created_at DESC
 		LIMIT $2 OFFSET $3`, pattern, limit, offset)
 	if err != nil {
@@ -228,6 +230,46 @@ func (r *Repository) ListCompanies(ctx context.Context, query string, limit, off
 		page.Items = append(page.Items, s)
 	}
 	return page, rows.Err()
+}
+
+// DeleteCompany retires an active tenant and kicks every signed-in desk.
+func (r *Repository) DeleteCompany(ctx context.Context, id uuid.UUID, retiredSlug string) error {
+	if s := access.From(ctx); s.Level != access.LevelGlobal {
+		return shared.NewForbidden("deleting companies needs platform scope")
+	}
+	q := tx.QuerierFrom(ctx, r.pool)
+	tag, err := q.Exec(ctx, `
+		UPDATE companies SET is_active=false, slug=$2, updated_at=NOW()
+		WHERE id=$1 AND is_active`, id, retiredSlug)
+	if err != nil {
+		return mapConflict(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return shared.NewNotFound("company")
+	}
+	if _, err := q.Exec(ctx, `UPDATE branches SET is_active=false WHERE company_id=$1`, id); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	if _, err := q.Exec(ctx, `
+		WITH s AS (
+			UPDATE auth_sessions SET revoked_at=$2, revoked_reason=$3
+			WHERE revoked_at IS NULL
+			  AND user_id IN (
+				SELECT u.id FROM users u
+				JOIN branches b ON b.id = u.branch_id
+				WHERE b.company_id=$1
+			  )
+			RETURNING id
+		)
+		UPDATE refresh_tokens SET revoked_at=$2, revoked_reason=$3
+		WHERE family_id IN (SELECT id FROM s) AND revoked_at IS NULL`, id, now, authsec.RevokeCompanyDeleted); err != nil {
+		return err
+	}
+	_, err = q.Exec(ctx, `
+		UPDATE users SET is_active=false, updated_at=NOW()
+		WHERE is_active AND branch_id IN (SELECT id FROM branches WHERE company_id=$1)`, id)
+	return err
 }
 
 const branchColumns = `id, company_id, code, slug, name_en, name_ar, kind, timezone, is_active, created_at`
@@ -319,7 +361,7 @@ func (r *Repository) WorkspaceOf(ctx context.Context, branchID uuid.UUID) (*doma
 		SELECT c.id, c.slug, c.name_en, c.name_ar, c.legal_name, c.phone, c.email, c.website, c.country, c.city,
 		       c.address, c.currency, c.timezone, c.plan, c.plan_started_at, c.idle_logout_minutes, c.is_active, c.created_at, c.updated_at
 		FROM branches b JOIN companies c ON c.id = b.company_id
-		WHERE b.id = $1`, branchID), &w.Company)
+		WHERE b.id = $1 AND c.is_active`, branchID), &w.Company)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, shared.NewNotFound("branch")
 	}

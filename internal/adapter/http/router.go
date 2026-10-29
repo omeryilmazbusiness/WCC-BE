@@ -255,6 +255,7 @@ func NewRouter(cfg config.Config, tokens middleware.AccessTokenParser, sessions 
 				r.Post("/", h.Company.Register)
 				r.Get("/{id}", h.Company.GetCompany)
 				r.Patch("/{id}", h.Company.SaveCompany)
+				r.Delete("/{id}", h.Company.DeleteCompany)
 				r.Put("/{id}/plan", h.Company.UpdatePlan)
 				r.Put("/{id}/logo", h.Branding.PlatformUploadLogo)
 				r.Delete("/{id}/logo", h.Branding.PlatformDeleteLogo)

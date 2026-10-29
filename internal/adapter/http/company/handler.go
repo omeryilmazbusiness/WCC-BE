@@ -349,6 +349,34 @@ type saveCompanyRequest struct {
 	Timezone  string `json:"timezone"`
 }
 
+type deleteCompanyRequest struct {
+	Slug string `json:"slug"`
+}
+
+// DeleteCompany retires a tenant after the caller types its web address.
+func (h Handler) DeleteCompany(w http.ResponseWriter, r *http.Request) {
+	a, err := actor(r)
+	if err != nil {
+		response.Error(w, err)
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		response.Error(w, shared.NewValidation("invalid company id"))
+		return
+	}
+	var body deleteCompanyRequest
+	if err := decode(r, &body); err != nil {
+		response.Error(w, err)
+		return
+	}
+	if err := h.Svc.Delete(r.Context(), id, body.Slug, a); err != nil {
+		response.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // SaveCompany updates the tenant profile from the platform console.
 func (h Handler) SaveCompany(w http.ResponseWriter, r *http.Request) {
 	a, err := actor(r)

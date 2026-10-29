@@ -127,6 +127,7 @@ func TestEveryBusinessRouteRequiresPermission(t *testing.T) {
 		"GET /v1/tasks/{id}/notes":        false, "POST /v1/tasks/{id}/notes": false, "POST /v1/tasks/{id}/notes/read": false,
 		"POST /v1/branches": false, "PATCH /v1/branches/{id}": false,
 		"GET /v1/platform/companies/": false, "POST /v1/platform/companies/": false,
+		"DELETE /v1/platform/companies/{id}": false,
 		"PUT /v1/platform/companies/{id}/logo": false, "DELETE /v1/platform/companies/{id}/logo": false,
 		"GET /v1/flights/places": false, "GET /v1/flights/search": false,
 	}

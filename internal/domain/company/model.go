@@ -88,6 +88,21 @@ func ValidCompanySlug(s string) bool {
 	return validSlug(s) && !reserved
 }
 
+// RetiredSlug frees the public address of a deleted company.
+func RetiredSlug(id uuid.UUID) string {
+	return "d" + strings.ReplaceAll(id.String(), "-", "")[:16]
+}
+
+// ConfirmDeleteSlug is the typed confirmation on the platform delete form.
+func (c Company) ConfirmDeleteSlug(raw string) error {
+	if !strings.EqualFold(strings.TrimSpace(raw), c.Slug) {
+		err := shared.NewValidation("slug confirmation does not match")
+		err.Details = map[string]any{"slug": "must match the company web address"}
+		return err
+	}
+	return nil
+}
+
 // Company is a tenant and its public profile.
 type Company struct {
 	ID        uuid.UUID
@@ -420,6 +435,9 @@ type Repository interface {
 	// CountUsage is how many of one limited resource the company already has.
 	CountUsage(ctx context.Context, companyID uuid.UUID, kind LimitKind) (int, error)
 	ListCompanies(ctx context.Context, query string, limit, offset int) (Page, error)
+	// DeleteCompany retires an active tenant: staff lose access, the slug is
+	// freed, the row stays for history. retiredSlug must be unique.
+	DeleteCompany(ctx context.Context, id uuid.UUID, retiredSlug string) error
 
 	CreateBranch(ctx context.Context, b *Branch) error
 	UpdateBranch(ctx context.Context, b *Branch) error

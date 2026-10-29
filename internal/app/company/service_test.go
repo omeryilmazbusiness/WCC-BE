@@ -39,7 +39,24 @@ func (m *memRepo) CreateCompany(_ context.Context, c *domain.Company) error {
 	if c.PlanStartedAt.IsZero() {
 		c.PlanStartedAt = c.CreatedAt
 	}
+	c.IsActive = true
 	m.companies[c.ID] = *c
+	return nil
+}
+
+func (m *memRepo) DeleteCompany(_ context.Context, id uuid.UUID, retiredSlug string) error {
+	c, ok := m.companies[id]
+	if !ok || !c.IsActive {
+		return shared.NewNotFound("company")
+	}
+	c.IsActive = false
+	c.Slug = retiredSlug
+	m.companies[id] = c
+	for i := range m.branches {
+		if m.branches[i].CompanyID == id {
+			m.branches[i].IsActive = false
+		}
+	}
 	return nil
 }
 
@@ -327,5 +344,56 @@ func TestUpdatePlanOpensANewYear(t *testing.T) {
 	next := repo.companies[c.ID]
 	if next.Plan != domain.PlanPremium || next.PlanStartedAt.Before(time.Now().UTC().Add(-time.Minute)) {
 		t.Fatalf("new year: %+v", next)
+	}
+}
+
+func TestDeleteRetiresSlugAndKicksStaff(t *testing.T) {
+	repo, cache := newMemRepo(), &memCache{}
+	svc := NewService(repo, &memUsers{}, tx.Nop{}, nopAudit{}, cache)
+	reg, err := svc.Register(platformCtx(), registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Delete(platformCtx(), reg.Company.ID, reg.Company.Slug, Actor{}); err != nil {
+		t.Fatal(err)
+	}
+	got := repo.companies[reg.Company.ID]
+	if got.IsActive || got.Slug != domain.RetiredSlug(reg.Company.ID) {
+		t.Fatalf("retired: %+v", got)
+	}
+	if repo.branches[0].IsActive {
+		t.Fatal("branches must close with the company")
+	}
+	if cache.n < 1 {
+		t.Fatal("delete must drop the tenant cache")
+	}
+	if err := svc.Delete(platformCtx(), reg.Company.ID, "al-noor-travel", Actor{}); !errors.Is(err, shared.ErrConflict) {
+		t.Fatalf("second delete: %v", err)
+	}
+	if _, err := svc.SaveCompany(platformCtx(), reg.Company.ID, domain.Company{NameEN: "Nope"}, Actor{}); !errors.Is(err, shared.ErrConflict) {
+		t.Fatalf("save after delete: %v", err)
+	}
+}
+
+func TestDeleteRequiresTheLiveSlug(t *testing.T) {
+	repo := newMemRepo()
+	svc := NewService(repo, &memUsers{}, tx.Nop{}, nopAudit{}, &memCache{})
+	reg, err := svc.Register(platformCtx(), registration())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Delete(platformCtx(), reg.Company.ID, "wrong-slug", Actor{}); !errors.Is(err, shared.ErrValidation) {
+		t.Fatalf("want slug confirmation, got %v", err)
+	}
+	if !repo.companies[reg.Company.ID].IsActive {
+		t.Fatal("a mistyped confirm must not retire the tenant")
+	}
+}
+
+func TestDeleteNeedsPlatformScope(t *testing.T) {
+	svc := NewService(newMemRepo(), &memUsers{}, tx.Nop{}, nopAudit{}, &memCache{})
+	ctx := companyCtx(uuid.New(), uuid.New())
+	if err := svc.Delete(ctx, uuid.New(), "x", Actor{}); !errors.Is(err, shared.ErrForbidden) {
+		t.Fatalf("want forbidden, got %v", err)
 	}
 }

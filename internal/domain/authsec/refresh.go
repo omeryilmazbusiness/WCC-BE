@@ -68,6 +68,7 @@ const (
 	RevokeMFADisabled     = "mfa_disabled"
 	RevokeUserDeactivated = "user_deactivated"
 	RevokePasswordChanged = "password_changed"
+	RevokeCompanyDeleted  = "company_deleted"
 )
 
 // EvaluateRefresh decides what to do with a presented token of session s.

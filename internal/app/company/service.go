@@ -165,6 +165,40 @@ func (s *Service) ListCompanies(ctx context.Context, query string, limit, offset
 	return s.repo.ListCompanies(ctx, query, limit, offset)
 }
 
+// Delete retires a tenant. confirmSlug must match the current public address.
+func (s *Service) Delete(ctx context.Context, id uuid.UUID, confirmSlug string, actor Actor) error {
+	if err := requirePlatform(ctx); err != nil {
+		return err
+	}
+	current, err := s.repo.GetCompany(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !current.IsActive {
+		return shared.NewConflict("company already deleted")
+	}
+	if err := current.ConfirmDeleteSlug(confirmSlug); err != nil {
+		return err
+	}
+	retired := domain.RetiredSlug(id)
+	return s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+		if err := s.repo.LockCompany(ctx, id); err != nil {
+			return err
+		}
+		if err := s.repo.DeleteCompany(ctx, id, retired); err != nil {
+			return err
+		}
+		s.caches.Invalidate(id)
+		return s.audit.Record(ctx, audit.RecordInput{
+			ActorID: actor.UserID, Action: "company.deleted", EntityType: "company",
+			EntityID: &id,
+			Before:   map[string]any{"slug": current.Slug, "name_en": current.NameEN},
+			After:    map[string]any{"slug": retired},
+			IP:       actor.IP, UserAgent: actor.UserAgent,
+		})
+	})
+}
+
 func requirePlatform(ctx context.Context) error {
 	if access.From(ctx).Level != access.LevelGlobal {
 		return shared.NewForbidden("platform scope required")
@@ -187,6 +221,9 @@ func (s *Service) SaveCompany(ctx context.Context, id uuid.UUID, in domain.Compa
 	current, err := s.repo.GetCompany(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if !current.IsActive {
+		return nil, shared.NewConflict("company already deleted")
 	}
 	in.ID = id
 	in.Plan = current.Plan
@@ -245,7 +282,14 @@ func (s *Service) UpdatePlan(ctx context.Context, companyID uuid.UUID, plan doma
 		err.Details = map[string]any{"plan": "standard, premium or ultimate"}
 		return nil, err
 	}
-	err := s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
+	current, err := s.repo.GetCompany(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	if !current.IsActive {
+		return nil, shared.NewConflict("company already deleted")
+	}
+	err = s.tx.WithinTransaction(ctx, func(ctx context.Context) error {
 		if err := s.repo.UpdatePlan(ctx, companyID, plan, actor.UserID); err != nil {
 			return err
 		}
