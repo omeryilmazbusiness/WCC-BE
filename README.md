@@ -434,7 +434,7 @@ Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supp
 | T-248 Webhook signatures (Meta `X-Hub-Signature-256`, HMAC `X-Wodi-Signature`), Meta handshake | Done |
 | T-249 Webhook branch resolved from integration account (`external_account_id`), no query param | Done |
 | T-250 `webhook_events` idempotency log, per-IP rate limit, 1 MB body cap | Done |
-| T-251 TOTP MFA (RFC 6238, encrypted secret, replay guard, recovery codes, GM/Admin enforced) | Done |
+| T-251 TOTP MFA (RFC 6238, encrypted secret, replay guard, recovery codes, platform admin enforced) | Done |
 | T-253 Login rate limit + progressive lockout (15 min → 24 h), admin unlock | Done |
 | T-255 Rotating refresh tokens with family reuse detection; revoke on password change/deactivation | Done |
 | T-257 Security headers, HSTS, body limit, trusted-proxy client IP | Done |
@@ -444,8 +444,8 @@ Document domain owns lifecycle transitions; visa `ValidTransition` is pure; supp
 Event reactors and worker jobs run with `access.System()`; verified webhooks with `access.ForBranch`.
 
 **Login contract.** `POST /v1/auth/login` returns tokens, or `{mfa_required, mfa_challenge}`, or
-`{mfa_enrollment_required, enrollment_token}` (GM/Admin without MFA get no tokens until
-`/v1/auth/mfa/setup` + `/v1/auth/mfa/setup/confirm`). Locked: `423 account_locked` + `Retry-After`;
+`{mfa_enrollment_required, enrollment_token}` (platform admin without MFA get no tokens until
+`/v1/auth/mfa/setup` + `/v1/auth/mfa/setup/confirm`; company logins are password-only). Locked: `423 account_locked` + `Retry-After`;
 throttled: `429 rate_limited`. Refresh rotates on every call; reusing an old token revokes the family.
 The body names the sign-in page: `{"company":"<slug>"}` admits only that company's users,
 `{"platform":true}` only platform admins, and neither (generic page) every company user but no

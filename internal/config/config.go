@@ -146,7 +146,7 @@ type AuthConfig struct {
 	LoginLockoutMax time.Duration
 	// LoginIPMaxAttempts throttles failed logins per client IP within LoginWindow.
 	LoginIPMaxAttempts int
-	// MFAEnforce requires gm/admin to enroll TOTP; always on in production.
+	// MFAEnforce requires platform admin to enroll TOTP; always on in production.
 	MFAEnforce bool
 	MFAIssuer  string
 }

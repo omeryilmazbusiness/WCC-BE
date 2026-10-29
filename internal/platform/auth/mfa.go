@@ -14,6 +14,12 @@ func NewMFAPolicy(forced ...Role) MFAPolicy {
 	return MFAPolicy{forced: m}
 }
 
+// ForcedMFARoles enroll at login when MFA_ENFORCE is on. Company desks
+// (GM, finance, agent) stay password-only unless they opt in later.
+func ForcedMFARoles() []Role {
+	return []Role{RoleAdmin}
+}
+
 // Required reports whether role must enroll in MFA before getting tokens.
 func (p MFAPolicy) Required(role Role) bool {
 	return p.forced[role]

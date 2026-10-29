@@ -786,8 +786,18 @@ func TestChallengeAttemptLimit(t *testing.T) {
 	}
 }
 
+func TestCompanyDesksSkipForcedEnrollment(t *testing.T) {
+	for _, role := range []platformauth.Role{platformauth.RoleGM, platformauth.RoleFinance, platformauth.RoleAgent} {
+		h := newHarness(t, role, platformauth.ForcedMFARoles()...)
+		res, err := h.login("correct-horse")
+		if err != nil || res.Tokens == nil || res.MFAEnrollmentRequired || res.MFARequired {
+			t.Fatalf("%s must sign in with password only: %+v %v", role, res, err)
+		}
+	}
+}
+
 func TestForcedRoleEnrollmentFlow(t *testing.T) {
-	h := newHarness(t, platformauth.RoleAdmin, platformauth.RoleAdmin, platformauth.RoleGM)
+	h := newHarness(t, platformauth.RoleAdmin, platformauth.ForcedMFARoles()...)
 	ctx := context.Background()
 	res, err := h.login("correct-horse")
 	if err != nil || !res.MFAEnrollmentRequired || res.Tokens != nil || res.EnrollmentToken == "" {

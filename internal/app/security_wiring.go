@@ -62,7 +62,7 @@ func newAuthService(
 ) *appauth.Service {
 	mfaPolicy := platformauth.NewMFAPolicy()
 	if cfg.Auth.MFAEnforce {
-		mfaPolicy = platformauth.NewMFAPolicy(platformauth.RoleGM, platformauth.RoleAdmin)
+		mfaPolicy = platformauth.NewMFAPolicy(platformauth.ForcedMFARoles()...)
 	}
 	return appauth.NewService(appauth.Deps{
 		Users: identityRepo, Audit: auditor, Tokens: tokens, Tx: txm,
